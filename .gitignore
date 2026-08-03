@@ -1,0 +1,14 @@
+
+.claude/
+.git/
+.github/
+.mimocode/
+CLAUDE.md
+E27-A_产品资料/
+HD-RK3506-EVM/
+OpenVelaDocs/
+RK3506G2/
+lfs/
+nanopi_m4_rk3399/
+openvela/.repo/
+openvela/cmake_out/

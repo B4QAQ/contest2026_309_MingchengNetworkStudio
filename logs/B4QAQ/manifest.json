@@ -1,0 +1,219 @@
+{
+  "schema_version": "1.0",
+  "team_id": "contest2026_309_MingchengNetworkStudio",
+  "github_login": "B4QAQ",
+  "generator": "backfill-sqlite@mimocode",
+  "sessions": [
+    {
+      "session_id": "ses_049d12b1bffeD3vRtlniGvyHAe",
+      "tool": "mimocode",
+      "started_at": "2026-07-28T14:45:33.551Z",
+      "last_event_at": "2026-07-28T22:54:31.747Z",
+      "event_count": 33,
+      "file_path": "logs/B4QAQ/2026-07-28/mimocode__ses_049d12b1bffeD3vRtlniGvyHAe.jsonl",
+      "collection_mode": "backfill-sqlite",
+      "health": "ok"
+    },
+    {
+      "session_id": "ses_049d12c14ffeeJj5PDW3Ie30K3",
+      "tool": "mimocode",
+      "started_at": "2026-07-29T09:22:12.319Z",
+      "last_event_at": "2026-07-29T09:28:58.812Z",
+      "event_count": 11,
+      "file_path": "logs/B4QAQ/2026-07-29/mimocode__ses_049d12c14ffeeJj5PDW3Ie30K3.jsonl",
+      "collection_mode": "backfill-sqlite",
+      "health": "ok"
+    },
+    {
+      "session_id": "ses_049d12bfbffe7nmCLijZvlzh6d",
+      "tool": "mimocode",
+      "started_at": "2026-07-29T09:29:05.668Z",
+      "last_event_at": "2026-07-30T02:42:43.662Z",
+      "event_count": 88,
+      "file_path": "logs/B4QAQ/2026-07-29/mimocode__ses_049d12bfbffe7nmCLijZvlzh6d.jsonl",
+      "collection_mode": "backfill-sqlite",
+      "health": "ok"
+    },
+    {
+      "session_id": "ses_049cf957fffejCh1EZVzS8FhqQ",
+      "tool": "mimocode",
+      "started_at": "2026-07-31T03:23:17.787Z",
+      "last_event_at": "2026-07-31T03:23:41.992Z",
+      "event_count": 4,
+      "file_path": "logs/B4QAQ/2026-07-31/mimocode__ses_049cf957fffejCh1EZVzS8FhqQ.jsonl",
+      "collection_mode": "backfill-sqlite",
+      "health": "ok"
+    },
+    {
+      "session_id": "ses_049c9803effeYYLVtzmsWYZ2su",
+      "tool": "mimocode",
+      "started_at": "2026-07-31T03:27:32.826Z",
+      "last_event_at": "2026-07-31T03:31:09.325Z",
+      "event_count": 3,
+      "file_path": "logs/B4QAQ/2026-07-31/mimocode__ses_049c9803effeYYLVtzmsWYZ2su.jsonl",
+      "collection_mode": "backfill-sqlite",
+      "health": "ok"
+    },
+    {
+      "session_id": "ses_049835a23ffeiFZ4NRUEcv1cRq",
+      "tool": "mimocode",
+      "started_at": "2026-07-31T04:44:10.100Z",
+      "last_event_at": "2026-08-03T02:12:31.966Z",
+      "event_count": 422,
+      "file_path": "logs/B4QAQ/2026-07-31/mimocode__ses_049835a23ffeiFZ4NRUEcv1cRq.jsonl",
+      "collection_mode": "backfill-sqlite",
+      "health": "ok"
+    },
+    {
+      "session_id": "ses_049830943ffeCyM0UyqyYLphRQ",
+      "tool": "mimocode",
+      "started_at": "2026-07-31T04:44:30.801Z",
+      "last_event_at": "2026-07-31T04:54:14.055Z",
+      "event_count": 8,
+      "file_path": "logs/B4QAQ/2026-07-31/mimocode__ses_049830943ffeCyM0UyqyYLphRQ.jsonl",
+      "collection_mode": "backfill-sqlite",
+      "health": "ok"
+    },
+    {
+      "session_id": "ses_049752885fferLbZAc8NwFJalQ",
+      "tool": "mimocode",
+      "started_at": "2026-07-31T04:59:40.298Z",
+      "last_event_at": "2026-07-31T05:01:07.709Z",
+      "event_count": 5,
+      "file_path": "logs/B4QAQ/2026-07-31/mimocode__ses_049752885fferLbZAc8NwFJalQ.jsonl",
+      "collection_mode": "backfill-sqlite",
+      "health": "ok"
+    },
+    {
+      "session_id": "ses_04871bf65ffePqcSJ0NiFBvAjH",
+      "tool": "mimocode",
+      "started_at": "2026-07-31T09:43:01.049Z",
+      "last_event_at": "2026-07-31T09:45:00.178Z",
+      "event_count": 5,
+      "file_path": "logs/B4QAQ/2026-07-31/mimocode__ses_04871bf65ffePqcSJ0NiFBvAjH.jsonl",
+      "collection_mode": "backfill-sqlite",
+      "health": "ok"
+    },
+    {
+      "session_id": "ses_048690b65ffeKKJL4xx5PC7wrp",
+      "tool": "mimocode",
+      "started_at": "2026-07-31T09:52:31.391Z",
+      "last_event_at": "2026-07-31T09:54:14.178Z",
+      "event_count": 4,
+      "file_path": "logs/B4QAQ/2026-07-31/mimocode__ses_048690b65ffeKKJL4xx5PC7wrp.jsonl",
+      "collection_mode": "backfill-sqlite",
+      "health": "ok"
+    },
+    {
+      "session_id": "ses_04858398affeprRUfg09ElyX6Q",
+      "tool": "mimocode",
+      "started_at": "2026-07-31T10:10:53.691Z",
+      "last_event_at": "2026-07-31T10:12:17.269Z",
+      "event_count": 4,
+      "file_path": "logs/B4QAQ/2026-07-31/mimocode__ses_04858398affeprRUfg09ElyX6Q.jsonl",
+      "collection_mode": "backfill-sqlite",
+      "health": "ok"
+    },
+    {
+      "session_id": "ses_0483cfc6effera0qub0WPHEP3c",
+      "tool": "mimocode",
+      "started_at": "2026-07-31T10:40:38.806Z",
+      "last_event_at": "2026-07-31T10:43:52.397Z",
+      "event_count": 4,
+      "file_path": "logs/B4QAQ/2026-07-31/mimocode__ses_0483cfc6effera0qub0WPHEP3c.jsonl",
+      "collection_mode": "backfill-sqlite",
+      "health": "ok"
+    },
+    {
+      "session_id": "ses_048143db4ffenrpgijTB0RtDV7",
+      "tool": "mimocode",
+      "started_at": "2026-07-31T11:25:09.076Z",
+      "last_event_at": "2026-07-31T11:25:09.076Z",
+      "event_count": 1,
+      "file_path": "logs/B4QAQ/2026-07-31/mimocode__ses_048143db4ffenrpgijTB0RtDV7.jsonl",
+      "collection_mode": "backfill-sqlite",
+      "health": "ok"
+    },
+    {
+      "session_id": "ses_04813693bffe78vGh0qPupUi7v",
+      "tool": "mimocode",
+      "started_at": "2026-07-31T11:26:03.491Z",
+      "last_event_at": "2026-07-31T11:26:03.491Z",
+      "event_count": 1,
+      "file_path": "logs/B4QAQ/2026-07-31/mimocode__ses_04813693bffe78vGh0qPupUi7v.jsonl",
+      "collection_mode": "backfill-sqlite",
+      "health": "ok"
+    },
+    {
+      "session_id": "ses_04811e261ffeg06UbJY1xgCPaM",
+      "tool": "mimocode",
+      "started_at": "2026-07-31T11:27:43.526Z",
+      "last_event_at": "2026-07-31T11:27:43.526Z",
+      "event_count": 1,
+      "file_path": "logs/B4QAQ/2026-07-31/mimocode__ses_04811e261ffeg06UbJY1xgCPaM.jsonl",
+      "collection_mode": "backfill-sqlite",
+      "health": "ok"
+    },
+    {
+      "session_id": "ses_0480f83f5ffeDHNctZc8N1FdhG",
+      "tool": "mimocode",
+      "started_at": "2026-07-31T11:30:18.772Z",
+      "last_event_at": "2026-07-31T11:32:01.694Z",
+      "event_count": 2,
+      "file_path": "logs/B4QAQ/2026-07-31/mimocode__ses_0480f83f5ffeDHNctZc8N1FdhG.jsonl",
+      "collection_mode": "backfill-sqlite",
+      "health": "ok"
+    },
+    {
+      "session_id": "ses_0480dd8d4ffeBYDJdseEhQCc2P",
+      "tool": "mimocode",
+      "started_at": "2026-07-31T11:32:08.112Z",
+      "last_event_at": "2026-07-31T11:33:31.461Z",
+      "event_count": 3,
+      "file_path": "logs/B4QAQ/2026-07-31/mimocode__ses_0480dd8d4ffeBYDJdseEhQCc2P.jsonl",
+      "collection_mode": "backfill-sqlite",
+      "health": "ok"
+    },
+    {
+      "session_id": "ses_0480b8e9affe1URqCwNmkuBfq7",
+      "tool": "mimocode",
+      "started_at": "2026-07-31T11:34:38.185Z",
+      "last_event_at": "2026-07-31T11:36:15.551Z",
+      "event_count": 4,
+      "file_path": "logs/B4QAQ/2026-07-31/mimocode__ses_0480b8e9affe1URqCwNmkuBfq7.jsonl",
+      "collection_mode": "backfill-sqlite",
+      "health": "ok"
+    },
+    {
+      "session_id": "ses_047bf8d9affeDhCSbRsLF5tf4Z",
+      "tool": "mimocode",
+      "started_at": "2026-07-31T12:57:39.182Z",
+      "last_event_at": "2026-07-31T12:59:23.891Z",
+      "event_count": 2,
+      "file_path": "logs/B4QAQ/2026-07-31/mimocode__ses_047bf8d9affeDhCSbRsLF5tf4Z.jsonl",
+      "collection_mode": "backfill-sqlite",
+      "health": "ok"
+    },
+    {
+      "session_id": "ses_047a45a3effeJW5BY9WhcQUKFE",
+      "tool": "mimocode",
+      "started_at": "2026-07-31T13:27:21.798Z",
+      "last_event_at": "2026-07-31T13:28:33.317Z",
+      "event_count": 2,
+      "file_path": "logs/B4QAQ/2026-07-31/mimocode__ses_047a45a3effeJW5BY9WhcQUKFE.jsonl",
+      "collection_mode": "backfill-sqlite",
+      "health": "ok"
+    },
+    {
+      "session_id": "ses_03a9b190fffeJFlbrBtrqVmZVe",
+      "tool": "mimocode",
+      "started_at": "2026-08-03T02:12:32.126Z",
+      "last_event_at": "2026-08-03T02:12:32.126Z",
+      "event_count": 1,
+      "file_path": "logs/B4QAQ/2026-08-03/mimocode__ses_03a9b190fffeJFlbrBtrqVmZVe.jsonl",
+      "collection_mode": "backfill-sqlite",
+      "health": "ok"
+    }
+  ],
+  "updated_at": "2026-08-03T03:15:27.794036+00:00"
+}
