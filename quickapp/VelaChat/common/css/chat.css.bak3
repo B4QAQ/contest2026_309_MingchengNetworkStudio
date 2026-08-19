@@ -1,0 +1,400 @@
+/******************************************************************************
+ * @file        chat.css
+ * @description 聊天页面样式
+ * @version     4.0
+ ******************************************************************************/
+
+.container-compact {
+  overflow: hidden;
+}
+
+.chat-title {
+  lines: 1;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+.chat-list {
+  flex-direction: column;
+  width: 100%;
+}
+
+.chat-item-wrap {
+  width: 100%;
+  padding: 6px 12px;
+  flex-direction: column;
+}
+
+.msg-row-user {
+  flex-direction: column;
+  align-items: flex-end;
+  width: 100%;
+}
+
+.msg-row-assistant {
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+}
+
+.msg-meta-user {
+  flex-direction: row;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+  padding-right: 4px;
+}
+
+.msg-meta-assistant {
+  flex-direction: row;
+  justify-content: flex-start;
+  margin-bottom: 4px;
+  padding-left: 4px;
+}
+
+.msg-sender {
+  font-size: 20px;
+  color: #888888;
+}
+
+.msg-model {
+  font-size: 20px;
+  color: #888888;
+}
+
+/* 工具调用标签 — 在气泡外、模型名下方 */
+.msg-tool-label {
+  flex-direction: row;
+  margin-bottom: 4px;
+  padding-left: 4px;
+}
+
+.msg-tool-text {
+  font-size: 20px;
+  color: #0c84ff;
+}
+
+/* 消息气泡 */
+.msg-bubble {
+  border-radius: 16px;
+  padding: 8px 12px;
+  max-width: 80%;
+  flex-direction: column;
+}
+
+.msg-bubble-user {
+  background-color: #0c84ff;
+}
+
+.msg-bubble-assistant {
+  background-color: #2a2a2a;
+}
+
+.msg-text {
+  font-size: 26px;
+  lines: 0;
+}
+
+.msg-text-user {
+  color: #ffffff;
+}
+
+.msg-text-assistant {
+  color: #e2e2e2;
+}
+
+/* 气泡底部 token/耗时 */
+.msg-meta-text {
+  font-size: 18px;
+  color: #666666;
+  margin-top: 6px;
+}
+
+/* Swiper 容器 */
+.chat-swiper {
+  flex: 1;
+  width: 100%;
+}
+
+/* 文件列表页 */
+.file-list-page {
+  flex-direction: column;
+  width: 100%;
+  padding: 12px;
+}
+
+.file-list-title {
+  font-size: 28px;
+  font-weight: bold;
+  color: #ffffff;
+  margin-bottom: 12px;
+}
+
+.file-empty {
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  flex: 1;
+}
+
+.file-empty-text {
+  font-size: 24px;
+  color: #888888;
+}
+
+.file-list-scroll {
+  flex: 1;
+  width: 100%;
+  flex-direction: column;
+}
+
+.file-item {
+  flex-direction: row;
+  width: 100%;
+  height: 72px;
+  background-color: #1a1a1a;
+  border-radius: 16px;
+  margin-bottom: 8px;
+  align-items: center;
+  padding: 0 14px;
+}
+
+.file-icon {
+  width: 48px;
+  height: 48px;
+  background-color: #2a2a2a;
+  border-radius: 12px;
+  justify-content: center;
+  align-items: center;
+  margin-right: 12px;
+}
+
+.file-icon-text {
+  font-size: 18px;
+  font-weight: bold;
+  color: #0c84ff;
+}
+
+.file-icon-js {
+  color: #f0db4f;
+}
+
+.file-info {
+  flex: 1;
+  flex-direction: column;
+}
+
+.file-name {
+  font-size: 24px;
+  color: #ffffff;
+  lines: 1;
+  text-overflow: ellipsis;
+}
+
+.file-time {
+  font-size: 18px;
+  color: #888888;
+  margin-top: 2px;
+}
+
+/* 控制台页 */
+.console-scroll {
+  flex: 1;
+  width: 100%;
+  flex-direction: column;
+  padding: 12px;
+}
+
+.console-title {
+  font-size: 28px;
+  font-weight: bold;
+  color: #ffffff;
+  margin-bottom: 8px;
+}
+
+.console-log-item {
+  flex-direction: column;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+}
+
+.console-log-code {
+  font-size: 20px;
+  color: #9cdcfe;
+  lines: 0;
+  margin-bottom: 4px;
+}
+
+.console-log-output {
+  font-size: 22px;
+  color: #e2e2e2;
+  lines: 0;
+}
+
+.console-log-error {
+  font-size: 22px;
+  color: #FF6B6B;
+  lines: 0;
+}
+
+.console-empty {
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  margin-top: 40px;
+}
+
+.console-empty-text {
+  font-size: 22px;
+  color: #666666;
+}
+
+/* 工具调用标签 */
+.msg-tool-labels {
+  flex-direction: column;
+  margin-bottom: 4px;
+  padding-left: 4px;
+}
+
+.msg-tool-label {
+  flex-direction: row;
+  margin-bottom: 4px;
+  padding-left: 4px;
+}
+
+.msg-tool-text {
+  font-size: 20px;
+  color: #0c84ff;
+  margin-bottom: 2px;
+}
+
+.msg-tool-rejected {
+  font-size: 20px;
+  color: #FF9800;
+}
+
+/* 工具请求选项按钮 */
+.tool-options {
+  flex-direction: row;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.tool-opt-btn {
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 18px;
+  background-color: #0c84ff;
+  justify-content: center;
+  align-items: center;
+  margin-right: 6px;
+  margin-bottom: 4px;
+}
+
+.tool-opt-allow1h {
+  background-color: #2a6a2a;
+}
+
+.tool-opt-reject {
+  background-color: #4a2a2a;
+}
+
+.tool-opt-text {
+  font-size: 20px;
+  color: #ffffff;
+}
+
+.msg-text-thinking {
+  color: #888888;
+  font-size: 24px;
+}
+
+.msg-text-error {
+  color: #FF6B6B;
+  font-size: 26px;
+}
+
+.msg-row-system {
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+
+.msg-bubble-system {
+  background-color: transparent;
+  padding: 4px 8px;
+}
+
+.msg-text-system {
+  font-size: 20px;
+  color: #666666;
+}
+
+/* 键盘遮罩 */
+.chat-keyboard-overlay {
+  position: absolute;
+  left: 0px;
+  top: 0px;
+  width: 100%;
+  height: 50%;
+  flex-direction: column;
+}
+
+/* 底部输入栏 — 圆屏适配 */
+.chat-input-bar {
+  flex-direction: row;
+  width: 100%;
+  padding: 10px 16px;
+  background-color: #1a1a1a;
+  align-items: center;
+}
+
+.chat-input-field {
+  flex: 1;
+  height: 48px;
+  background-color: #2a2a2a;
+  border-radius: 24px;
+  padding: 0 16px;
+  justify-content: center;
+  align-items: center;
+}
+
+.chat-input-text {
+  font-size: 26px;
+  color: #999999;
+  lines: 1;
+  text-overflow: ellipsis;
+  text-align: center;
+}
+
+.chat-send-btn {
+  margin-left: 10px;
+  width: 68px;
+  height: 48px;
+  background-color: #0c84ff;
+  border-radius: 24px;
+  justify-content: center;
+  align-items: center;
+}
+
+.chat-send-text {
+  font-size: 24px;
+  color: #ffffff;
+  text-align: center;
+}
+
+@media screen and (shape: circle) {
+  .chat-list {
+    width: 90%;
+  }
+  .chat-input-bar {
+    padding-left: 30px;
+    padding-right: 30px;
+  }
+}
+
+@media screen and (shape: rect) {
+  .chat-input-bar {
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+}

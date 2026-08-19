@@ -1,0 +1,147 @@
+<template>
+  <div class="container-compact">
+    <div class="header-compact">
+      <div class="center" @click="route('settings')">
+        <img src="/common/others/back.png" class="img-sty h28" />
+        <text class="title">主页</text>
+      </div>
+      <text if="{{global.Screen && global.Screen.screenShape == 'rect'}}" class="title">{{NowTime}}</text>
+    </div>
+
+    <swiper class="home-swiper" vertical="true" loop="false" indicator="true" indicator-bottom="8px" indicator-selected-color="#0c84ff" indicator-color="#555555">
+      <!-- 第一页：问候 + 4个数据卡片 + 2个按钮 -->
+      <div class="swiper-page">
+        <div class="greeting-row">
+          <text class="greeting-text">{{greeting}}</text>
+          <text class="greeting-text"> {{username}}</text>
+        </div>
+
+        <div class="stats-grid">
+          <div class="stat-card">
+            <text class="stat-label">会话</text>
+            <text class="stat-value">{{stats.sessionCount}}</text>
+          </div>
+          <div class="stat-card">
+            <text class="stat-label">消息</text>
+            <text class="stat-value">{{stats.messageCount}}</text>
+          </div>
+          <div class="stat-card">
+            <text class="stat-label">高峰时段</text>
+            <text class="stat-value">{{stats.peakHour}}时</text>
+          </div>
+          <div class="stat-card">
+            <text class="stat-label">活跃天数</text>
+            <text class="stat-value">{{stats.activeDays}}</text>
+          </div>
+        </div>
+
+        <div class="page-spacer"></div>
+
+        <div class="button-row">
+          <div class="home-btn home-btn-continue" @click="continueSession()">
+            <text class="home-btn-text">继续上次会话</text>
+          </div>
+          <div class="home-btn home-btn-new" @click="newSession()">
+            <text class="home-btn-text">新建会话</text>
+          </div>
+        </div>
+      </div>
+
+      <!-- 第二页：常用模型+Token + 热力图 -->
+      <div class="swiper-page">
+        <div class="model-row">
+          <div class="stat-card stat-card-wide">
+            <text class="stat-label">常用模型</text>
+            <text class="stat-value">{{stats.model}}</text>
+          </div>
+          <div class="stat-card stat-card-narrow">
+            <text class="stat-label">Token</text>
+            <text class="stat-value">{{tokenDisplay}}</text>
+          </div>
+        </div>
+
+        <text class="heatmap-title">活动热力图</text>
+
+        <div class="heatmap-container">
+          <div class="heatmap-header">
+            <text class="heatmap-corner"></text>
+            <text for="{{heatmapDays}}" class="heatmap-header-day">{{$item}}</text>
+          </div>
+          <div for="{{heatmapRows}}" class="heatmap-row">
+            <text class="heatmap-week">{{$item.week}}</text>
+            <div for="{{$item.cells}}" class="heatmap-cell heatmap-level-{{$item.level}}"></div>
+          </div>
+        </div>
+      </div>
+    </swiper>
+  </div>
+</template>
+
+<script>
+import { registerPage, unregisterPage } from '../../common/js/uiAdm'
+import { getStats, getHeatmapData, formatTokenCount } from '../../common/js/statsService'
+import { loadSessions } from '../../common/js/chatStorage'
+import router from '@system.router'
+
+const GREETINGS = [
+  '接下来做什么？',
+  '我们该做什么？',
+  '尽管问。',
+  '今天想聊点什么？',
+  '有什么可以帮你的？',
+]
+
+export default {
+  private: {
+    NowTime: null,
+    scrclass: '',
+    greeting: '',
+    username: 'Felix',
+    stats: {},
+    tokenDisplay: '0',
+    heatmapDays: ['一', '二', '三', '四', '五', '六', '日'],
+    heatmapRows: [],
+  },
+
+  onInit() {
+    registerPage(this.$page.name, this)
+    this.NowTime = (global.NowHour || '00') + ':' + (global.NowMin || '00')
+    this.greeting = GREETINGS[Math.floor(Math.random() * GREETINGS.length)]
+  },
+
+  async onShow() {
+    if (global.NowHour) {
+      this.NowTime = global.NowHour + ':' + global.NowMin
+    }
+    this.stats = await getStats()
+    this.tokenDisplay = formatTokenCount(this.stats.tokenTotal || 0)
+    this.heatmapRows = await getHeatmapData()
+  },
+
+  async continueSession() {
+    try {
+      const sessions = await loadSessions()
+      if (sessions.length > 0) {
+        const last = sessions[0]
+        router.push({ uri: '/pages/chat', params: { sessionId: last.id, sessionTitle: last.title } })
+      } else {
+        router.push({ uri: '/pages/sessions' })
+      }
+    } catch (e) {
+      router.push({ uri: '/pages/sessions' })
+    }
+  },
+
+  newSession() {
+    router.push({ uri: '/pages/sessions' })
+  },
+
+  onBackPress() { this.back(); return true; },
+  onDestroy() { unregisterPage(this.$page.name) },
+}
+</script>
+
+<style>
+@import '../../common/css/dashboard.css';
+@import '../../common/css/loading.css';
+</style>
