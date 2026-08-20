@@ -1,0 +1,98 @@
+<template>
+  <div class="container-compact">
+    <div class="header-compact">
+      <div if="{{global.Screen.screenShape != 'rect'}}">
+          <text class="time" style="transform: rotate(-16deg);margin-top:4px">{{ NowTime[0] }}</text>
+          <text class="time" style="transform: rotate(-8deg)">{{ NowTime[1] }}</text>
+          <text class="time" style="margin-top:-6px">:</text>
+          <text class="time" style="transform: rotate(8deg)">{{ NowTime[3] }}</text>
+          <text class="time" style="transform: rotate(16deg);margin-top:4px">{{ NowTime[4] }}</text>
+        </div>
+      <div class="center">
+          <img src="/common/others/back.png" class="img-sty h24" />
+          <text class="title" @click="back()">功能页</text>
+      </div>
+      <text if="{{global.Screen.screenShape == 'rect'}}" class="title">{{NowTime}}</text>
+    </div>
+    <div class='full-area center'>
+      <scroll scroll-y="true" bounces="true" class="{{scrclass}} full-area center" style="color: white;margin-top:10px;">
+          <block for="{{SetList}}">
+            <div class="card-item jcsb" @click="handleItem($item)">
+              <div class="fd">
+                <text class="card-title">{{$item.title}}</text>
+                <text if="{{global.Screen.screenShape != 'pill-shaped'}}" class="card-2title" style="padding: 2px 2px;">{{$item.lore}}</text>
+              </div>
+              <div class="center" style="height:100%">
+                <img src="/common/others/back.png" class="img-sty h24" style="transform: rotate(180deg);transform-origin: 12px 12px;" />
+              </div>
+            </div>
+          </block>
+          <div class='bottomzw'></div>
+      </scroll>
+    </div>
+  </div>
+</template>
+
+<script>
+import { registerPage, unregisterPage } from '../../common/js/uiAdm'
+import router from '@system.router'
+import prompt from '@system.prompt'
+import { getAvailableModels, setModel, getCurrentModel, loadModelSetting } from '../../common/js/chatService'
+
+export default {
+  private: {
+    NowTime: null,
+    SetList: [],
+    scrclass: '',
+  },
+  async onInit() {
+    registerPage(this.$page.name, this)
+    this.NowTime = global.NowHour + ':' + global.NowMin
+    await loadModelSetting()
+    const model = getCurrentModel()
+    this.SetList = [
+      { title: 'AI 对话', lore: '管理并开始对话', page: 'sessions' },
+      { title: 'AI 模型', lore: '当前: ' + model, page: '_model' },
+      { title: '主页', lore: '主页', page: 'index' },
+      { title: '偏好设置', lore: '主题/通知及通用设置', page: 'settings/settingslist?title=偏好设置' },
+      { title: '应用公告', lore: '查看最新动态与通知', page: 'settings/settingslist?title=应用公告' },
+      { title: '常见问题', lore: '帮助中心与使用指南', page: 'settings/settingslist?title=常见问题' },
+      { title: '授权信息', lore: '查看/撤销当前授权', page: 'settings/user' },
+      { title: '关于', lore: '关于本应用', page: 'settings/ab' },
+    ]
+  },
+  async onShow() {
+    // 刷新模型显示
+    const model = getCurrentModel()
+    if (this.SetList[1]) {
+      this.SetList[1].lore = '当前: ' + model
+    }
+  },
+  onBackPress() { this.back(); return true; },
+  onDestroy() { unregisterPage(this.$page.name) },
+
+  handleItem(item) {
+    if (item.page === '_model') {
+      this.toggleModel()
+    } else {
+      router.push({ uri: '/pages/' + item.page })
+    }
+  },
+
+  async toggleModel() {
+    const models = getAvailableModels()
+    const current = getCurrentModel()
+    const currentIdx = models.findIndex(m => m.id === current)
+    const nextIdx = (currentIdx + 1) % models.length
+    const nextModel = models[nextIdx]
+    await setModel(nextModel.id)
+    this.SetList[1].lore = '当前: ' + nextModel.id
+    MessageBox('已切换: ' + nextModel.name)
+  },
+}
+</script>
+
+<style>
+@import '../../common/css/list.css';
+@import '../../common/css/loading.css';
+</style>

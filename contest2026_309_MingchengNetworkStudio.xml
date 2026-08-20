@@ -10,7 +10,7 @@
 
   <project path="contest2026_309_MingchengNetworkStudio" name="contest2026_309_MingchengNetworkStudio">
     <linkfile src="app/hello_app" dest="packages/demos/contest2026_309_hello_app"/>
-    <linkfile src="quickapp/hello_quickapp" dest="packages/apps/contest2026_309_hello_quickapp"/>
+    <linkfile src="quickapp/VelaChat" dest="packages/apps/contest2026_309_VelaChat"/>
     <linkfile src="board/contest_board" dest="vendor/openvela/boards/contest2026_309_board"/>
   </project>
 </manifest>

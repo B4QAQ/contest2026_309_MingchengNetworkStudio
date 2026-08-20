@@ -1,0 +1,203 @@
+/******************************************************************************
+ * @file        dashboard.css
+ * @description 仪表盘页面样式 — Swiper 两页布局
+ * @version     11.0
+ ******************************************************************************/
+
+.home-swiper {
+  width: 100%;
+  height: 430px;
+  indicator-size: 0px;
+}
+
+.swiper-page {
+  flex-direction: column;
+  width: 100%;
+  height: 430px;
+  padding: 0 12px;
+  justify-content: flex-end;
+}
+
+.greeting-row {
+  flex-direction: row;
+  justify-content: center;
+  align-items: center;
+  margin-top: 20px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.greeting-text {
+  font-size: 28px;
+  font-weight: bold;
+  color: #ffffff;
+  text-align: center;
+}
+
+/* 2列2行，填满宽度 */
+.stats-grid {
+  flex-direction: row;
+  flex-wrap: wrap;
+  width: 100%;
+  padding: 0px;
+  justify-content: space-between;
+}
+
+.stat-card {
+  width: 196px;
+  height: 80px;
+  background-color: #1a1a1a;
+  border-radius: 16px;
+  flex-direction: column;
+  justify-content: center;
+  padding: 6px 12px;
+  margin-bottom: 8px;
+}
+
+.stat-card-wide {
+  width: 264px;
+}
+
+.stat-card-narrow {
+  width: 140px;
+}
+
+.stat-label {
+  font-size: 22px;
+  color: #888888;
+  margin-bottom: 2px;
+  text-align: left;
+  lines: 1;
+  text-overflow: ellipsis;
+}
+
+.stat-value {
+  font-size: 28px;
+  font-weight: bold;
+  color: #ffffff;
+  text-align: left;
+  lines: 1;
+  text-overflow: ellipsis;
+}
+
+/* 按钮列 */
+.button-row {
+  flex-direction: column;
+  width: 100%;
+  align-items: center;
+  margin-top: 12px;
+  margin-bottom: 16px;
+}
+
+.home-btn {
+  width: 340px;
+  height: 52px;
+  border-radius: 14px;
+  justify-content: center;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.page-spacer {
+  flex: 1;
+}
+
+/* 第二页：模型+Token 行 */
+.model-row {
+  flex-direction: row;
+  width: 100%;
+  justify-content: center;
+  margin-top: 20px;
+  margin-bottom: 12px;
+}
+
+.home-btn-continue {
+  background-color: #0c84ff;
+}
+
+.home-btn-new {
+  background-color: #2a2a2a;
+}
+
+.home-btn-text {
+  font-size: 24px;
+  color: #ffffff;
+  font-weight: bold;
+}
+
+/* 热力图 */
+.heatmap-title {
+  font-size: 22px;
+  color: #888888;
+  margin-top: 12px;
+  margin-bottom: 6px;
+  width: 100%;
+  padding-left: 12px;
+}
+
+.heatmap-container {
+  flex-direction: column;
+  padding: 0 48px;
+  align-items: center;
+}
+
+.heatmap-header {
+  flex-direction: row;
+  margin-bottom: 6px;
+  padding-left: 44px;
+}
+
+.heatmap-corner {
+  width: 0px;
+  height: 28px;
+}
+
+.heatmap-header-day {
+  font-size: 22px;
+  color: #888888;
+  width: 44px;
+  text-align: center;
+  margin-right: 4px;
+}
+
+.heatmap-row {
+  flex-direction: row;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.heatmap-week {
+  font-size: 22px;
+  color: #888888;
+  width: 44px;
+  text-align: right;
+  margin-right: 4px;
+}
+
+.heatmap-cell {
+  width: 44px;
+  height: 44px;
+  border-radius: 6px;
+  margin-right: 4px;
+}
+
+.heatmap-level-0 {
+  background-color: #2a2a2a;
+}
+
+.heatmap-level-1 {
+  background-color: #0e4429;
+}
+
+.heatmap-level-2 {
+  background-color: #006d32;
+}
+
+.heatmap-level-3 {
+  background-color: #26a641;
+}
+
+.heatmap-level-4 {
+  background-color: #39d353;
+}

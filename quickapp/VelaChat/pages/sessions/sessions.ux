@@ -1,0 +1,113 @@
+<template>
+  <div class="container-compact">
+    <div class="header-compact">
+      <div class="center" @click="back()">
+        <img src="/common/others/back.png" class="img-sty h24" />
+        <text class="title">会话</text>
+      </div>
+      <text if="{{global.Screen && global.Screen.screenShape == 'rect'}}" class="title">{{NowTime}}</text>
+    </div>
+
+    <scroll scroll-y="true" bounces="true" class="{{scrclass}} full-area" style="flex-direction: column;">
+      <div class="sess-new-btn" @click="createSession()">
+        <text class="sess-new-text">+ 新会话</text>
+      </div>
+
+      <div for="{{sessions}}" tid="id" class="sess-item">
+        <div class="sess-item-left" @click="openSession($item.id, $item.title)">
+          <text class="sess-item-title">{{$item.title}}</text>
+          <text class="sess-item-time">{{formatTime($item.updatedAt)}}</text>
+        </div>
+        <div class="sess-item-right">
+          <div class="sess-action-btn" @click="goRename($item.id, $item.title)">
+            <text class="sess-action-text">改名</text>
+          </div>
+          <div class="sess-action-btn sess-action-delete" @click="confirmDelete($item.id)">
+            <text class="sess-action-text">删除</text>
+          </div>
+        </div>
+      </div>
+
+      <div class="bottomzw"></div>
+    </scroll>
+  </div>
+</template>
+
+<script>
+import { registerPage, unregisterPage, MessageBox } from '../../common/js/uiAdm'
+import { loadSessions, createNewSession, deleteSession } from '../../common/js/chatStorage'
+import router from '@system.router'
+import prompt from '@system.prompt'
+
+export default {
+  private: {
+    NowTime: null,
+    scrclass: '',
+    sessions: [],
+  },
+
+  onInit() {
+    registerPage(this.$page.name, this)
+    this.NowTime = (global.NowHour || '00') + ':' + (global.NowMin || '00')
+  },
+
+  async onShow() {
+    if (global.NowHour) {
+      this.NowTime = global.NowHour + ':' + global.NowMin
+    }
+    this.sessions = await loadSessions()
+    if (this.sessions.length === 0) {
+      const s = await createNewSession('新会话')
+      this.sessions = [s]
+    }
+  },
+
+  onBackPress() { this.back(); return true; },
+  onDestroy() { unregisterPage(this.$page.name) },
+
+  openSession(id, title) {
+    router.push({ uri: '/pages/chat', params: { sessionId: id, sessionTitle: title } })
+  },
+
+  async createSession() {
+    const s = await createNewSession('新会话')
+    this.sessions = [s].concat(this.sessions)
+    this.openSession(s.id, s.title)
+  },
+
+  goRename(id, currentTitle) {
+    router.push({ uri: '/pages/sessions/rename', params: { sessionId: id, currentTitle: currentTitle } })
+  },
+
+  confirmDelete(id) {
+    prompt.showDialog({
+      title: '删除会话',
+      message: '确定删除此会话？',
+      buttons: [{ text: '删除', color: '#ff4444' }, { text: '取消', color: '#888888' }],
+      success: async (data) => {
+        if (data.index === 0) {
+          await deleteSession(id)
+          this.sessions = await loadSessions()
+          global.runGC()
+        }
+      },
+      fail: () => {}
+    })
+  },
+
+  formatTime(ts) {
+    if (!ts) return ''
+    const d = new Date(ts)
+    const M = (d.getMonth() + 1).toString().padStart(2, '0')
+    const day = d.getDate().toString().padStart(2, '0')
+    const h = d.getHours().toString().padStart(2, '0')
+    const m = d.getMinutes().toString().padStart(2, '0')
+    return M + '/' + day + ' ' + h + ':' + m
+  },
+}
+</script>
+
+<style>
+@import '../../common/css/sessions.css';
+@import '../../common/css/loading.css';
+</style>

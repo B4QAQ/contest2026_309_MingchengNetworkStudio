@@ -1,0 +1,249 @@
+<template>
+  <div class="container-compact">
+    <div class="header-compact">
+      <div class="center" @click="back()">
+        <img src="/common/others/back.png" class="img-sty h24" />
+        <text class="title viewer-title">{{filename}}</text>
+      </div>
+    </div>
+
+    <scroll class="viewer-content" scroll-y="true" bounces="true" style="flex-direction: column;">
+      <div if="{{loading}}" class="viewer-loading">
+        <text class="viewer-loading-text">加载中...</text>
+      </div>
+      <div if="{{error}}" class="viewer-error">
+        <text class="viewer-error-text">{{error}}</text>
+      </div>
+      <div if="{{!loading && !error}}" class="viewer-text-wrap">
+        <text class="viewer-text">{{content}}</text>
+      </div>
+      <!-- JS 运行按钮 -->
+      <div if="{{isJsFile && !loading && !error}}" class="viewer-run-bar">
+        <div class="viewer-run-btn" @click="runJs()">
+          <text class="viewer-run-text">运行</text>
+        </div>
+      </div>
+      <!-- JS 运行输出 -->
+      <div if="{{runOutput}}" class="viewer-run-output">
+        <text if="{{!runHasError}}" class="viewer-run-text">{{runOutput}}</text>
+        <text if="{{runHasError}}" class="viewer-run-error">{{runOutput}}</text>
+      </div>
+      <div class="bottomzw"></div>
+    </scroll>
+        </scroll>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+import { registerPage, unregisterPage } from '../../../common/js/uiAdm'
+import file from '@system.file'
+
+const FILE_BASE = 'internal://files/'
+
+export default {
+  props: {
+    filename: { default: '' },
+  },
+  private: {
+    content: '',
+    loading: true,
+    error: '',
+    isJsFile: false,
+    runOutput: '',
+    runHasError: false,
+  },
+
+  onInit() {
+    registerPage(this.$page.name, this)
+    this.isJsFile = this.filename && this.filename.endsWith('.js')
+    this.loadFile()
+  },
+
+  onBackPress() { this.back(); return true; },
+  onDestroy() { unregisterPage(this.$page.name) },
+
+  loadFile() {
+    if (!this.filename) {
+      this.loading = false
+      this.error = '未指定文件名'
+      return
+    }
+    file.readText({
+      uri: FILE_BASE + this.filename,
+      success: (data) => {
+        this.content = data.text || '(空文件)'
+        this.loading = false
+      },
+      fail: (d, code) => {
+        this.error = '读取失败: ' + code
+        this.loading = false
+      }
+    })
+  },
+
+  runJs() {
+    this.runOutput = ''
+    this.runHasError = false
+
+    try {
+      const code = this.content
+      let output = ''
+
+      const vconsole = {
+        log: function() {
+          const parts = []
+          for (let i = 0; i < arguments.length; i++) {
+            const arg = arguments[i]
+            if (typeof arg === 'object') {
+              try { parts.push(JSON.stringify(arg)) } catch (e) { parts.push('[Object]') }
+            } else {
+              parts.push(String(arg))
+            }
+          }
+          output += (output ? '\n' : '') + parts.join(' ')
+        },
+        error: function() {
+          const parts = []
+          for (let i = 0; i < arguments.length; i++) {
+            parts.push(String(arguments[i]))
+          }
+          output += (output ? '\n' : '') + '[ERROR] ' + parts.join(' ')
+        }
+      }
+
+      const vprompt = (message, callback) => {
+        // 在查看器中不支持交互输入，只显示提示
+        output += '\n[prompt] ' + (message || '请输入') + ' (交互输入仅在控制台可用)'
+      }
+
+      const fn = new Function('console', 'prompt', code)
+      const start = Date.now()
+      fn(vconsole, vprompt)
+      const elapsed = Date.now() - start
+
+      this.runOutput = (output || '(无输出)') + '\n耗时: ' + elapsed + 'ms'
+
+      // 写入全局控制台日志
+      if (!global.consoleLogs) global.consoleLogs = []
+      const d = new Date()
+      const time = d.getHours().toString().padStart(2, '0') + ':' +
+                   d.getMinutes().toString().padStart(2, '0') + ':' +
+                   d.getSeconds().toString().padStart(2, '0')
+      global.consoleLogs = global.consoleLogs.concat([{
+        code: '[手动] ' + this.filename,
+        output: output || '(无输出)',
+        error: false,
+        time: time
+      }])
+    } catch (e) {
+      this.runOutput = e.name + ': ' + e.message
+      this.runHasError = true
+    }
+  },
+}
+</script>
+
+<style>
+.viewer-title {
+  lines: 1;
+  text-overflow: ellipsis;
+  max-width: 280px;
+}
+
+.viewer-content {
+  flex: 1;
+  flex-direction: column;
+  width: 100%;
+  padding: 12px;
+}
+
+.viewer-text-wrap {
+  flex-direction: column;
+  margin-bottom: 12px;
+}
+
+.viewer-loading {
+  flex: 1;
+  justify-content: center;
+  align-items: center;
+}
+
+.viewer-loading-text {
+  font-size: 24px;
+  color: #888888;
+}
+
+.viewer-error {
+  flex: 1;
+  justify-content: center;
+  align-items: center;
+}
+
+.viewer-error-text {
+  font-size: 24px;
+  color: #FF6B6B;
+}
+
+.viewer-scroll {
+  flex: 1;
+  width: 100%;
+}
+
+.viewer-text {
+  font-size: 28px;
+  color: #e2e2e2;
+  lines: 0;
+  white-space: pre-wrap;
+}
+
+/* JS 运行按钮 */
+.viewer-run-bar {
+  flex-direction: row;
+  justify-content: center;
+  margin-top: 8px;
+}
+
+.viewer-run-btn {
+  width: 120px;
+  height: 44px;
+  background-color: #0c84ff;
+  border-radius: 14px;
+  justify-content: center;
+  align-items: center;
+}
+
+.viewer-run-text {
+  font-size: 24px;
+  color: #ffffff;
+  font-weight: bold;
+}
+
+/* JS 运行输出 */
+.viewer-run-output {
+  margin-top: 8px;
+  background-color: #1a1a1a;
+  border-radius: 12px;
+  padding: 8px;
+  max-height: 200px;
+}
+
+.viewer-run-scroll {
+  width: 100%;
+}
+
+.viewer-run-text {
+  font-size: 22px;
+  color: #9cdcfe;
+  lines: 0;
+  white-space: pre-wrap;
+}
+
+.viewer-run-error {
+  font-size: 22px;
+  color: #FF6B6B;
+  lines: 0;
+  white-space: pre-wrap;
+}
+</style>

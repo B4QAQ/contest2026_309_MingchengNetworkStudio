@@ -1,0 +1,85 @@
+/******************************************************************************
+ * @file        sessions.css
+ * @description 会话管理页面样式
+ ******************************************************************************/
+
+.sess-new-btn {
+  height: 52px;
+  background-color: #0c84ff;
+  border-radius: 25px;
+  margin-bottom: 12px;
+  margin-top: 8px;
+  justify-content: center;
+  align-items: center;
+  margin-left: 40px;
+  margin-right: 40px;
+}
+
+.sess-new-text {
+  font-size: 26px;
+  color: #ffffff;
+  font-weight: bold;
+}
+
+.sess-item {
+  width: 100%;
+  background-color: #1a1a1a;
+  border-radius: 16px;
+  margin-bottom: 8px;
+  flex-direction: row;
+  align-items: center;
+  padding: 10px 14px;
+}
+
+.sess-item-left {
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sess-item-title {
+  font-size: 26px;
+  color: #ffffff;
+  lines: 1;
+  text-overflow: ellipsis;
+  margin-bottom: 2px;
+}
+
+.sess-item-time {
+  font-size: 20px;
+  color: #666666;
+}
+
+.sess-item-right {
+  flex-direction: row;
+  align-items: center;
+}
+
+.sess-action-btn {
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 18px;
+  background-color: #2a2a2a;
+  margin-left: 8px;
+  justify-content: center;
+  align-items: center;
+}
+
+.sess-action-delete {
+  background-color: #3a1a1a;
+}
+
+.sess-action-text {
+  font-size: 20px;
+  color: #cccccc;
+}
+
+@media screen and (shape: circle) {
+  .sess-new-btn {
+    margin-left: 20%;
+    margin-right: 20%;
+  }
+  .sess-item {
+    width: 90%;
+  }
+}

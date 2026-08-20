@@ -1,0 +1,70 @@
+/******************************************************************************
+ * @file        rename.css
+ * @description 重命名页面样式
+ ******************************************************************************/
+
+.rename-area {
+  flex-direction: column;
+  flex: 1;
+  width: 100%;
+  padding: 16px 16px;
+}
+
+.rename-label {
+  font-size: 22px;
+  color: #888888;
+  margin-bottom: 8px;
+}
+
+.rename-input-field {
+  width: 100%;
+  height: 52px;
+  background-color: #1a1a1a;
+  border-radius: 25px;
+  padding: 0 16px;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+
+.rename-input-text {
+  font-size: 26px;
+  color: #ffffff;
+  lines: 1;
+  text-overflow: ellipsis;
+}
+
+.rename-keyboard-overlay {
+  position: absolute;
+  left: 0px;
+  top: 0px;
+  width: 100%;
+  height: 50%;
+  flex-direction: column;
+}
+
+.rename-actions {
+  flex-direction: row;
+  justify-content: center;
+}
+
+.rename-btn {
+  height: 48px;
+  padding: 0 24px;
+  border-radius: 24px;
+  margin: 0 8px;
+  justify-content: center;
+  align-items: center;
+}
+
+.rename-btn-cancel {
+  background-color: #2a2a2a;
+}
+
+.rename-btn-save {
+  background-color: #0c84ff;
+}
+
+.rename-btn-text {
+  font-size: 24px;
+  color: #ffffff;
+}
