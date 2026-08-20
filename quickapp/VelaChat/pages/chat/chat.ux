@@ -14,7 +14,7 @@
 
     <swiper class="chat-swiper" loop="false" indicator="false" @change="onSwiperChange">
       <!-- 第一页：对话 -->
-      <scroll id="msgList" class="chat-list" scroll-y="true" bounces="true">
+      <scroll id="msgList" class="chat-list" scroll-y="true" bounces="true" onscroll="onScroll">
         <div for="{{messages}}" tid="id" class="chat-item-wrap">
           <!-- 用户消息 -->
           <div if="{{$item.role === 'user'}}" class="msg-row msg-row-user">
@@ -129,6 +129,18 @@
       </div>
     </div>
 
+    <!-- 滚动到底部按钮 -->
+    <div if="{{userScrolled}}" class="scroll-to-bottom-btn center" @click="scrollToBottomForce()">
+      <text class="scroll-to-bottom-icon">↓</text>
+    </div>
+
+    <!-- 上下文窗口进度条 -->
+    <div class="context-bar">
+      <div class="context-track">
+        <div class="context-fill" style="width: {{contextPercent}}%;"></div>
+      </div>
+    </div>
+
     <div if="{{showKeyboard}}" class="chat-keyboard-overlay" @click="hideKeyboard()"></div>
 
     <input-method
@@ -196,6 +208,13 @@ export default {
     promptMessage: '',
     inputBuffer: '',
     currentInputCallback: null,
+    // 上下文窗口
+    contextUsed: 0,
+    contextTotal: 128,
+    contextPercent: 0,
+    // 滚动控制
+    userScrolled: false,
+    isProgramScroll: false,
   },
 
   onInit() {
@@ -218,6 +237,9 @@ export default {
     }
     // 初始化权限轮替显示
     this.startPermissionRotation()
+    // 重置滚动状态
+    this.userScrolled = false
+    this.isProgramScroll = false
   },
 
   onBackPress() {
@@ -381,7 +403,7 @@ export default {
     return new Promise((resolve) => {
       let i = 0
       const totalLen = fullText.length
-      const delay = totalLen <= 20 ? 80 : totalLen <= 100 ? 40 : 20
+      const delay = totalLen <= 20 ? 60 : totalLen <= 100 ? 30 : 15
 
       const typeNext = () => {
         if (i < totalLen) {
@@ -394,6 +416,9 @@ export default {
             toolRejected: cur.toolRejected, meta: cur.meta
           }
           this.messages = updated
+          if (i % 5 === 0 || i === totalLen) {
+            this.scrollToBottom()
+          }
           this.typeTimer = setTimeout(typeNext, delay)
         } else {
           this.typeTimer = null
@@ -401,7 +426,7 @@ export default {
           resolve()
         }
       }
-      this.typeTimer = setTimeout(typeNext, 200)
+      this.typeTimer = setTimeout(typeNext, 100)
     })
   },
 
@@ -601,7 +626,8 @@ export default {
 
     const userMsg = createMessage('user', text)
     this.messages = this.messages.concat([userMsg])
-    this.scrollToBottom()
+    this.userScrolled = false
+    setTimeout(() => { this.scrollToBottom() }, 50)
 
     this.isTyping = true
     recordMessage('user')
@@ -665,6 +691,11 @@ export default {
       recordMessage('assistant', result.usage)
       this.doSave()
       this.scrollToBottom()
+      // 更新上下文窗口
+      if (result.usage && result.usage.total_tokens) {
+        this.contextUsed += Math.ceil(result.usage.total_tokens / 1000)
+        this.contextPercent = Math.min(100, Math.round(this.contextUsed / this.contextTotal * 100))
+      }
     } catch (e) {
       console.log('[Chat] sendMessage 错误:', e)
       this.stopTypeEffect()
@@ -678,13 +709,42 @@ export default {
     this.isTyping = false
   },
 
+  onScroll(evt) {
+    if (this.isProgramScroll) return
+    if (evt && evt.scrollY !== undefined) {
+      this.lastScrollY = evt.scrollY
+      const el = this.$element('msgList')
+      if (el) {
+        this.isProgramScroll = true
+        el.getScrollRect({
+          success: (rect) => {
+            const viewHeight = 400
+            this.userScrolled = (evt.scrollY + viewHeight) < (rect.height - 30)
+            setTimeout(() => { this.isProgramScroll = false }, 50)
+          }
+        })
+      }
+    }
+  },
+
   scrollToBottom() {
     const el = this.$element('msgList')
     if (el) {
+      this.isProgramScroll = true
       setTimeout(() => {
-        el.scrollTo({ top: 999999, behavior: 'smooth' })
-      }, 100)
+        el.getScrollRect({
+          success: (rect) => {
+            el.scrollTo({ top: rect.height, behavior: 'instant' })
+            setTimeout(() => { this.isProgramScroll = false }, 150)
+          }
+        })
+      }, 50)
     }
+  },
+
+  scrollToBottomForce() {
+    this.userScrolled = false
+    this.scrollToBottom()
   },
 
   // JS 运行（控制台页调用）

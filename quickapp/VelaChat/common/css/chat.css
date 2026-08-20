@@ -343,8 +343,8 @@
 .chat-input-bar {
   flex-direction: row;
   width: 100%;
-  padding: 10px 24px;
-  margin-bottom: 10px;
+  padding: 8px 24px;
+  margin-bottom: 0px;
   background-color: #1a1a1a;
   align-items: center;
 }
@@ -385,13 +385,55 @@
 }
 
 .chat-send-btn {
-  margin-left: 5px;
+  margin-left: -12px;
   width: 68px;
   height: 48px;
   background-color: #0c84ff;
   border-radius: 24px;
   justify-content: center;
   align-items: center;
+}
+
+/* 滚动到底部按钮 */
+.scroll-to-bottom-btn {
+  position: absolute;
+  right: 24px;
+  bottom: 100px;
+  width: 40px;
+  height: 40px;
+  background-color: rgba(0, 0, 0, 0.6);
+  border-radius: 20px;
+  justify-content: center;
+  align-items: center;
+}
+
+.scroll-to-bottom-icon {
+  font-size: 20px;
+  color: #ffffff;
+}
+
+/* 上下文窗口进度条 */
+.context-bar {
+  flex-direction: row;
+  width: 212px;
+  align-items: center;
+  margin-top: 2px;
+  margin-bottom: 2px;
+  align-self: center;
+}
+
+.context-track {
+  flex: 1;
+  height: 3px;
+  background-color: #1a1a1a;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.context-fill {
+  height: 100%;
+  background-color: #0c84ff;
+  border-radius: 2px;
 }
 
 .chat-send-text {
