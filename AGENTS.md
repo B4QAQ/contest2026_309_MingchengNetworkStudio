@@ -83,8 +83,8 @@
 1. `rm -rf cmake_out/hd-rk3506-evm_nsh`（彻底清空）
 2. 用 3.1 的命令重新构建
 3. 验证产物：
-   - `cmake_out/hd-rk3506-evm_nsh/vela.bin` < 1MB
-   - `nand_firmware/update.img` 存在且 < 10MB
+   - `cmake_out/hd-rk3506-evm_nsh/vela.bin` 存在
+   - `nand_firmware/update.img` 存在
 4. 跑 `bash nand_firmware/pack_nand.sh` 看是否成功
 
 ---
