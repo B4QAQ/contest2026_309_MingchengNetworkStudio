@@ -95,8 +95,8 @@
 |------|------|------|
 | `nuttx/arch/arm/Kconfig` 增加 `ARCH_CHIP_RK3506` | ✅ **必需保留** | 之前 AI 修改 |
 | `vendor/rockchip/boards/rk3506/hd-rk3506-evm/CMakeLists.txt` 重写 | ✅ **必需保留** | 修复了 34MB 零填充 bug |
-| `vendor/rockchip/boards/rk3506/hd-rk3506-evm/configs/parameter.txt` 重写 | ✅ **必需保留** | boot 分区调为 10MB |
-| `nand_firmware/pack_nand.sh` 重写 | ✅ **必需保留** | env-var 化 + 引入预编译 U-Boot |
+| `vendor/rockchip/boards/rk3506/hd-rk3506-evm/configs/parameter.txt` 重写 | ✅ **必需保留** | boot 分区调为 10MB；v3 改用 SDK 官方 parameter-evm-nand.txt |
+| `nand_firmware/pack_nand.sh` 重写 | ✅ **必需保留 (v3)** | v3: 使用 SDK 官方 afptool + rkImageMaker -RK3506 工具链 |
 | `nand_firmware/uboot.img` (预编译 813KB) | ✅ **必需** | MiniLoader 链式加载的 U-Boot FIT |
 | `nand_firmware/boot.uimg` (uImage 格式) | ✅ **必需** | U-Boot bootm 加载的 kernel 镜像 |
 | `rk3506_i2c.c` (v2) | ✅ **重写完成 + 修复** | 基于 Linux i2c-rk3x.c，clock divider 公式从 `(pclk/8/scl)-1` 修正为 `DIV_ROUND_UP(pclk, 8*scl) - 2` |
