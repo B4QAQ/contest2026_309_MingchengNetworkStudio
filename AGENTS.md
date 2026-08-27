@@ -103,7 +103,7 @@
 | `rk3506_lowputc.c` | ✅ **已修复** | UART 时钟从 1.8432 MHz 修正为 24 MHz |
 | `rk3506_serial.c` | ✅ **已修复** | UART_SCLK 从 1.8432 MHz 修正为 24 MHz |
 | `hd_rk3506_bringup.c` | ✅ **已重写** | 不再因单个驱动失败中断后续初始化；添加 I2C 控制器初始化 |
-| `rk3506_vop.c` | ⚠️ **可能有 bug** | 等待硬件测试 |
+| `rk3506_vop.c` | ✅ **已修复** | WIN1_CTRL0 format 字段位域修正、GRF HIWORD_UPDATE 模式修正、dsp_layer_sel 修正 |
 | `rk3506_usbhost.c` | ⚠️ **可能有 bug** | 8000+ 行复杂驱动 |
 | `hd_rk3506_gt911.c` | ⚠️ **可能有 bug** | 2000+ 行 |
 | `hd_rk3506_st7701s.c` | ⚠️ **可能有 bug** | 1300+ 行 |
