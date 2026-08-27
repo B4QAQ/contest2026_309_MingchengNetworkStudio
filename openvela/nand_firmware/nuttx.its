@@ -14,9 +14,22 @@
 			entry = <0x02080560>;
 			hash { algo = "sha256"; };
 		};
+		fdt {
+			description = "Minimal kernel FDT (NuttX ignores r2)";
+			data = /incbin/("./nuttx-fdt.dtb");
+			type = "flat_dt";
+			arch = "arm";
+			compression = "none";
+			load = <0xffffff00>;
+			hash { algo = "sha256"; };
+		};
 	};
 	configurations {
 		default = "conf";
-		conf { description = "OpenVela kernel"; kernel = "kernel"; };
+		conf {
+			description = "OpenVela kernel";
+			kernel = "kernel";
+			fdt = "fdt";
+		};
 	};
 };

@@ -140,6 +140,22 @@ fi
 
 ITS_FILE="$OUTPUT_DIR/nuttx.its"
 if [ -x "$MKIMAGE" ] && [ -n "$DTC_BIN" ]; then
+    # 生成最小内核 FDT.
+    # Rockchip U-Boot 的 bootm 强制要求内核 FDT (对 fdt 指针调 fdt_check_header;
+    # 没有 fdt 节点时指针为 NULL -> data abort @ fdt 校验). NuttX 不读 r2/atags,
+    # 所以给一个最小 DTB 仅为满足 U-Boot; 它用占位符 load 0xffffff00,
+    # U-Boot 会重定位到 fdt_addr_r (0x63000), 不与内核 0x02080000 重叠.
+    cat > "$OUTPUT_DIR/nuttx-fdt.dts" << 'FDT_EOF'
+/dts-v1/;
+/ {
+	model = "HD-RK3506-EVM OpenVela";
+	compatible = "rockchip,rk3506-evb", "rockchip,rk3506";
+	#address-cells = <1>;
+	#size-cells = <1>;
+};
+FDT_EOF
+    ( cd "$OUTPUT_DIR" && dtc -I dts -O dtb -o nuttx-fdt.dtb nuttx-fdt.dts > /dev/null 2>&1 )
+
     cat > "$ITS_FILE" << 'ITS_EOF'
 /dts-v1/;
 / {
@@ -157,10 +173,23 @@ if [ -x "$MKIMAGE" ] && [ -n "$DTC_BIN" ]; then
 			entry = <0x02080560>;
 			hash { algo = "sha256"; };
 		};
+		fdt {
+			description = "Minimal kernel FDT (NuttX ignores r2)";
+			data = /incbin/("./nuttx-fdt.dtb");
+			type = "flat_dt";
+			arch = "arm";
+			compression = "none";
+			load = <0xffffff00>;
+			hash { algo = "sha256"; };
+		};
 	};
 	configurations {
 		default = "conf";
-		conf { description = "OpenVela kernel"; kernel = "kernel"; };
+		conf {
+			description = "OpenVela kernel";
+			kernel = "kernel";
+			fdt = "fdt";
+		};
 	};
 };
 ITS_EOF
@@ -171,7 +200,7 @@ ITS_EOF
         FIT_ALIGNED=$(( (FIT_SIZE + 0x3FF) & ~0x3FF ))
         [ "$FIT_ALIGNED" -lt 4194304 ] && FIT_ALIGNED=4194304
         [ "$FIT_ALIGNED" -ne "$FIT_SIZE" ] && truncate -s "$FIT_ALIGNED" "$OUTPUT_DIR/boot.fit"
-        echo "  -> boot.fit $(stat -c %s "$OUTPUT_DIR/boot.fit") bytes (FIT external data, boot_fit 可自动引导)"
+        echo "  -> boot.fit $(stat -c %s "$OUTPUT_DIR/boot.fit") bytes (FIT kernel+fdt, boot_fit 可自动引导)"
         # 让独立的 boot.img 也是 FIT, 这样单分区烧录 (di boot boot.img) 也能自动引导
         cp -f "$OUTPUT_DIR/boot.fit" "$OUTPUT_DIR/boot.img"
     else
