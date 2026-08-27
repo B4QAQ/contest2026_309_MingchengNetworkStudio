@@ -3,19 +3,36 @@
 # openvela NAND 烧录脚本
 # 支持单独烧录 boot/system/data 分区或完整烧录
 #
+# 用法:
+#   UPGRADE_TOOL=/path/to/upgrade_tool ./flash_boot.sh
+#   或设置环境变量 RK3506_SDK_DIR 让脚本自动找到 upgrade_tool
+#
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SDK_DIR="/home/b4qaq/project/RK3506G2/rk3506_linux6.1_sdk_v1.2.0_iot_evm"
-UPGRADE_TOOL="$SDK_DIR/tools/linux/Linux_Upgrade_Tool/Linux_Upgrade_Tool/upgrade_tool"
+
+# 工具路径：优先用环境变量
+SDK_DIR="${RK3506_SDK_DIR:-/home/b4qaq/project/RK3506G2/rk3506_linux6.1_sdk_v1.2.0_iot_evm}"
+UPGRADE_TOOL="${UPGRADE_TOOL:-$SDK_DIR/tools/linux/Linux_Upgrade_Tool/Linux_Upgrade_Tool/upgrade_tool}"
+
+# 检查 upgrade_tool
+if [ ! -x "$UPGRADE_TOOL" ]; then
+    echo "错误: upgrade_tool 不存在或不可执行: $UPGRADE_TOOL"
+    echo "请设置 UPGRADE_TOOL 环境变量或安装 RK3506 SDK"
+    echo "  例如: export UPGRADE_TOOL=/path/to/Linux_Upgrade_Tool/upgrade_tool"
+    exit 1
+fi
 
 echo "========================================"
 echo "  openvela NAND 烧录工具"
 echo "========================================"
 echo ""
+echo "  SDK_DIR      = $SDK_DIR"
+echo "  UPGRADE_TOOL = $UPGRADE_TOOL"
+echo ""
 echo "分区布局:"
-echo "  boot      - NuttX 内核 (FIT 镜像)"
+echo "  boot      - NuttX 内核 (4MB)"
 echo "  system    - 系统分区 (ROMFS)"
 echo "  data      - 应用数据分区"
 echo "  vendor    - 厂商定制分区"
@@ -27,8 +44,9 @@ echo "  2) 烧 boot + system 分区"
 echo "  3) 烧 boot + system + data 分区"
 echo "  4) 完整烧录 (update.img)"
 echo "  5) 自定义选择分区"
+echo "  q) 退出"
 echo ""
-read -p "请选择 [1-5]: " choice
+read -p "请选择 [1-5/q]: " choice
 
 case $choice in
     1)
@@ -62,6 +80,10 @@ case $choice in
         echo ""
         echo "可选分区: boot system data vendor oem"
         read -p "输入分区名 (空格分隔): " -a PARTITIONS
+        ;;
+    q|Q)
+        echo "已退出"
+        exit 0
         ;;
     *)
         echo "无效选择"
@@ -109,7 +131,7 @@ echo "========================================"
 echo "  烧录完成！"
 echo "========================================"
 echo ""
-echo "UART0 (115200) 应输出 NuttX 启动日志。"
+echo "UART0 (115200 8N1) 应输出 NuttX 启动日志。"
 echo ""
 echo "恢复方法:"
 echo "  1. 重新进入 Loader 模式"

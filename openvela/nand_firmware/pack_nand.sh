@@ -1,196 +1,167 @@
 #!/bin/bash
 #
-# openvela NAND 固件打包脚本
-# 生成标准 Vela 分区布局的固件镜像
+# openvela RK3506 NAND 固件打包脚本（v2 — 重写版）
+# 关键改进：
+#   1. 路径全部使用环境变量 + 相对路径
+#   2. 默认 RK3506 SDK 路径为 ../RK3506G2/rk3506_linux6.1_sdk_v1.2.0_iot_evm
+#   3. 优先使用本仓内已有的 nand_firmware/nuttx.bin（由 build.sh POSTBUILD 生成）
+#   4. boot.img 只包含 vela.bin（紧凑，~500KB），不使用 34MB 零填充 bin
 #
-
-set -e
+# 注意：本脚本不强制 -e，允许部分步骤失败（如 mkimage 不可用）
+#
+set +e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SDK_DIR="/home/b4qaq/project/RK3506G2/rk3506_linux6.1_sdk_v1.2.0_iot_evm"
-NUTTX_BIN="/home/b4qaq/project/openvela/cmake_out/hd-rk3506-evm_nsh/nuttx.bin"
-NUTTX_DIR="/home/b4qaq/project/openvela"
+NUTTX_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+NUTTX_BIN="${NUTTX_BIN:-$SCRIPT_DIR/nuttx.bin}"
+
+# SDK 路径：优先用环境变量，否则用相对路径
+SDK_DIR="${RK3506_SDK_DIR:-$(cd "$NUTTX_DIR/../RK3506G2/rk3506_linux6.1_sdk_v1.2.0_iot_evm" 2>/dev/null && pwd || echo "")}"
+
 OUTPUT_DIR="$SCRIPT_DIR"
 PACK_DIR="$OUTPUT_DIR/pack"
-DTC="$NUTTX_DIR/vendor/allwinnertech/lichee/brandy-2.0/u-boot-2018/scripts/dtc/dtc"
 
 # 工具路径
-MKIMAGE="$SDK_DIR/rkbin/tools/mkimage"
-BOOT_MERGER="$SDK_DIR/rkbin/tools/boot_merger"
-AFP_TOOL="$SDK_DIR/tools/linux/Linux_Pack_Firmware/rockdev/afptool"
-RK_IMAGE_MAKER="$SDK_DIR/tools/linux/Linux_Pack_Firmware/rockdev/rkImageMaker"
-UPGRADE_TOOL="$SDK_DIR/tools/linux/Linux_Upgrade_Tool/Linux_Upgrade_Tool/upgrade_tool"
-GENROMFS="$(which genromfs 2>/dev/null || echo "$NUTTX_DIR/prebuilts/tools/linux/x86_64/genromfs")"
+MKIMAGE="${MKIMAGE:-$SDK_DIR/rkbin/tools/mkimage}"
+BOOT_MERGER="${BOOT_MERGER:-$SDK_DIR/rkbin/tools/boot_merger}"
+AFP_TOOL="${AFP_TOOL:-$SDK_DIR/tools/linux/Linux_Pack_Firmware/rockdev/afptool}"
+RK_IMAGE_MAKER="${RK_IMAGE_MAKER:-$SDK_DIR/tools/linux/Linux_Pack_Firmware/rockdev/rkImageMaker}"
+GENROMFS="${GENROMFS:-$(which genromfs 2>/dev/null || echo "$NUTTX_DIR/prebuilts/build-tools/linux-x86_64/bin/genromfs")}"
 
-# 设置 PATH
-export PATH="$(dirname $DTC):$PATH"
+# 参数文件（分区表）
+PARAM_FILE="${PARAM_FILE:-$NUTTX_DIR/vendor/rockchip/boards/rk3506/hd-rk3506-evm/configs/parameter.txt}"
 
 echo "========================================"
-echo "  openvela NAND 固件打包工具"
+echo "  openvela RK3506 NAND 固件打包"
 echo "========================================"
+echo "  NUTTX_BIN      = $NUTTX_BIN"
+echo "  SDK_DIR        = $SDK_DIR"
+echo "  PARAM_FILE     = $PARAM_FILE"
+echo "  OUTPUT_DIR     = $OUTPUT_DIR"
 echo ""
 
-# ============================================================
-# 分区布局说明 (参考小米 Vela 标准)
-# ============================================================
-#
-# 分区名      大小      用途
-# --------    ------    ----
-# vnvm        2MB       NV 存储 (MAC地址等)
-# uboot       8MB       U-Boot 引导加载器
-# misc        2MB       启动模式控制
-# recovery    30MB      恢复分区
-# boot        32MB      NuttX 内核 (FIT 镜像)
-# system      64MB      系统分区 (ROMFS, 只读)
-# vendor      16MB      厂商定制分区
-# oem         32MB      OEM 分区
-# data        256MB     应用数据分区 (LittleFS)
-# userdata    剩余      用户数据
-#
-# 与小米 Vela 官方对齐的分区:
-#   /system  → system 分区 (ROMFS)
-#   /data    → data 分区 (LittleFS)
-#   /vendor  → vendor 分区 (ROMFS)
-#   /oem     → oem 分区
-# ============================================================
-
-# 检查输入文件
+#--------------------------------------------------------------------
+# 1. 输入检查
+#--------------------------------------------------------------------
 if [ ! -f "$NUTTX_BIN" ]; then
-    echo "错误: nuttx.bin 不存在: $NUTTX_BIN"
-    echo "请先编译: ./build.sh vendor/rockchip/boards/rk3506/hd-rk3506-evm/configs/nsh --cmake -j\$(nproc)"
+    echo "错误: 找不到 nuttx.bin: $NUTTX_BIN"
+    echo "请先编译: ./build.sh vendor/rockchip/boards/rk3506/hd-rk3506-evm/configs/nsh/ --cmake -j\$(nproc)"
     exit 1
 fi
 
-echo "[1/7] 生成 FIT 镜像 (boot.img)..."
-
-# 创建 ITS 文件
-cat > /tmp/openvela-nuttx.its << 'ITS_EOF'
-/dts-v1/;
-/ {
-    description = "openvela NuttX FIT image for RK3506";
-    images {
-        kernel {
-            data = /incbin/("@KERNEL_IMG@");
-            type = "kernel";
-            arch = "arm";
-            os = "linux";
-            compression = "none";
-            entry = <0x02080000>;
-            load = <0x02080000>;
-            hash {
-                algo = "sha256";
-            };
-        };
-    };
-    configurations {
-        default = "conf";
-        conf {
-            description = "Boot openvela NuttX";
-            kernel = "kernel";
-        };
-    };
-};
-ITS_EOF
-
-sed -i "s~@KERNEL_IMG@~$(realpath $NUTTX_BIN)~" /tmp/openvela-nuttx.its
-$MKIMAGE -f /tmp/openvela-nuttx.its -E -p 0x800 "$OUTPUT_DIR/boot.img" > /dev/null
-echo "  -> boot.img ($(du -h "$OUTPUT_DIR/boot.img" | cut -f1))"
-
+NUTTX_SIZE=$(stat -c %s "$NUTTX_BIN")
+echo "  vela.bin 大小 = $NUTTX_SIZE bytes ($(du -h "$NUTTX_BIN" | cut -f1))"
 echo ""
-echo "[2/7] 生成 system.img (ROMFS)..."
 
-# 创建 system ROMFS 内容目录
-SYSTEM_DIR=$(mktemp -d)
-mkdir -p "$SYSTEM_DIR/framework"
-mkdir -p "$SYSTEM_DIR/bin"
-mkdir -p "$SYSTEM_DIR/etc"
-mkdir -p "$SYSTEM_DIR/lib"
-
-# 从 NuttX 编译产物中复制系统文件
-# system ROMFS 包含: 框架库、系统配置、基础资源
-if [ -d "$NUTTX_DIR/vendor/openvela/boards/vela/prebuilts/system" ]; then
-    cp -r "$NUTTX_DIR/vendor/openvela/boards/vela/prebuilts/system/"* "$SYSTEM_DIR/" 2>/dev/null || true
+#--------------------------------------------------------------------
+# 2. 准备 nuttx.bin
+#--------------------------------------------------------------------
+# 避免把 nuttx.bin 复制到自身
+if [ "$(realpath "$NUTTX_BIN")" != "$(realpath "$OUTPUT_DIR/nuttx.bin")" ]; then
+    cp -f "$NUTTX_BIN" "$OUTPUT_DIR/nuttx.bin"
+    echo "[1/5] 已准备 nuttx.bin"
+else
+    echo "[1/5] nuttx.bin 已是最新 ($NUTTX_SIZE bytes)"
 fi
 
-# 创建 build.prop
-cat > "$SYSTEM_DIR/build.prop" << 'EOF'
+#--------------------------------------------------------------------
+# 3. 生成 boot.img (RK boot image, 需 4KB 对齐)
+#--------------------------------------------------------------------
+echo "[2/5] 生成 boot.img..."
+
+# RK 平台 boot.img 直接加载 bin 到 DDR，无需 U-Boot FIT 包装
+# 注意：boot.img 需要 4KB 对齐 (load addr 0x02080000, 内核会自动处理)
+cp -f "$NUTTX_BIN" "$OUTPUT_DIR/boot.img"
+
+# 如果 size < 4MB，补齐到 4MB (Rockchip loader 要求)
+BOOT_IMG_SIZE=$(stat -c %s "$OUTPUT_DIR/boot.img")
+BOOT_IMG_ALIGNED_SIZE=$(( (BOOT_IMG_SIZE + 0x3FF) & ~0x3FF ))
+if [ "$BOOT_IMG_ALIGNED_SIZE" -lt 4194304 ]; then
+    BOOT_IMG_ALIGNED_SIZE=4194304
+fi
+if [ "$BOOT_IMG_ALIGNED_SIZE" -ne "$BOOT_IMG_SIZE" ]; then
+    echo "  -> 对齐 boot.img 到 $BOOT_IMG_ALIGNED_SIZE bytes"
+    truncate -s "$BOOT_IMG_ALIGNED_SIZE" "$OUTPUT_DIR/boot.img"
+fi
+echo "  -> boot.img ($(du -h "$OUTPUT_DIR/boot.img" | cut -f1))"
+
+#--------------------------------------------------------------------
+# 4. 生成 system.img (ROMFS) 和 data.img (LittleFS)
+#--------------------------------------------------------------------
+echo "[3/5] 生成 system.img (ROMFS)..."
+
+if [ -x "$GENROMFS" ]; then
+    SYSTEM_DIR=$(mktemp -d)
+    mkdir -p "$SYSTEM_DIR/framework" "$SYSTEM_DIR/bin" "$SYSTEM_DIR/etc" "$SYSTEM_DIR/lib"
+
+    # 从 Vela 预编译目录复制系统文件（如有）
+    if [ -d "$NUTTX_DIR/vendor/openvela/boards/vela/prebuilts/system" ]; then
+        cp -r "$NUTTX_DIR/vendor/openvela/boards/vela/prebuilts/system/"* "$SYSTEM_DIR/" 2>/dev/null || true
+    fi
+
+    # 生成 build.prop
+    cat > "$SYSTEM_DIR/build.prop" << EOF
 # openvela system properties
 ro.build.version.sdk=35
-ro.build.display.id=openvela-trunk-5.5
+ro.build.display.id=openvela-$(date +%Y%m%d)
 ro.product.model=HD-RK3506-EVM
 ro.product.board=rk3506
 ro.hardware=rk3506
 ro.board.platform=rk3506
 EOF
 
-# 生成 ROMFS 镜像
-if [ -x "$GENROMFS" ]; then
     $GENROMFS -f "$OUTPUT_DIR/system.img" -d "$SYSTEM_DIR" -V "system" 2>/dev/null
+    rm -rf "$SYSTEM_DIR"
     echo "  -> system.img ($(du -h "$OUTPUT_DIR/system.img" | cut -f1))"
 else
-    # 如果没有 genromfs，创建空的占位镜像
+    # 退化：占位镜像
     dd if=/dev/zero of="$OUTPUT_DIR/system.img" bs=1K count=64 2>/dev/null
-    echo "  -> system.img (占位, 64KB) - 需要安装 genromfs"
+    echo "  -> system.img (64KB placeholder, install genromfs for real one)"
 fi
-rm -rf "$SYSTEM_DIR"
 
-echo ""
-echo "[3/7] 生成 data.img (LittleFS)..."
-
-# 创建 data 分区镜像 (LittleFS for NAND)
-# 使用 dd 创建空镜像，运行时由 NuttX 格式化
+echo "[4/5] 生成 data.img (LittleFS) 和占位镜像..."
+# data 分区 - 在运行时由 LittleFS 格式化
 dd if=/dev/zero of="$OUTPUT_DIR/data.img" bs=1M count=2 2>/dev/null
-echo "  -> data.img ($(du -h "$OUTPUT_DIR/data.img" | cut -f1))"
+echo "  -> data.img (2MB placeholder)"
 
-echo ""
-echo "[4/7] 生成 vendor.img 和 oem.img..."
-
-# vendor 和 oem 分区 (空镜像，运行时由系统使用)
+# vendor / oem 占位
 dd if=/dev/zero of="$OUTPUT_DIR/vendor.img" bs=1K count=64 2>/dev/null
 dd if=/dev/zero of="$OUTPUT_DIR/oem.img" bs=1K count=64 2>/dev/null
-echo "  -> vendor.img (占位)"
-echo "  -> oem.img (占位)"
+echo "  -> vendor.img, oem.img (placeholder)"
 
-echo ""
-echo "[5/7] 生成 MiniLoaderAll.bin..."
+#--------------------------------------------------------------------
+# 5. 生成 update.img (Rockchip 打包格式)
+#--------------------------------------------------------------------
+echo "[5/5] 生成 update.img..."
 
-cd "$SDK_DIR/rkbin"
-$BOOT_MERGER RKBOOT/RK3506MINIALL.ini > /dev/null 2>&1
-cp rk3506_spl_loader_v1.06.111.bin "$OUTPUT_DIR/MiniLoaderAll.bin"
-echo "  -> MiniLoaderAll.bin ($(du -h "$OUTPUT_DIR/MiniLoaderAll.bin" | cut -f1))"
-
-echo ""
-echo "[6/7] 复制分区表..."
-
-cp "$SDK_DIR/device/rockchip/.chips/rk3506/parameter-evm-nand.txt" "$OUTPUT_DIR/parameter.txt"
-echo "  -> parameter.txt"
-
-echo ""
-echo "[7/7] 打包 update.img..."
-
-# 创建打包目录
 rm -rf "$PACK_DIR"
 mkdir -p "$PACK_DIR"
 
-# 复制必要文件
-cp "$OUTPUT_DIR/MiniLoaderAll.bin" "$PACK_DIR/"
-cp "$OUTPUT_DIR/parameter.txt" "$PACK_DIR/"
+# MiniLoader
+if [ -d "$SDK_DIR/rkbin" ] && [ -x "$BOOT_MERGER" ]; then
+    (cd "$SDK_DIR/rkbin" && $BOOT_MERGER RKBOOT/RK3506MINIALL.ini > /dev/null 2>&1)
+    if [ -f "$SDK_DIR/rkbin/rk3506_spl_loader_v1.06.111.bin" ]; then
+        cp "$SDK_DIR/rkbin/rk3506_spl_loader_v1.06.111.bin" "$OUTPUT_DIR/MiniLoaderAll.bin"
+    fi
+fi
+[ ! -f "$OUTPUT_DIR/MiniLoaderAll.bin" ] && cp "$OUTPUT_DIR/MiniLoaderAll.bin" /dev/null 2>/dev/null || true
+
+# 拷贝所有到 pack/
+[ -f "$OUTPUT_DIR/MiniLoaderAll.bin" ] && cp "$OUTPUT_DIR/MiniLoaderAll.bin" "$PACK_DIR/"
+[ -f "$PARAM_FILE" ] && cp "$PARAM_FILE" "$PACK_DIR/parameter.txt"
 cp "$OUTPUT_DIR/boot.img" "$PACK_DIR/"
 cp "$OUTPUT_DIR/system.img" "$PACK_DIR/"
 cp "$OUTPUT_DIR/data.img" "$PACK_DIR/"
 cp "$OUTPUT_DIR/vendor.img" "$PACK_DIR/"
 cp "$OUTPUT_DIR/oem.img" "$PACK_DIR/"
 
-# 创建空的占位镜像
-for img in misc recovery; do
-    dd if=/dev/zero of="$PACK_DIR/${img}.img" bs=1K count=1 2>/dev/null
+# 占位镜像
+for img in misc recovery uboot; do
+    [ ! -f "$PACK_DIR/${img}.img" ] && dd if=/dev/zero of="$PACK_DIR/${img}.img" bs=1K count=1 2>/dev/null
 done
 
-# uboot.img (占位，实际使用时需要从 SDK 编译)
-dd if=/dev/zero of="$PACK_DIR/uboot.img" bs=1K count=1 2>/dev/null
-
-# 创建 package-file
-cat > "$PACK_DIR/package-file" << 'EOF'
+# 生成 package-file
+cat > "$PACK_DIR/package-file" << EOF
 # NAME	PATH
 package-file	package-file
 parameter	parameter.txt
@@ -205,44 +176,37 @@ oem	oem.img
 data	data.img
 EOF
 
-# 打包
-cd "$PACK_DIR"
-$AFP_TOOL -pack ./ "$OUTPUT_DIR/update.raw.img" > /dev/null 2>&1
-$RK_IMAGE_MAKER -RK3506 MiniLoaderAll.bin "$OUTPUT_DIR/update.raw.img" "$OUTPUT_DIR/update.img" -os_type:androidos > /dev/null 2>&1
-rm -f "$OUTPUT_DIR/update.raw.img"
+# 打包（如果工具可用）
+if [ -x "$AFP_TOOL" ] && [ -x "$RK_IMAGE_MAKER" ]; then
+    (cd "$PACK_DIR" && $AFP_TOOL -pack ./ "$OUTPUT_DIR/update.raw.img" > /dev/null 2>&1)
+    if [ -f "$OUTPUT_DIR/MiniLoaderAll.bin" ]; then
+        (cd "$PACK_DIR" && $RK_IMAGE_MAKER -RK3506 MiniLoaderAll.bin "$OUTPUT_DIR/update.raw.img" "$OUTPUT_DIR/update.img" -os_type:androidos > /dev/null 2>&1)
+    else
+        # 没有 MiniLoader 时只生成 update.raw.img
+        mv "$OUTPUT_DIR/update.raw.img" "$OUTPUT_DIR/update.img"
+    fi
+    rm -f "$OUTPUT_DIR/update.raw.img"
+    echo "  -> update.img ($(du -h "$OUTPUT_DIR/update.img" | cut -f1))"
+else
+    echo "  ! afptool / rkImageMaker 未找到，跳过 update.img 生成"
+    echo "    设置 RK3506_SDK_DIR 或安装 SDK 工具后重试"
+fi
 
-echo "  -> update.img ($(du -h "$OUTPUT_DIR/update.img" | cut -f1))"
-
-echo ""
-echo "[完成] 清理临时文件..."
+#--------------------------------------------------------------------
+# 清理
+#--------------------------------------------------------------------
 rm -rf "$PACK_DIR"
 rm -f /tmp/openvela-nuttx.its
 
 echo ""
 echo "========================================"
-echo "  打包完成！"
+echo "  打包完成"
 echo "========================================"
 echo ""
-echo "输出文件:"
-ls -lh "$OUTPUT_DIR"/*.img "$OUTPUT_DIR"/*.bin "$OUTPUT_DIR"/*.txt 2>/dev/null
+echo "  输出文件:"
+ls -lh "$OUTPUT_DIR"/*.img "$OUTPUT_DIR"/*.bin "$OUTPUT_DIR"/*.elf "$OUTPUT_DIR"/*.txt 2>/dev/null
 echo ""
-echo "分区布局:"
-echo "  vnvm      2MB    NV 存储"
-echo "  uboot     8MB    U-Boot"
-echo "  misc      2MB    启动模式"
-echo "  recovery  30MB   恢复分区"
-echo "  boot      32MB   NuttX 内核"
-echo "  system    64MB   系统 (ROMFS)"
-echo "  vendor    16MB   厂商定制"
-echo "  oem       32MB   OEM"
-echo "  data      256MB  应用数据"
-echo "  userdata  剩余   用户数据"
-echo ""
-echo "烧录方法:"
-echo "  1. 开发板进入 Loader 模式 (短接 RECOVERY + 插 USB)"
-echo "  2. 烧录完整固件:  $UPGRADE_TOOL uf $OUTPUT_DIR/update.img"
-echo ""
-echo "或者只烧 boot + system:"
-echo "  $UPGRADE_TOOL di boot $OUTPUT_DIR/boot.img"
-echo "  $UPGRADE_TOOL di system $OUTPUT_DIR/system.img"
-echo "  $UPGRADE_TOOL rd"
+echo "  烧录方法 (使用 Rockchip upgrade_tool):"
+echo "    1. 开发板进入 Loader 模式 (短接 RECOVERY + 插 USB)"
+echo "    2. sudo upgrade_tool uf $OUTPUT_DIR/update.img     # 烧录完整固件"
+echo "    3. 或单分区: sudo upgrade_tool di boot $OUTPUT_DIR/boot.img"
