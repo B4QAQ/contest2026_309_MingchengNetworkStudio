@@ -1,13 +1,16 @@
 #!/bin/bash
 #
-# openvela RK3506 NAND 固件打包脚本（v2 — 重写版）
-# 关键改进：
-#   1. 路径全部使用环境变量 + 相对路径
-#   2. 默认 RK3506 SDK 路径为 ../RK3506G2/rk3506_linux6.1_sdk_v1.2.0_iot_evm
-#   3. 优先使用本仓内已有的 nand_firmware/nuttx.bin（由 build.sh POSTBUILD 生成）
-#   4. boot.img 只包含 vela.bin（紧凑，~500KB），不使用 34MB 零填充 bin
+# openvela RK3506 NAND 固件打包脚本（v3 — SDK 官方流程）
 #
-# 注意：本脚本不强制 -e，允许部分步骤失败（如 mkimage 不可用）
+# 关键改进 (round 10)：
+#   1. 使用 SDK 官方的 afptool + rkImageMaker 工具链
+#   2. 使用 SDK 官方的 rk3506-package-file（包含 bootloader/parameter/uboot/boot/rootfs...）
+#   3. 使用 SDK 官方 parameter.txt 格式（parameter-evm-nand.txt）
+#   4. rkImageMaker 必须用 -RK3506 (字母) 参数，chip tag 由 IDB 提供
+#   5. 不再使用自定义的 system/vendor/data 分区
+#
+# 烧录流程：
+#   BootROM -> MiniLoaderAll.bin (SPL) -> U-Boot FIT -> NuttX (boot.img)
 #
 set +e
 
@@ -20,23 +23,29 @@ SDK_DIR="${RK3506_SDK_DIR:-$(cd "$NUTTX_DIR/../RK3506G2/rk3506_linux6.1_sdk_v1.2
 
 OUTPUT_DIR="$SCRIPT_DIR"
 PACK_DIR="$OUTPUT_DIR/pack"
+WORK_DIR="$OUTPUT_DIR/rockdev"
 
-# 工具路径
+# SDK 工具路径
 MKIMAGE="${MKIMAGE:-$SDK_DIR/rkbin/tools/mkimage}"
 BOOT_MERGER="${BOOT_MERGER:-$SDK_DIR/rkbin/tools/boot_merger}"
 AFP_TOOL="${AFP_TOOL:-$SDK_DIR/tools/linux/Linux_Pack_Firmware/rockdev/afptool}"
 RK_IMAGE_MAKER="${RK_IMAGE_MAKER:-$SDK_DIR/tools/linux/Linux_Pack_Firmware/rockdev/rkImageMaker}"
-GENROMFS="${GENROMFS:-$(which genromfs 2>/dev/null || echo "$NUTTX_DIR/prebuilts/build-tools/linux-x86_64/bin/genromfs")}"
+LINUX_PACK_DIR="${LINUX_PACK_DIR:-$SDK_DIR/tools/linux/Linux_Pack_Firmware/rockdev}"
 
-# 参数文件（分区表）
-PARAM_FILE="${PARAM_FILE:-$NUTTX_DIR/vendor/rockchip/boards/rk3506/hd-rk3506-evm/configs/parameter.txt}"
+# 板级 parameter.txt（来自 SDK 官方）
+PARAM_FILE="${PARAM_FILE:-$SDK_DIR/device/rockchip/rk3506/parameter-evm-nand.txt}"
+if [ ! -f "$PARAM_FILE" ]; then
+    PARAM_FILE="$NUTTX_DIR/vendor/rockchip/boards/rk3506/hd-rk3506-evm/configs/parameter.txt"
+fi
 
 echo "========================================"
-echo "  openvela RK3506 NAND 固件打包"
+echo "  openvela RK3506 NAND 固件打包 (v3)"
 echo "========================================"
 echo "  NUTTX_BIN      = $NUTTX_BIN"
 echo "  SDK_DIR        = $SDK_DIR"
 echo "  PARAM_FILE     = $PARAM_FILE"
+echo "  AFP_TOOL       = $AFP_TOOL"
+echo "  RK_IMAGE_MAKER = $RK_IMAGE_MAKER"
 echo "  OUTPUT_DIR     = $OUTPUT_DIR"
 echo ""
 
@@ -49,54 +58,42 @@ if [ ! -f "$NUTTX_BIN" ]; then
     exit 1
 fi
 
+if [ ! -x "$BOOT_MERGER" ] || [ ! -x "$AFP_TOOL" ] || [ ! -x "$RK_IMAGE_MAKER" ]; then
+    echo "错误: SDK 工具不完整"
+    echo "  BOOT_MERGER     = $BOOT_MERGER"
+    echo "  AFP_TOOL        = $AFP_TOOL"
+    echo "  RK_IMAGE_MAKER  = $RK_IMAGE_MAKER"
+    exit 1
+fi
+
 NUTTX_SIZE=$(stat -c %s "$NUTTX_BIN")
-echo "  vela.bin 大小 = $NUTTX_SIZE bytes ($(du -h "$NUTTX_BIN" | cut -f1))"
+echo "  nuttx.bin 大小 = $NUTTX_SIZE bytes"
 echo ""
 
 #--------------------------------------------------------------------
 # 2. 准备 nuttx.bin
 #--------------------------------------------------------------------
-# 避免把 nuttx.bin 复制到自身
 if [ "$(realpath "$NUTTX_BIN")" != "$(realpath "$OUTPUT_DIR/nuttx.bin")" ]; then
     cp -f "$NUTTX_BIN" "$OUTPUT_DIR/nuttx.bin"
-    echo "[1/5] 已准备 nuttx.bin"
-else
-    echo "[1/5] nuttx.bin 已是最新 ($NUTTX_SIZE bytes)"
+    echo "[1/7] 已准备 nuttx.bin"
 fi
 
 #--------------------------------------------------------------------
-# 3. 生成 boot.img
+# 3. 生成 boot.img (4KB 对齐的 raw bin)
 #--------------------------------------------------------------------
-# 两种格式都生成：
-#   - boot.img:  4KB 对齐的 raw bin (MiniLoader 直接加载使用)
-#   - boot.uimg: mkimage 包装的 uImage (U-Boot bootm 加载使用)
-#
-# 加载流程：
-#   1. BootROM -> MiniLoaderAll.bin (SPL, 280KB)
-#   2. MiniLoader -> 读 uboot 分区 -> 加载 U-Boot (813KB FIT)
-#   3. U-Boot   -> 读 boot 分区 -> 加载 kernel
-#      - 优先 boot_fit (FIT 格式, 需要 DTB)
-#      - 备选 bootm 0x... boot.uimg (uImage 格式)
-#      - 备选 go 0x02080000 (raw bin, 需要停 U-Boot 在 prompt)
-#
-echo "[2/5] 生成 boot.img..."
-
-# 3a. 复制 raw bin
+echo "[2/7] 生成 boot.img..."
 cp -f "$NUTTX_BIN" "$OUTPUT_DIR/boot.img"
-
-# 3b. 如果 size < 4MB，补齐到 4MB (Rockchip loader 要求)
 BOOT_IMG_SIZE=$(stat -c %s "$OUTPUT_DIR/boot.img")
 BOOT_IMG_ALIGNED_SIZE=$(( (BOOT_IMG_SIZE + 0x3FF) & ~0x3FF ))
 if [ "$BOOT_IMG_ALIGNED_SIZE" -lt 4194304 ]; then
     BOOT_IMG_ALIGNED_SIZE=4194304
 fi
 if [ "$BOOT_IMG_ALIGNED_SIZE" -ne "$BOOT_IMG_SIZE" ]; then
-    echo "  -> 对齐 boot.img 到 $BOOT_IMG_ALIGNED_SIZE bytes"
     truncate -s "$BOOT_IMG_ALIGNED_SIZE" "$OUTPUT_DIR/boot.img"
 fi
-echo "  -> boot.img ($(du -h "$OUTPUT_DIR/boot.img" | cut -f1), raw bin for SPL/Loader)"
+echo "  -> boot.img $(stat -c %s "$OUTPUT_DIR/boot.img") bytes"
 
-# 3c. 同时生成 uImage（如果 mkimage 可用）
+# 同时生成 uImage (U-Boot bootm 用)
 if [ -x "$MKIMAGE" ]; then
     $MKIMAGE -A arm -O linux -T kernel -C none \
         -a 0x02080000 -e 0x02080560 \
@@ -104,147 +101,118 @@ if [ -x "$MKIMAGE" ]; then
         -d "$NUTTX_BIN" \
         "$OUTPUT_DIR/boot.uimg" 2>/dev/null
     if [ -f "$OUTPUT_DIR/boot.uimg" ]; then
-        # 4KB 对齐
         UIMG_SIZE=$(stat -c %s "$OUTPUT_DIR/boot.uimg")
         UIMG_ALIGNED=$(( (UIMG_SIZE + 0x3FF) & ~0x3FF ))
         [ "$UIMG_ALIGNED" -lt 4194304 ] && UIMG_ALIGNED=4194304
         [ "$UIMG_ALIGNED" -ne "$UIMG_SIZE" ] && truncate -s "$UIMG_ALIGNED" "$OUTPUT_DIR/boot.uimg"
-        echo "  -> boot.uimg ($(du -h "$OUTPUT_DIR/boot.uimg" | cut -f1), U-Boot bootm 用)"
+        echo "  -> boot.uimg $(stat -c %s "$OUTPUT_DIR/boot.uimg") bytes"
     fi
-else
-    echo "  ! mkimage 不可用, 跳过 boot.uimg 生成"
+fi
+
+#--------------------------------------------------------------------
+# 4. 生成 MiniLoaderAll.bin
+#--------------------------------------------------------------------
+echo "[3/7] 生成 MiniLoaderAll.bin..."
+(cd "$SDK_DIR/rkbin" && $BOOT_MERGER RKBOOT/RK3506MINIALL.ini > /dev/null 2>&1)
+if [ -f "$SDK_DIR/rkbin/rk3506_spl_loader_v1.06.111.bin" ]; then
+    cp -f "$SDK_DIR/rkbin/rk3506_spl_loader_v1.06.111.bin" "$OUTPUT_DIR/MiniLoaderAll.bin"
+    echo "  -> MiniLoaderAll.bin $(stat -c %s "$OUTPUT_DIR/MiniLoaderAll.bin") bytes"
 fi
 
 #--------------------------------------------------------------------
-# 4. 生成 system.img (ROMFS) 和 data.img (LittleFS)
+# 5. 准备 U-Boot FIT 镜像
 #--------------------------------------------------------------------
-echo "[3/5] 生成 system.img (ROMFS)..."
-
-if [ -x "$GENROMFS" ]; then
-    SYSTEM_DIR=$(mktemp -d)
-    mkdir -p "$SYSTEM_DIR/framework" "$SYSTEM_DIR/bin" "$SYSTEM_DIR/etc" "$SYSTEM_DIR/lib"
-
-    # 从 Vela 预编译目录复制系统文件（如有）
-    if [ -d "$NUTTX_DIR/vendor/openvela/boards/vela/prebuilts/system" ]; then
-        cp -r "$NUTTX_DIR/vendor/openvela/boards/vela/prebuilts/system/"* "$SYSTEM_DIR/" 2>/dev/null || true
-    fi
-
-    # 生成 build.prop
-    cat > "$SYSTEM_DIR/build.prop" << EOF
-# openvela system properties
-ro.build.version.sdk=35
-ro.build.display.id=openvela-$(date +%Y%m%d)
-ro.product.model=HD-RK3506-EVM
-ro.product.board=rk3506
-ro.hardware=rk3506
-ro.board.platform=rk3506
-EOF
-
-    $GENROMFS -f "$OUTPUT_DIR/system.img" -d "$SYSTEM_DIR" -V "system" 2>/dev/null
-    rm -rf "$SYSTEM_DIR"
-    echo "  -> system.img ($(du -h "$OUTPUT_DIR/system.img" | cut -f1))"
-else
-    # 退化：占位镜像
-    dd if=/dev/zero of="$OUTPUT_DIR/system.img" bs=1K count=64 2>/dev/null
-    echo "  -> system.img (64KB placeholder, install genromfs for real one)"
-fi
-
-echo "[4/5] 生成 data.img (LittleFS) 和占位镜像..."
-# data 分区 - 在运行时由 LittleFS 格式化
-dd if=/dev/zero of="$OUTPUT_DIR/data.img" bs=1M count=2 2>/dev/null
-echo "  -> data.img (2MB placeholder)"
-
-# vendor / oem 占位
-dd if=/dev/zero of="$OUTPUT_DIR/vendor.img" bs=1K count=64 2>/dev/null
-dd if=/dev/zero of="$OUTPUT_DIR/oem.img" bs=1K count=64 2>/dev/null
-echo "  -> vendor.img, oem.img (placeholder)"
-
-#--------------------------------------------------------------------
-# 5. 生成 update.img (Rockchip 打包格式)
-#--------------------------------------------------------------------
-echo "[5/5] 生成 update.img..."
-
-rm -rf "$PACK_DIR"
-mkdir -p "$PACK_DIR"
-
-# MiniLoader
-if [ -d "$SDK_DIR/rkbin" ] && [ -x "$BOOT_MERGER" ]; then
-    (cd "$SDK_DIR/rkbin" && $BOOT_MERGER RKBOOT/RK3506MINIALL.ini > /dev/null 2>&1)
-    if [ -f "$SDK_DIR/rkbin/rk3506_spl_loader_v1.06.111.bin" ]; then
-        cp "$SDK_DIR/rkbin/rk3506_spl_loader_v1.06.111.bin" "$OUTPUT_DIR/MiniLoaderAll.bin"
-    fi
-fi
-[ ! -f "$OUTPUT_DIR/MiniLoaderAll.bin" ] && cp "$OUTPUT_DIR/MiniLoaderAll.bin" /dev/null 2>/dev/null || true
-
-# 拷贝所有到 pack/
-[ -f "$OUTPUT_DIR/MiniLoaderAll.bin" ] && cp "$OUTPUT_DIR/MiniLoaderAll.bin" "$PACK_DIR/"
-[ -f "$PARAM_FILE" ] && cp "$PARAM_FILE" "$PACK_DIR/parameter.txt"
-cp "$OUTPUT_DIR/boot.img" "$PACK_DIR/"
-[ -f "$OUTPUT_DIR/boot.uimg" ] && cp "$OUTPUT_DIR/boot.uimg" "$PACK_DIR/"
-cp "$OUTPUT_DIR/system.img" "$PACK_DIR/"
-cp "$OUTPUT_DIR/data.img" "$PACK_DIR/"
-cp "$OUTPUT_DIR/vendor.img" "$PACK_DIR/"
-cp "$OUTPUT_DIR/oem.img" "$PACK_DIR/"
-
-# 占位镜像（仅当 SDK 路径未提供 uboot/misc/recovery 真实镜像时）
-for img in misc recovery; do
-    [ ! -f "$PACK_DIR/${img}.img" ] && dd if=/dev/zero of="$PACK_DIR/${img}.img" bs=1K count=1 2>/dev/null
-done
-
-# 拷贝 SDK 提供的 u-boot FIT 镜像（如有）
+echo "[4/7] 准备 U-Boot..."
 UBOOT_SRC_CANDIDATES=(
     "$SDK_DIR/u-boot/fit/uboot.itb"
     "$SDK_DIR/u-boot/u-boot.itb"
-    "$SDK_DIR/rtos/bsp/rockchip/rk3308-32/Image/uboot.img"
 )
+UBOOT_SRC=""
 for ub in "${UBOOT_SRC_CANDIDATES[@]}"; do
     if [ -f "$ub" ]; then
-        cp "$ub" "$PACK_DIR/uboot.img"
-        cp "$ub" "$OUTPUT_DIR/uboot.img"  # 也保留一份在 output
-        echo "  -> uboot.img (from $ub, $(du -h "$ub" | cut -f1))"
+        UBOOT_SRC="$ub"
         break
     fi
 done
-[ ! -f "$PACK_DIR/uboot.img" ] && dd if=/dev/zero of="$PACK_DIR/uboot.img" bs=1K count=1 2>/dev/null \
-    && echo "  ! WARNING: no U-Boot found, using 1KB stub"
-
-# 生成 package-file
-cat > "$PACK_DIR/package-file" << EOF
-# NAME	PATH
-package-file	package-file
-parameter	parameter.txt
-bootloader	MiniLoaderAll.bin
-uboot	uboot.img
-misc	misc.img
-boot	boot.img
-recovery	recovery.img
-system	system.img
-vendor	vendor.img
-oem	oem.img
-data	data.img
-EOF
-
-# 打包（如果工具可用）
-if [ -x "$AFP_TOOL" ] && [ -x "$RK_IMAGE_MAKER" ]; then
-    (cd "$PACK_DIR" && $AFP_TOOL -pack ./ "$OUTPUT_DIR/update.raw.img" > /dev/null 2>&1)
-    if [ -f "$OUTPUT_DIR/MiniLoaderAll.bin" ]; then
-        (cd "$PACK_DIR" && $RK_IMAGE_MAKER -RK3506 MiniLoaderAll.bin "$OUTPUT_DIR/update.raw.img" "$OUTPUT_DIR/update.img" -os_type:androidos > /dev/null 2>&1)
-    else
-        # 没有 MiniLoader 时只生成 update.raw.img
-        mv "$OUTPUT_DIR/update.raw.img" "$OUTPUT_DIR/update.img"
-    fi
-    rm -f "$OUTPUT_DIR/update.raw.img"
-    echo "  -> update.img ($(du -h "$OUTPUT_DIR/update.img" | cut -f1))"
-else
-    echo "  ! afptool / rkImageMaker 未找到，跳过 update.img 生成"
-    echo "    设置 RK3506_SDK_DIR 或安装 SDK 工具后重试"
+if [ -z "$UBOOT_SRC" ]; then
+    echo "错误: 找不到 U-Boot FIT 镜像"
+    echo "尝试路径:"
+    for ub in "${UBOOT_SRC_CANDIDATES[@]}"; do
+        echo "  $ub"
+    done
+    exit 1
 fi
+cp -f "$UBOOT_SRC" "$OUTPUT_DIR/uboot.img"
+echo "  -> uboot.img $(stat -c %s "$OUTPUT_DIR/uboot.img") bytes (from $UBOOT_SRC)"
+
+#--------------------------------------------------------------------
+# 6. 准备 rockdev/Image/ 目录
+#--------------------------------------------------------------------
+echo "[5/7] 准备 rockdev 目录..."
+rm -rf "$WORK_DIR"
+mkdir -p "$WORK_DIR/Image"
+
+# 拷贝 SDK package-file（如果存在），否则用我们简化的版本
+if [ -f "$LINUX_PACK_DIR/rk3506-package-file" ]; then
+    cp -f "$LINUX_PACK_DIR/rk3506-package-file" "$WORK_DIR/package-file"
+    echo "  使用 SDK 官方 rk3506-package-file"
+else
+    cat > "$WORK_DIR/package-file" << EOF
+# NAME		Relative path
+package-file	package-file
+bootloader	Image/MiniLoaderAll.bin
+parameter	Image/parameter.txt
+uboot       Image/uboot.img
+boot        Image/boot.img
+rootfs      Image/rootfs.img
+recovery	Image/recovery.img
+oem			Image/oem.img
+userdata    Image/userdata.img
+misc		Image/misc.img
+backup		RESERVED
+EOF
+    echo "  使用内置 rk3506-package-file"
+fi
+
+# 拷贝所有镜像
+cp -f "$OUTPUT_DIR/MiniLoaderAll.bin" "$WORK_DIR/Image/"
+cp -f "$PARAM_FILE" "$WORK_DIR/Image/parameter.txt"
+cp -f "$OUTPUT_DIR/uboot.img" "$WORK_DIR/Image/"
+cp -f "$OUTPUT_DIR/boot.img" "$WORK_DIR/Image/"
+
+# 占位镜像
+for img in rootfs recovery oem userdata misc; do
+    if [ ! -f "$WORK_DIR/Image/${img}.img" ]; then
+        dd if=/dev/zero of="$WORK_DIR/Image/${img}.img" bs=1K count=8 2>/dev/null
+    fi
+done
+
+echo "  rockdev/Image/ 准备完成:"
+ls -la "$WORK_DIR/Image/"
+
+#--------------------------------------------------------------------
+# 7. 打包 update.img (使用 SDK 官方 afptool + rkImageMaker)
+#--------------------------------------------------------------------
+echo "[6/7] 打包 update.img (afptool)..."
+(cd "$WORK_DIR" && $AFP_TOOL -pack ./ Image/update.img > /dev/null 2>&1)
+if [ ! -f "$WORK_DIR/Image/update.img" ]; then
+    echo "错误: afptool 打包失败"
+    exit 1
+fi
+echo "  -> Image/update.img $(stat -c %s "$WORK_DIR/Image/update.img") bytes"
+
+echo "[7/7] 打包 update.img (rkImageMaker)..."
+$RK_IMAGE_MAKER -RK3506 "$WORK_DIR/Image/MiniLoaderAll.bin" "$WORK_DIR/Image/update.img" "$OUTPUT_DIR/update.img" -os_type:androidos 2>&1 | head -5
+if [ ! -f "$OUTPUT_DIR/update.img" ]; then
+    echo "错误: rkImageMaker 失败"
+    exit 1
+fi
+echo "  -> update.img $(stat -c %s "$OUTPUT_DIR/update.img") bytes"
 
 #--------------------------------------------------------------------
 # 清理
 #--------------------------------------------------------------------
-rm -rf "$PACK_DIR"
-rm -f /tmp/openvela-nuttx.its
+rm -rf "$WORK_DIR" "$PACK_DIR"
 
 echo ""
 echo "========================================"
@@ -252,7 +220,7 @@ echo "  打包完成"
 echo "========================================"
 echo ""
 echo "  输出文件:"
-ls -lh "$OUTPUT_DIR"/*.img "$OUTPUT_DIR"/*.bin "$OUTPUT_DIR"/*.elf "$OUTPUT_DIR"/*.txt 2>/dev/null
+ls -lh "$OUTPUT_DIR"/update.img "$OUTPUT_DIR"/MiniLoaderAll.bin "$OUTPUT_DIR"/uboot.img "$OUTPUT_DIR"/boot.img "$OUTPUT_DIR"/parameter.txt 2>/dev/null
 echo ""
 echo "  烧录方法 (使用 Rockchip upgrade_tool):"
 echo "    1. 开发板进入 Loader 模式 (短接 RECOVERY + 插 USB)"

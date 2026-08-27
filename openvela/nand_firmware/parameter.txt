@@ -1,26 +1,7 @@
-# Rockchip RK3506 NAND 分区表 (openvela)
-#
-# 单位: 块 (1 block = 1 sector = 512 bytes)
-# Flash layout: 从 0x800 (sector 4) 开始
-#
-# 分区       起始        大小          用途
-# vnvm      0x00000800  0x00001000  2MB    NV 存储 (MAC 地址等)
-# uboot     0x00001800  0x00004000  8MB    U-Boot 引导加载器
-# misc      0x00005800  0x00001000  2MB    启动模式控制
-# recovery  0x00006800  0x0000F000  30MB   恢复分区 (预留)
-# boot      0x00015800  0x00005000  10MB   NuttX 内核 (FIT 镜像)
-# system    0x0001A800  0x00010000  32MB   系统分区 (ROMFS)
-# vendor    0x0002A800  0x00004000  8MB    厂商定制
-# oem       0x0002E800  0x00004000  8MB    OEM 分区
-# data      0x00032800  0x00050000  256MB  应用数据 (LittleFS)
-# userdata  0x00082800  -            剩余   用户数据 (grow)
-#
-# 注意: boot 分区 10MB 足够容纳 vela.bin (实际 ~500KB+ FIT 头)
-#
-FIRMWARE_VER:2.0
+FIRMWARE_VER:8.1
 MACHINE_MODEL:RK3506
 MACHINE_ID:007
-MANUFACTURER: openvela
+MANUFACTURER: RK3506
 MAGIC: 0x5041524B
 ATAG: 0x00200800
 MACHINE: 3506
@@ -28,5 +9,5 @@ CHECK_MASK: 0x80
 PWR_HLD: 0,0,A,0,1
 TYPE: GPT
 GROW_ALIGN: 0
-CMDLINE:mtdparts=:0x00001000@0x00000800(vnvm),0x00004000@0x00001800(uboot),0x00001000@0x00005800(misc),0x0000F000@0x00006800(recovery),0x00005000@0x00015800(boot),0x00010000@0x0001A800(system),0x00004000@0x0002A800(vendor),0x00004000@0x0002E800(oem),0x00050000@0x00032800(data),-@0x00082800(userdata:grow)
+CMDLINE:mtdparts=:0x00001000@0x00000800(vnvm),0x00004000@0x00001800(uboot),0x00001000@0x00005800(misc),0x0000f000@0x00006800(recovery),0x00005000@0x00015800(boot),0x00050000@0x0001a800(rootfs),0x00008000@0x0006a800(oem),-@0x00072800(userdata:grow)
 uuid:rootfs=614e0000-0000-4b53-8000-1d28000054a9
