@@ -1,246 +1,239 @@
-# HD-RK3506-EVM 启动流程与进入 NSH 指南
+# HD-RK3506-EVM U-Boot 启动操作指南（修正版）
 
-> **当前状态**：固件已烧录成功，MiniLoader + U-Boot 已运行，但 NuttX 还没自动启动。
-> **原因**：U-Boot 的 `boot_fit` 和 `boot_android` 命令都需要特定格式（FIT 或 Android boot.img），而我们的 `boot.img` 是原始 nuttx.bin。
-> **解决**：在 U-Boot 提示符下手工执行加载和启动命令。
-
----
-
-## 1. 串口连接
-
-| 接线 | 说明 |
-|------|------|
-| USB-TTL GND | → HD-RK3506-EVM GND |
-| USB-TTL TX  | → HD-RK3506-EVM DEBUG RX |
-| USB-TTL RX  | → HD-RK3506-EVM DEBUG TX |
-| 串口参数 | 115200 8N1，无流控 |
-
-工具：minicom / picocom / PuTTY / MobaXterm
-
-```bash
-# Linux 推荐用 picocom
-sudo picocom -b 115200 /dev/ttyUSB0
-
-# 或 minicom
-sudo minicom -D /dev/ttyUSB0 -b 115200
-```
+> **重要发现**：板子用的是 **SPI NAND**（不是 eMMC/SD），所以 `mmc 0:5` 会失败。
+> 您的 U-Boot log 也确认了：`boot mode: None`（mmc 检测失败后没找到其他 boot device）。
+> U-Boot 字符串里 `rksfc`、`spinand`、`mtd` 都有，但默认 `bootcmd` 只试 `boot_fit;boot_android ${devtype} ${devnum}`。
+> 我们需要手动操作。
 
 ---
 
-## 2. 上电后看到的现象
+## 1. 重新进入 U-Boot 提示符
 
-上电后，串口会依次输出：
-
-```
-# 阶段 1: BootROM (无输出)
-# 阶段 2: MiniLoader (SPL)
-DDR Version V1.06 ...
-DDR4
-... (DDR 初始化)
-
-# 阶段 3: U-Boot
-U-Boot 2018.09 ... (Build time...)
-Hit any key to stop autoboot: 2   <-- 2 秒内按任意键
-
-=>
-```
-
-**3 秒后**，U-Boot 会尝试自动启动：
-```
-## Error: FIT image not found or invalid    <-- boot_fit 失败 (我们的 boot.img 不是 FIT)
-## Error: android boot failed                <-- boot_android 失败 (不是 Android 格式)
-=>
-```
-
-进入 U-Boot 命令提示符 `=>`。
+按 `Ctrl+C` 或在 3 秒倒计时内按任意键。
 
 ---
 
-## 3. 在 U-Boot 提示符下手动启动 NuttX
+## 2. 探索存储设备
 
-### 3.1 加载 boot.img 到内存
-
-我们的 NuttX 内核起始地址是 `0x02080000`（在 defconfig 中 `CONFIG_RAM_START=0x02080000`）。
-`boot.img` 是原始的 nuttx.bin，4KB 对齐。
+在 U-Boot 提示符下输入：
 
 ```bash
-# 查看 boot 分区在哪
-=> mmc list
-# 输出类似: mmc@fe330000: 0 (eMMC)  或  mmc@fe310000: 0 (SD)
-
-# 查看 boot 分区布局
-=> part list mmc 0
-# 输出类似:
-# Partition Map for MMC device 0  --   Partition Type: EFI
-# Part    Start LBA     End LBA        Name
-#   1     0x00000800    0x000017ff    "vnvm"
-#   2     0x00001800    0x000057ff    "uboot"
-#   3     0x00005800    0x000067ff    "misc"
-#   4     0x00006800    0x000157ff    "recovery"
-#   5     0x00015800    0x0001a7ff    "boot"     <-- 我们的 kernel 在这里
-#   6     0x0001a800    0x0006a7ff    "rootfs"
-#   7     0x0006a800    0x000727ff    "oem"
-#   8     0x00072800    ...            "userdata"
-
-# 用 ext4load (假设 boot 分区是 ext4 格式) 或 fatload 加载 boot.img
-=> ext4load mmc 0:5 0x02080000 /boot.img
-# 或
-=> load mmc 0:5 0x02080000 boot.img
+=> help
+# 看一下有没有 rksfc, mtd, nand 相关命令
 ```
 
-### 3.2 启动 NuttX
-
-加载完后用 `go` 命令跳到入口点（`0x02080560`，从 ELF Entry point 读取）：
+### 2.1 试 SPI NAND
 
 ```bash
-# go 命令 - 直接跳转到地址，不解析任何格式
+# 初始化 SPI NAND
+=> rksfc dev 0
+# 扫描
+=> rksfc scan
+# 列出找到的设备
+```
+
+### 2.2 试 mtdparts
+
+```bash
+=> mtdparts
+# 应该会显示 NAND 分区表 (来自 SPL 传给 U-Boot)
+# 类似:
+# device 0: 10000000.nand (NOR/NAND), 128MB
+# - 0x00000000-0x00100000 : "vnvm"
+# - 0x00100000-0x00500000 : "uboot"
+# - ...
+# - 0x01580000-0x01a80000 : "boot"      <-- 我们的 kernel 在这里
+# - ...
+```
+
+### 2.3 试 nand 命令
+
+```bash
+=> nand info
+# 显示 NAND 设备信息
+=> nand read 0x02080000 boot 0x50000
+# 从 boot 分区读 0x50000 字节到内存 0x02080000
+```
+
+---
+
+## 3. 加载 boot.img 到内存 0x02080000
+
+### 方案 A：用 mtdparts (推荐)
+
+```bash
+# 列出 mtd 分区
+=> mtdparts
+# 用 mtd 读 boot 分区
+=> mtd read 0x02080000 boot
+# 或指定大小
+=> mtd read 0x02080000 boot 0x400000
+```
+
+### 方案 B：用 nand 命令
+
+```bash
+# 直接读 NAND 的 boot 分区
+=> nand read 0x02080000 boot
+# 或指定起始地址
+=> nand read 0x02080000 0x1580000 0x50000
+# (0x1580000 = boot 分区起始, 0x50000 = 大小)
+```
+
+### 方案 C：用 rksfc (如果 SPI NOR)
+
+```bash
+=> rksfc dev 0
+=> rksfc read 0x02080000 boot
+```
+
+---
+
+## 4. 跳转到 NuttX
+
+加载完成后，验证内存内容并跳转：
+
+```bash
+# 查看内存前几行（应该是 reset vector 0xe59ff018）
+=> md 0x02080000 10
+
+# 跳转到入口点 (从 nuttx.elf 的 Entry point 读出来 = 0x02080560)
 => go 0x02080560
 ```
 
-或用 `bootm` 启动 uImage（如果有）：
-
-```bash
-# 如果用 mkimage 包装过的 boot.uimg
-=> ext4load mmc 0:5 0x02080000 /boot.uimg
-=> bootm 0x02080000
-```
-
 ---
 
-## 4. 看到 NSH 提示符
+## 5. 如果上面的命令不工作，试试这些
 
-启动成功后，串口会输出：
-
-```
-NuttX (with NuttX RTOS)
-nsh> help
-nsh>
-```
-
-常见的 nsh 命令：
-```bash
-nsh> help         # 帮助
-nsh> uname -a     # 系统信息
-nsh> free         # 内存
-nsh> ps           # 进程
-nsh> mount        # 文件系统
-nsh> ls /dev/     # 设备列表
-nsh> ls /         # 根目录
-```
-
----
-
-## 5. 让 U-Boot 记住手动启动命令
-
-如果每次都要手动加载太麻烦，可以设置 bootcmd：
+### 5.1 初始化 SPI NAND
 
 ```bash
-# 设置自动 bootcmd
-=> setenv bootcmd 'ext4load mmc 0:5 0x02080000 /boot.img; go 0x02080560'
+# 看看 rksfc 命令
+=> rksfc
+
+# 试 sf (SPI Flash)
+=> sf probe 0
+
+# 试 mtd
+=> mtd list
+```
+
+### 5.2 看 U-Boot 帮助
+
+```bash
+=> ?
+# 列出所有命令
+# 找 storage / load 相关
+```
+
+### 5.3 设置 devtype 然后重新试
+
+```bash
+# 强制设置 devtype 为 mtd
+=> setenv devtype mtd
+=> setenv devnum 0
 => saveenv
-# 之后每次上电会自动执行
+=> reset
 ```
 
-如果板子有 `bootcmd` 默认行为，也可以用 `env` 命令查看：
+---
+
+## 6. 让 U-Boot 自动启动 NuttX
+
+一旦找到正确的加载命令，可以设置为 bootcmd：
+
 ```bash
+=> setenv bootcmd 'mtd read 0x02080000 boot 0x400000; go 0x02080560'
+=> saveenv
+# 下次上电会自动执行
+```
+
+---
+
+## 7. 完全诊断流程
+
+如果完全卡住，按这个流程来：
+
+```bash
+# 1. 看 U-Boot 版本和功能
+=> version
+=> help
+
+# 2. 看环境变量
 => env print
+# 重点看:
+#   - bootcmd
+#   - devtype, devnum
+#   - mtdparts
+#   - partitions
+
+# 3. 试所有存储设备
+=> mmc list
+=> rksfc dev 0 && rksfc info
+=> nand info
+=> sf probe 0
+
+# 4. 找到设备后列出分区
+=> mtdparts
+=> part list mtd 0
+=> part list spinand 0
+
+# 5. 读 kernel
+# (用上面找到的命令)
 ```
 
 ---
 
-## 6. 常见问题
+## 8. 关键问题列表
 
-### 6.1 U-Boot 看不到任何东西
+### Q: 为什么 mmc 0 失败？
+A: 板子用的是 SPI NAND，不是 eMMC/SD。`mmc 0` 是 SD 卡接口，板子没插卡。
 
-- 串口线接错（TX/RX 反了）
-- 波特率不对
-- USB-TTL 没共地
+### Q: 那 boot.img 怎么读？
+A: 用 `mtd read` 或 `nand read` 从 SPI NAND 读。NAND 已经在烧录时写入了。
 
-### 6.2 U-Boot 报 "boot_fit" 错误
+### Q: 怎么知道 boot 分区的偏移？
+A: 看 `parameter.txt`：
+- `uboot` 分区：起始 0x1800 块（1 块 = 512 字节）= 0xC0000
+- `boot` 分区：起始 0x15800 块 = 0xAC0000，大小 0x5000 块 = 0x280000
 
-正常。我们的 `boot.img` 是 raw bin，不是 FIT 格式。
-按任意键停在 U-Boot 提示符，手动加载即可。
+但这个偏移是按 512 字节扇区算的，不是字节地址。
 
-### 6.3 U-Boot 报 "android boot failed"
-
-正常。我们的 `boot.img` 没有 Android 2KB header。
-
-### 6.4 加载后启动黑屏
-
-- 检查 NSH 串口是否有输出（连接正确）
-- 检查 `rk3506_lowputc.c` 时钟是否 24 MHz
-- 检查 defconfig 中 `CONFIG_RAM_START=0x02080000` 和 `CONFIG_INIT_ENTRYPOINT="nsh_main"`
-
-### 6.5 想看到内核启动 log
-
-```bash
-# 在 defconfig 中启用
-CONFIG_DEBUG_FULLOPT=y
-CONFIG_DEBUG_ERROR=y
-CONFIG_DEBUG_WARN=y
-CONFIG_DEBUG_INFO=y
-# 然后重新编译
-```
-
-### 6.6 boot.img 加载后挂死
-
-- 检查 `0x02080560` 是不是正确的入口（看 `arm-none-eabi-readelf -h nuttx`）
-- 检查内存是否够用（我们的 defconfig 用 128MB）
-- 用示波器/逻辑分析仪看 UART0 TX pin（PA0）有无波形
+### Q: 怎么用地址读 NAND？
+A: 优先用分区名（`boot`），不要用绝对地址。`mtd read 0x02080000 boot` 这样。
 
 ---
 
-## 7. 进一步修改 U-Boot bootcmd
+## 9. 期望的最终操作
 
-要让 U-Boot 自动启动 NuttX，最简单的办法是改 U-Boot 配置。
-
-`/home/b4qaq/project/RK3506G2/rk3506_linux6.1_sdk_v1.2.0_iot_evm/u-boot/include/configs/evb_rk3506.h`:
-
-```c
-#undef CONFIG_BOOTCOMMAND
-#define CONFIG_BOOTCOMMAND \
-    "load mmc 0:5 0x02080000 boot.img;" \
-    "go 0x02080560"
-```
-
-然后重新编译 U-Boot：
 ```bash
-cd /home/b4qaq/project/RK3506G2/rk3506_linux6.1_sdk_v1.2.0_iot_evm/u-boot
-make rk3506_defconfig
-make -j$(nproc)
-# 生成的 u-boot.itb 复制到 nand_firmware/uboot.img
+=> mtdparts
+# 应该看到 boot 分区
+=> mtd read 0x02080000 boot
+# 读取 boot 分区
+=> go 0x02080560
+# 跳转到 NuttX 入口
+# 应该看到 NSH 提示符
 ```
+
+如果 `mtd read` 不工作，告诉我 `mtdparts` 的输出，我帮您调整。
 
 ---
 
-## 8. 不进入 NSH 时的快速诊断
+## 10. 附：parameter.txt 中的分区偏移
 
-1. **U-Boot 是否正常？** - 看到 `=>` 提示符就说明 OK
-2. **boot.img 能否加载？** - 用 `ext4load` 或 `load` 命令，看是否有错误
-3. **内存中是否正确？** - 用 `md 0x02080000 10` 看内存
-4. **入口地址对吗？** - 用 `arm-none-eabi-readelf -h nuttx.elf` 查看 Entry
-5. **go 命令是否成功？** - 应该立即看到 NuttX 启动 log
-
-如果 `go 0x02080560` 之后无任何输出，可能原因：
-- 入口地址错误（应该用 ELF 入口 = 0x02080560）
-- 内存访问失败
-- 内核二进制损坏（重新烧 boot.img）
-
----
-
-## 9. 当前可用的镜像
-
-```bash
-ls -la /home/b4qaq/project/openvela/nand_firmware/
-# MiniLoaderAll.bin  (280KB) - SPL
-# uboot.img          (813KB) - U-Boot FIT
-# boot.img           (4MB)   - NuttX 内核 raw bin
-# boot.uimg          (4MB)   - NuttX 内核 uImage
-# update.img         (5.6MB) - 完整烧录包
+```
+vnvm:      0x00000800 - 0x000017FF  (1MB)
+uboot:     0x00001800 - 0x000057FF  (8MB)
+misc:      0x00005800 - 0x000067FF  (2MB)
+recovery:  0x00006800 - 0x000157FF  (30MB)
+boot:      0x00015800 - 0x0001A7FF  (10MB)  <-- NuttX kernel here
+rootfs:    0x0001A800 - 0x0006A7FF  (80MB)
+oem:       0x0006A800 - 0x000727FF  (2MB)
+userdata:  0x00072800 - END          (remaining)
 ```
 
-如果 boot.img 不工作，可以尝试 boot.uimg：
-```bash
-=> load mmc 0:5 0x02080000 boot.uimg
-=> bootm 0x02080000
-```
+注意：这是 LBA 地址 (扇区号，每个扇区 512 字节)：
+- boot 起始 LBA: 0x15800
+- boot 起始字节: 0x15800 * 512 = 0xAC0000
+- boot 大小: 0x5000 块 = 0x280000 字节 = 2.5MB
