@@ -93,7 +93,7 @@ if [ "$BOOT_IMG_ALIGNED_SIZE" -ne "$BOOT_IMG_SIZE" ]; then
 fi
 echo "  -> boot.img $(stat -c %s "$OUTPUT_DIR/boot.img") bytes"
 
-# 同时生成 uImage (U-Boot bootm 用)
+# 同时生成 uImage (U-Boot bootm 用, 备选)
 if [ -x "$MKIMAGE" ]; then
     $MKIMAGE -A arm -O linux -T kernel -C none \
         -a 0x02080000 -e 0x02080560 \
@@ -108,6 +108,79 @@ if [ -x "$MKIMAGE" ]; then
         echo "  -> boot.uimg $(stat -c %s "$OUTPUT_DIR/boot.uimg") bytes"
     fi
 fi
+
+#--------------------------------------------------------------------
+# 3b. 生成 FIT 镜像 boot.fit (默认 bootcmd "boot_fit" 自动引导用)
+#
+# 关键: Rockchip U-Boot 默认 bootcmd = "boot_fit;boot_android ..."
+#   boot_fit 从 boot 分区开头读 FDT, 要求:
+#     1) FDT magic 0xd00dfeed
+#     2) FDT 结构 < 4KB (fit_is_ext_type)
+#     3) kernel 数据用 external data 形式追加在 FDT 之后 (mkimage -E)
+#   满足后 boot_fit 自动加载 kernel 到 load 地址并跳到 entry.
+#
+#   用真实地址 load=0x02080000 / entry=0x02080560 (非 0xffffff01 占位符),
+#   U-Boot 不重定位; entry bit0=0 -> bootm 走 ARM 模式跳转
+#   (绕开 `go` 命令 entry|1 强制 Thumb 的问题).
+#
+#   mkimage -E 需要 dtc. 从 openvela 的 allwinner 工具链里找.
+#--------------------------------------------------------------------
+echo "[3b] 生成 FIT 镜像 boot.fit..."
+DTC_BIN="$(command -v dtc 2>/dev/null)"
+if [ -z "$DTC_BIN" ]; then
+    for cand in \
+        "$NUTTX_DIR/vendor/allwinnertech/lichee/brandy-2.0/u-boot-2018/scripts/dtc/dtc" \
+        "$SDK_DIR/u-boot/scripts/dtc/dtc"; do
+        [ -x "$cand" ] && DTC_BIN="$cand" && break
+    done
+fi
+if [ -n "$DTC_BIN" ]; then
+    export PATH="$(dirname "$DTC_BIN"):$PATH"
+fi
+
+ITS_FILE="$OUTPUT_DIR/nuttx.its"
+if [ -x "$MKIMAGE" ] && [ -n "$DTC_BIN" ]; then
+    cat > "$ITS_FILE" << 'ITS_EOF'
+/dts-v1/;
+/ {
+	description = "OpenVela NuttX kernel for RK3506G2";
+	#address-cells = <1>;
+	images {
+		kernel {
+			description = "NuttX/OpenVela";
+			data = /incbin/("./nuttx.bin");
+			type = "kernel";
+			arch = "arm";
+			os = "linux";
+			compression = "none";
+			load = <0x02080000>;
+			entry = <0x02080560>;
+			hash { algo = "sha256"; };
+		};
+	};
+	configurations {
+		default = "conf";
+		conf { description = "OpenVela kernel"; kernel = "kernel"; };
+	};
+};
+ITS_EOF
+    ( cd "$OUTPUT_DIR" && "$MKIMAGE" -f nuttx.its -E -p 0x1000 boot.fit > /dev/null 2>&1 )
+    if [ -f "$OUTPUT_DIR/boot.fit" ]; then
+        FIT_SIZE=$(stat -c %s "$OUTPUT_DIR/boot.fit")
+        # boot 分区是 10MB, 镜像填充到 4MB (和 boot.img 一致)
+        FIT_ALIGNED=$(( (FIT_SIZE + 0x3FF) & ~0x3FF ))
+        [ "$FIT_ALIGNED" -lt 4194304 ] && FIT_ALIGNED=4194304
+        [ "$FIT_ALIGNED" -ne "$FIT_SIZE" ] && truncate -s "$FIT_ALIGNED" "$OUTPUT_DIR/boot.fit"
+        echo "  -> boot.fit $(stat -c %s "$OUTPUT_DIR/boot.fit") bytes (FIT external data, boot_fit 可自动引导)"
+        # 让独立的 boot.img 也是 FIT, 这样单分区烧录 (di boot boot.img) 也能自动引导
+        cp -f "$OUTPUT_DIR/boot.fit" "$OUTPUT_DIR/boot.img"
+    else
+        echo "  警告: boot.fit 生成失败 (检查 dtc/mkimage)"
+    fi
+else
+    echo "  警告: 未找到 mkimage 或 dtc, 跳过 FIT 镜像"
+fi
+
 
 #--------------------------------------------------------------------
 # 4. 生成 MiniLoaderAll.bin
@@ -179,17 +252,19 @@ cp -f "$OUTPUT_DIR/MiniLoaderAll.bin" "$WORK_DIR/Image/"
 cp -f "$PARAM_FILE" "$WORK_DIR/Image/parameter.txt"
 cp -f "$OUTPUT_DIR/uboot.img" "$WORK_DIR/Image/"
 
-# 使用 boot.uimg (U-Boot bootm 可识别的 uImage 格式) 作为 boot 分区内容
-# 因为 U-Boot 的 `go` 命令会强制 Thumb 模式 (entry | 1), 而 NuttX 的入口
-# 0x02080560 是 ARM 代码, 会被错误地按 Thumb 解码导致 "undefined instruction"
-# 解决方法: 用 `bootm` 命令加载 uImage, bootm 会根据 uImage header 正确调用入口
-if [ -f "$OUTPUT_DIR/boot.uimg" ]; then
+# boot 分区内容: 优先用 boot.fit (FIT external-data 镜像)
+#   -> U-Boot 默认 bootcmd 的 boot_fit 能直接识别并自动引导 NuttX
+#      (FDT magic 0xd00dfeed + FDT<4KB + external data), 上电自动进 NSH.
+# 回退: boot.uimg (legacy uImage, 需手动 bootm) 或 boot.img (raw bin, 需手动 go).
+if [ -f "$OUTPUT_DIR/boot.fit" ]; then
+    cp -f "$OUTPUT_DIR/boot.fit" "$WORK_DIR/Image/boot.img"
+    echo "  -> boot 分区使用 boot.fit (FIT, boot_fit 可自动引导)"
+elif [ -f "$OUTPUT_DIR/boot.uimg" ]; then
     cp -f "$OUTPUT_DIR/boot.uimg" "$WORK_DIR/Image/boot.img"
-    echo "  -> 使用 boot.uimg (uImage 格式, 可用 bootm 加载)"
+    echo "  -> boot 分区使用 boot.uimg (uImage, 需 bootm)"
 else
-    # 回退: 如果没有 boot.uimg, 使用 boot.img
     cp -f "$OUTPUT_DIR/boot.img" "$WORK_DIR/Image/"
-    echo "  -> 使用 boot.img (raw bin, 需用 go 命令加载)"
+    echo "  -> boot 分区使用 boot.img (raw bin, 需 go)"
 fi
 
 # 占位镜像
