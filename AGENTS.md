@@ -99,7 +99,7 @@
 | `nand_firmware/pack_nand.sh` 重写 | ✅ **必需保留** | env-var 化 + 引入预编译 U-Boot |
 | `nand_firmware/uboot.img` (预编译 813KB) | ✅ **必需** | MiniLoader 链式加载的 U-Boot FIT |
 | `nand_firmware/boot.uimg` (uImage 格式) | ✅ **必需** | U-Boot bootm 加载的 kernel 镜像 |
-| `rk3506_i2c.c` (v2) | ✅ **重写完成** | 基于 Linux i2c-rk3x.c，编译 0 警告，待硬件测试 |
+| `rk3506_i2c.c` (v2) | ✅ **重写完成 + 修复** | 基于 Linux i2c-rk3x.c，clock divider 公式从 `(pclk/8/scl)-1` 修正为 `DIV_ROUND_UP(pclk, 8*scl) - 2` |
 | `rk3506_lowputc.c` | ✅ **已修复** | UART 时钟从 1.8432 MHz 修正为 24 MHz |
 | `rk3506_serial.c` | ✅ **已修复** | UART_SCLK 从 1.8432 MHz 修正为 24 MHz |
 | `hd_rk3506_bringup.c` | ✅ **已重写** | 不再因单个驱动失败中断后续初始化；添加 I2C 控制器初始化 |
