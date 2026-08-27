@@ -1,134 +1,102 @@
-# HD-RK3506-EVM U-Boot 启动操作指南（最终版）
+# HD-RK3506-EVM U-Boot 启动操作指南（修正 v3）
 
-> **关键发现**：`mtd list` 只显示一个 128MB 的 spi-nand0 设备，**没有看到分区**。
-> 这是因为 U-Boot 通过 GPT 找分区，但需要主动查询。
-> 或者直接用 mtd read 读指定偏移。
+> **重大发现！** 我之前算错了 boot 分区的字节偏移！
+> - 错误：`0x15800 * 512 = 0xAC0000`（错）
+> - 正确：`0x15800 * 512 = 0x2B00000`（对）
+> 
+> 因为 `0x15800 = 88064 decimal`，`88064 * 512 = 0x2B00000`。
+> 所以您读的是空数据（0xff），没读到 NuttX kernel！
 
 ---
 
-## 1. 直接读 boot 分区
-
-`boot` 分区在 NAND 上的位置（按 `parameter.txt`）：
-- 起始 LBA: `0x15800`（每 LBA = 512 字节）
-- 起始字节: `0x15800 * 0x200 = 0xAC0000`
-- 大小（字节）: `0x5000 * 0x200 = 0x280000`（2.5MB）
-- 大小（块）: 20 blocks（每块 128KB）
-
-**block size 0x20000 = 128KB**，起始 `0xAC0000` 已经是 block 对齐的。
-
-### 命令
+## 1. 立即尝试：正确的偏移
 
 ```bash
-=> mtd read spi-nand0 0x02080000 0xAC0000 0x280000
-```
-
-然后跳转：
-
-```bash
+=> mtd read spi-nand0 0x02080000 0x2B00000 0x280000
 => go 0x02080560
 ```
 
 ---
 
-## 2. 如果上面的命令不工作
+## 2. 如果还是不行
 
-### 2.1 试简化版
-
-```bash
-# 读最小 256KB（足够启动 NuttX）
-=> mtd read spi-nand0 0x02080000 0xAC0000 0x40000
-```
-
-### 2.2 看 part 命令
+### 2.1 看内存
 
 ```bash
-=> part list spi-nand0
+=> mtd read spi-nand0 0x02080000 0x2B00000 0x280000
+=> md 0x02080000 20
 ```
 
-可能会列出 GPT 分区。
+如果显示 `e59ff018 02080560 02080240 ...`（reset vector），说明加载成功。
+如果显示全 `ff`，说明这个位置还是空数据。
 
-### 2.3 用 mtd_blk
+### 2.2 试别的偏移
 
-```bash
-# mtd_blk 把 MTD 设备映射成块设备
-=> mtd_blk dev 0
-=> part list mtd 0
-```
-
-### 2.4 完整读取整个 boot 区域（不到 1MB 但保险）
-
-```bash
-=> mtd read spi-nand0 0x02080000 0xAC0000 0x200000  # 读 2MB
-=> md 0x02080000 10  # 验证内存内容
-```
-
-如果 `md` 显示前几行是 `e59ff018`（reset vector），说明加载成功。
+如果 `0x2B00000` 还是空，**boot.img 可能在别的位置**。但根据 parameter.txt 这应该是对的。
 
 ---
 
-## 3. 跳转到 NuttX
+## 3. 串口自动进 NSH
+
+要让 U-Boot 自动启动 NuttX，设置 bootcmd：
 
 ```bash
-=> go 0x02080560
-```
-
-预期看到：
-```
-NuttX (with NuttX RTOS)
-nsh>
-```
-
-如果看不到 `nsh>` 但不报 "undefined instruction"，可能 NSH 还没初始化好（等了 1-2 秒）。
-
----
-
-## 4. 让 U-Boot 自动启动
-
-成功后：
-
-```bash
-=> setenv bootcmd 'mtd read spi-nand0 0x02080000 0xAC0000 0x280000; go 0x02080560'
+=> setenv bootcmd 'mtd read spi-nand0 0x02080000 0x2B00000 0x280000; go 0x02080560'
 => saveenv
 ```
 
-下次上电会自动启动 NuttX。
+下次上电就自动启动。**不需要每次手动输入。**
 
 ---
 
-## 5. 关键提示
+## 4. 烧录方式
 
-- **`spi-nand0` 是 U-Boot 给这块 NAND 的设备名**
-- `mtd read` 的参数是：`<设备名> <目标内存地址> <NAND偏移字节> <大小字节>`
-- `go` 的参数是入口点地址 `0x02080560`（从 ELF 头读取）
-- 必须先 `mtd read` 再 `go`，否则 `go` 跳到没初始化的内存会乱跑
-
----
-
-## 6. 命令速查
+**用 update.img 一把全烧**（推荐）：
 
 ```bash
-=> mtd list                        # MTD 设备列表
-=> mtd read spi-nand0 ADDR OFFSET SIZE  # 读 NAND
-=> md ADDR LEN                     # 显示内存
-=> go ADDR                         # 跳转
-=> setenv bootcmd '...'            # 设置启动命令
-=> saveenv                         # 保存环境
-=> printenv                        # 看所有环境变量
+sudo upgrade_tool uf nand_firmware/update.img
 ```
+
+这会把所有分区（MiniLoader + U-Boot + boot.img + 各种占位）一起烧写。
+
+或者单分区烧：
+
+```bash
+# 只烧 boot 分区（最常用，比如改了 kernel）
+sudo upgrade_tool di boot nand_firmware/boot.img
+
+# 烧 MiniLoader（如果 loader 损坏了才用）
+sudo upgrade_tool ul nand_firmware/MiniLoaderAll.bin
+
+# 烧 U-Boot
+sudo upgrade_tool di uboot nand_firmware/uboot.img
+```
+
+`update.img` 是最安全的，因为会自动写 GPT + 所有分区。单分区烧只在你知道要更新什么的时候用。
 
 ---
 
-## 7. 期望的命令序列
+## 5. 完整启动流程
+
+1. 上电
+2. BootROM → MiniLoader（280KB）
+3. MiniLoader → U-Boot（813KB）
+4. U-Boot 读 `mtd read spi-nand0 0x02080000 0x2B00000 0x280000`
+5. U-Boot 跳转 `go 0x02080560`
+6. NuttX 启动 → NSH 提示符
+
+---
+
+## 6. 期望的命令序列
 
 ```bash
-=> mtd read spi-nand0 0x02080000 0xAC0000 0x280000
-Reading 2621440 bytes from spi-nand0 at 0xAC0000...
-... (read OK)
+=> setenv bootcmd 'mtd read spi-nand0 0x02080000 0x2B00000 0x280000; go 0x02080560'
+=> saveenv
+=> reset
 
-=> go 0x02080560
-## Starting application at 0x02080560 ...
-NuttX ...
-nsh>
+# 之后每次上电:
+# U-Boot bootcmd 自动执行
+# 看到 NSH 提示符
 ```
 
-把每一步的输出贴给我。
+**先把 `md 0x02080000 20` 的输出贴给我**，确认数据是否正确加载。
