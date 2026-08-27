@@ -200,6 +200,7 @@ UBOOT_SRC_CANDIDATES=(
 for ub in "${UBOOT_SRC_CANDIDATES[@]}"; do
     if [ -f "$ub" ]; then
         cp "$ub" "$PACK_DIR/uboot.img"
+        cp "$ub" "$OUTPUT_DIR/uboot.img"  # 也保留一份在 output
         echo "  -> uboot.img (from $ub, $(du -h "$ub" | cut -f1))"
         break
     fi
