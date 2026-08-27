@@ -96,7 +96,9 @@
 | `nuttx/arch/arm/Kconfig` 增加 `ARCH_CHIP_RK3506` | ✅ **必需保留** | 之前 AI 修改 |
 | `vendor/rockchip/boards/rk3506/hd-rk3506-evm/CMakeLists.txt` 重写 | ✅ **必需保留** | 修复了 34MB 零填充 bug |
 | `vendor/rockchip/boards/rk3506/hd-rk3506-evm/configs/parameter.txt` 重写 | ✅ **必需保留** | boot 分区调为 10MB |
-| `nand_firmware/pack_nand.sh` 重写 | ✅ **必需保留** | env-var 化 |
+| `nand_firmware/pack_nand.sh` 重写 | ✅ **必需保留** | env-var 化 + 引入预编译 U-Boot |
+| `nand_firmware/uboot.img` (预编译 813KB) | ✅ **必需** | MiniLoader 链式加载的 U-Boot FIT |
+| `nand_firmware/boot.uimg` (uImage 格式) | ✅ **必需** | U-Boot bootm 加载的 kernel 镜像 |
 | `rk3506_i2c.c` (v2) | ✅ **重写完成** | 基于 Linux i2c-rk3x.c，编译 0 警告，待硬件测试 |
 | `rk3506_lowputc.c` | ✅ **已修复** | UART 时钟从 1.8432 MHz 修正为 24 MHz |
 | `rk3506_serial.c` | ✅ **已修复** | UART_SCLK 从 1.8432 MHz 修正为 24 MHz |
