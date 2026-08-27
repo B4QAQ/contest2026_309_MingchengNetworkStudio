@@ -96,7 +96,8 @@
 | `nuttx/arch/arm/Kconfig` 增加 `ARCH_CHIP_RK3506` | ✅ **必需保留** | 之前 AI 修改 |
 | `vendor/rockchip/boards/rk3506/hd-rk3506-evm/CMakeLists.txt` 重写 | ✅ **必需保留** | 修复了 34MB 零填充 bug |
 | `vendor/rockchip/boards/rk3506/hd-rk3506-evm/configs/parameter.txt` 重写 | ✅ **必需保留** | boot 分区调为 10MB；v3 改用 SDK 官方 parameter-evm-nand.txt |
-| `nand_firmware/pack_nand.sh` 重写 | ✅ **必需保留 (v3.1)** | v3.1: rkImageMaker 必须用 `-RK350F` 不是 `-RK3506`, 否则 chip code 0x33303536 与 IDB 的 0x33303546 冲突 |
+| `nand_firmware/pack_nand.sh` 重写 | ✅ **必需保留 (v4)** | v4: boot 分区打成 **FIT external-data 镜像** (`mkimage -E`, FDT<4KB + magic d00dfeed), U-Boot 默认 `boot_fit` 可自动引导 NuttX，上电零交互进 NSH；rkImageMaker 用 `-RK350F` |
+| `nand_firmware/nuttx.its` + `boot.fit` | ✅ **必需** | FIT 源/产物：kernel `load=0x02080000 entry=0x02080560`（真实地址，bit0=0 → v7-A ARM 模式）；boot.fit 同时覆盖 boot.img |
 | `nand_firmware/uboot.img` (预编译 813KB) | ✅ **必需** | MiniLoader 链式加载的 U-Boot FIT |
 | `nand_firmware/boot.uimg` (uImage 格式) | ✅ **必需** | U-Boot bootm 加载的 kernel 镜像 |
 | `rk3506_i2c.c` (v2) | ✅ **重写完成 + 修复** | 基于 Linux i2c-rk3x.c，clock divider 公式从 `(pclk/8/scl)-1` 修正为 `DIV_ROUND_UP(pclk, 8*scl) - 2` |
