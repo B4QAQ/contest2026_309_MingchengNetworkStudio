@@ -202,7 +202,12 @@ fi
 echo "  -> Image/update.img $(stat -c %s "$WORK_DIR/Image/update.img") bytes"
 
 echo "[7/7] 打包 update.img (rkImageMaker)..."
-$RK_IMAGE_MAKER -RK3506 "$WORK_DIR/Image/MiniLoaderAll.bin" "$WORK_DIR/Image/update.img" "$OUTPUT_DIR/update.img" -os_type:androidos 2>&1 | head -5
+
+# NOTE: 必须用 -RK350F (不是 -RK3506!), 因为 chip tag 由 MiniLoaderAll.bin
+# 的 IDB 决定. boot_merger RKBOOT/RK3506MINIALL.ini 的 [CHIP_NAME] NAME=RK350F,
+# 所以 IDB 里的 chip code 是 0x33303546 (350F). 用 -RK3506 写出来的 image 是
+# 0x33303536 (3506), 与 IDB 不一致, 烧录时会出现 "芯片标志位不对".
+$RK_IMAGE_MAKER -RK350F "$WORK_DIR/Image/MiniLoaderAll.bin" "$WORK_DIR/Image/update.img" "$OUTPUT_DIR/update.img" -os_type:androidos 2>&1 | head -5
 if [ ! -f "$OUTPUT_DIR/update.img" ]; then
     echo "错误: rkImageMaker 失败"
     exit 1
