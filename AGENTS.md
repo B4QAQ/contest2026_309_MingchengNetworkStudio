@@ -1,0 +1,192 @@
+# AGENTS.md — OpenVela RK3506G2 移植项目
+
+> **面向 AI 代理的协作规范**。本文件定义在本项目工作时必须遵守的规则。
+> 配合 `docs/zh-cn/skills/openvela-fast-chip-porting/SKILL.md` 使用。
+
+---
+
+## 1. 项目背景
+
+- **目标平台**：Rockchip RK3506G2 (3×Cortex-A7 + 1×Cortex-M0, 128MB DDR3)
+- **开发板**：HD-RK3506-EVM (480x854 ST7701S RGB LCD, GT911 触摸)
+- **仓库结构**：本仓库是 openvela 的"比赛"模板（`app/` `board/` `quickapp/` 为空），主代码在 `openvela/` 子目录（git submodule 形式）。
+
+---
+
+## 2. 工作目录约定
+
+| 目录 | 用途 | 注意事项 |
+|------|------|----------|
+| `/home/b4qaq/project/` | 仓库根目录 | 比赛模板，不要乱改 |
+| `/home/b4qaq/project/openvela/` | 主代码（openvela 仓库） | 实际修改这里 |
+| `/home/b4qaq/project/RK3506G2/` | 厂商 SDK（参考用） | 不修改 |
+| `/home/b4qaq/project/openvela/cmake_out/` | 构建输出 | 可以 `rm -rf` |
+| `/home/b4qaq/project/openvela/nand_firmware/` | 烧录用镜像 | 提交 `parameter.txt` 和 `pack_nand.sh` |
+
+---
+
+## 3. 关键规则（必读）
+
+### 3.1 构建相关
+
+1. **必须使用 `build.sh`，不要直接 cmake**。它会自动设置 PATH、ccache、lunch 流程。
+2. **必须设置 `CCACHE_DIR=/tmp/ccache_dir`**。默认 `~/.cache/ccache` 不可写。
+3. **必须把 prebuilt 工具加到 PATH**：
+   ```bash
+   PATH="$PWD/prebuilts/build-tools/linux-x86_64/bin:$PWD/prebuilts/gcc/linux-x86_64/arm-none-eabi/bin:$PATH"
+   ```
+4. **完整命令模板**：
+   ```bash
+   cd /home/b4qaq/project/openvela
+   rm -rf cmake_out/hd-rk3506-evm_nsh
+   CCACHE_DIR=/tmp/ccache_dir \
+   PATH="$(pwd)/prebuilts/build-tools/linux-x86_64/bin:$(pwd)/prebuilts/gcc/linux-x86_64/arm-none-eabi/bin:$PATH" \
+   ./build.sh vendor/rockchip/boards/rk3506/hd-rk3506-evm/configs/nsh/ --cmake -j$(nproc)
+   ```
+
+### 3.2 defconfig 修改
+
+1. **不要手动编辑 defconfig 超过必要范围**。改动流程：
+   - `cd` 到 defconfig 目录
+   - `make menuconfig`（用 prebuilt 的 kconfig-mconf）
+   - 选好后退出（保存到 `.config`）
+   - `make savedefconfig`（重新生成 defconfig）
+2. **必须保留的项**：
+   - `CONFIG_RAW_BINARY=y`
+   - `CONFIG_INIT_ENTRYPOINT="nsh_main"`
+   - `CONFIG_ARCH_CHIP_CUSTOM=y`
+   - `CONFIG_RAM_START=0x02080000`
+   - `CONFIG_RAM_SIZE=134217728`（128MB）
+
+### 3.3 路径处理
+
+1. **禁止硬编码绝对路径**。用相对路径或 `${NUTTX_BOARD_ABS_DIR}/../..` 风格。
+2. **`NUTTX_TOP_DIR` 不存在**，要用 `get_filename_component(${NUTTX_BOARD_ABS_DIR}/../../../.. ABSOLUTE)`。
+3. **`find_program(... NO_DEFAULT_PATH)`** 找交叉工具链，否则会找到系统的 gcc。
+4. **pack_nand.sh 必须用环境变量**（`RK3506_SDK_DIR`, `NUTTX_BIN`, `PARAM_FILE`），不硬编码。
+
+### 3.4 驱动开发
+
+1. **不要碰 `arch/`、`nuttx/boards/` 下的通用代码**（除非必要）。只改 `vendor/rockchip/` 下的内容。
+2. **所有 RK3506 驱动在** `vendor/rockchip/chips/rk3506/<chip>_<driver>.c`。
+3. **所有板级代码在** `vendor/rockchip/boards/rk3506/hd-rk3506-evm/src/<board>_<file>.c`。
+4. **新驱动必须满足**：
+   - 有 `Kconfig` 选项
+   - 在 `Make.defs` 和 `CMakeLists.txt` 中注册
+   - 寄存器操作封装为 `putreg32` / `getreg32`（除非 NuttX 已提供）
+   - 错误路径用 `ierr()`/`iinfo()`/`iwarn()` 三个日志级别
+
+### 3.5 提交前检查
+
+每次改完代码，**必须**：
+
+1. `rm -rf cmake_out/hd-rk3506-evm_nsh`（彻底清空）
+2. 用 3.1 的命令重新构建
+3. 验证产物：
+   - `cmake_out/hd-rk3506-evm_nsh/vela.bin` < 1MB
+   - `nand_firmware/update.img` 存在且 < 10MB
+4. 跑 `bash nand_firmware/pack_nand.sh` 看是否成功
+
+---
+
+## 4. 已知限制 / 待修复
+
+| 项目 | 状态 | 备注 |
+|------|------|------|
+| `nuttx/arch/arm/Kconfig` 增加 `ARCH_CHIP_RK3506` | ✅ **必需保留** | 之前 AI 修改 |
+| `vendor/rockchip/boards/rk3506/hd-rk3506-evm/CMakeLists.txt` 重写 | ✅ **必需保留** | 修复了 34MB 零填充 bug |
+| `vendor/rockchip/boards/rk3506/hd-rk3506-evm/configs/parameter.txt` 重写 | ✅ **必需保留** | boot 分区调为 10MB |
+| `nand_firmware/pack_nand.sh` 重写 | ✅ **必需保留** | env-var 化 |
+| `rk3506_i2c.c` (v2) | ✅ **重写完成** | 基于 Linux i2c-rk3x.c，编译 0 警告，待硬件测试 |
+| `rk3506_lowputc.c` | ✅ **已修复** | UART 时钟从 1.8432 MHz 修正为 24 MHz |
+| `rk3506_serial.c` | ✅ **已修复** | UART_SCLK 从 1.8432 MHz 修正为 24 MHz |
+| `hd_rk3506_bringup.c` | ✅ **已重写** | 不再因单个驱动失败中断后续初始化；添加 I2C 控制器初始化 |
+| `rk3506_vop.c` | ⚠️ **可能有 bug** | 等待硬件测试 |
+| `rk3506_usbhost.c` | ⚠️ **可能有 bug** | 8000+ 行复杂驱动 |
+| `hd_rk3506_gt911.c` | ⚠️ **可能有 bug** | 2000+ 行 |
+| `hd_rk3506_st7701s.c` | ⚠️ **可能有 bug** | 1300+ 行 |
+| `{etc/init.d}` 空目录（残留） | ❌ **已删除** | 上一个 AI 笔误 |
+
+**`vendor/rockchip/boards/rk3506/hd-rk3506-evm/src/{etc/` 目录** ❌ 这是上一个 AI 用错误的 `cp` 命令创建的（文件名有 `{` 和 `}`），目录是空的，已删除。
+
+---
+
+## 5. 关键文件速查
+
+| 任务 | 看这里 |
+|------|--------|
+| 修改 NSH 配置 | `vendor/rockchip/boards/rk3506/hd-rk3506-evm/configs/nsh/defconfig` |
+| 修改 U-Boot/Loader 流程 | `nand_firmware/parameter.txt` + `nand_firmware/pack_nand.sh` |
+| 修改 boot 流程 | `nuttx/arch/arm/src/armv7-a/arm_head.S`（慎改） |
+| 修改中断 | `vendor/rockchip/chips/rk3506/rk3506_irq.c` |
+| 添加外设 | `vendor/rockchip/boards/rk3506/hd-rk3506-evm/src/hd_rk3506_appinit.c` |
+| 修改 Kconfig | `nuttx/arch/arm/Kconfig`（顶层）+ `vendor/rockchip/chips/rk3506/Kconfig`（芯片） |
+| 改链接脚本 | `vendor/rockchip/boards/rk3506/hd-rk3506-evm/scripts/ld.script` |
+
+---
+
+## 6. 测试矩阵
+
+| 测试 | 命令 | 通过标准 |
+|------|------|----------|
+| 干净编译 | 见 3.1 | 退出码 0，无 warning |
+| 启动 NSH | 烧录后重启 | `nsh>` 提示符 |
+| 内存检测 | `nsh> free` | 显示 128MB |
+| 文件系统 | `nsh> mount` | 至少 `/etc` 挂载 |
+| 进程列表 | `nsh> ps` | 至少 NSH 进程 |
+| LCD 显示 | `nsh> lvgl_homepage` | 屏幕显示 UI（需 menuconfig 启用） |
+| USB 设备 | 插 U 盘 | `/dev/sda` 出现 |
+
+---
+
+## 7. 提交规范
+
+1. **每次提交前**：跑 3.5 的检查清单。
+2. **提交信息格式**：
+   ```
+   <scope>: <summary>
+
+   <详细说明>
+   - 修改了哪些文件
+   - 为什么这样改
+   - 验证方法
+   ```
+3. **scope** 用 `chip`/`board`/`build`/`pack`/`doc`/`fix`/`test` 等。
+4. **避免大改**：每次 commit 只做一件事。重构和功能分开。
+
+---
+
+## 8. 紧急情况
+
+### 8.1 烧录失败 / 板子变砖
+
+- 短接 RECOVERY 后插入 USB，进入 Loader 模式
+- 用 `upgrade_tool lf` 看 Loader 是否识别
+- 用 `upgrade_tool uf update.img` 全量刷
+- 如果 Loader 都没了，从 `nand_firmware/MiniLoaderAll.bin` 重新烧
+
+### 8.2 编译过但启动黑屏
+
+1. 串口是否正常？（换 USB-TTL 适配器）
+2. 波特率？115200 8N1
+3. 时钟配置对吗？看 `rk3506_lowputc.c` 的 baud rate 设置
+4. `CONFIG_DEBUG_FULLOPT=y` 重新编译看 log
+
+### 8.3 ccache 总是 Permission denied
+
+```bash
+# 清空 ccache 缓存
+rm -rf /tmp/ccache_dir
+# 重新构建
+CCACHE_DIR=/tmp/ccache_dir ./build.sh ...
+```
+
+---
+
+## 9. 更多信息
+
+- 详细移植步骤：`docs/zh-cn/skills/openvela-fast-chip-porting/SKILL.md`
+- 官方文档：`docs/zh-cn/chip_porting/porting_guide.md`
+- 比赛规则：仓库根目录的 `README.md`
+- 比赛代码提交：`docs/zh-cn/contest_2026/code_submission_guide.md`
+- AI 协作日志：`docs/zh-cn/contest_2026/ai_coding_log_guide.md`
