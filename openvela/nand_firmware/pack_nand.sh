@@ -178,7 +178,19 @@ fi
 cp -f "$OUTPUT_DIR/MiniLoaderAll.bin" "$WORK_DIR/Image/"
 cp -f "$PARAM_FILE" "$WORK_DIR/Image/parameter.txt"
 cp -f "$OUTPUT_DIR/uboot.img" "$WORK_DIR/Image/"
-cp -f "$OUTPUT_DIR/boot.img" "$WORK_DIR/Image/"
+
+# 使用 boot.uimg (U-Boot bootm 可识别的 uImage 格式) 作为 boot 分区内容
+# 因为 U-Boot 的 `go` 命令会强制 Thumb 模式 (entry | 1), 而 NuttX 的入口
+# 0x02080560 是 ARM 代码, 会被错误地按 Thumb 解码导致 "undefined instruction"
+# 解决方法: 用 `bootm` 命令加载 uImage, bootm 会根据 uImage header 正确调用入口
+if [ -f "$OUTPUT_DIR/boot.uimg" ]; then
+    cp -f "$OUTPUT_DIR/boot.uimg" "$WORK_DIR/Image/boot.img"
+    echo "  -> 使用 boot.uimg (uImage 格式, 可用 bootm 加载)"
+else
+    # 回退: 如果没有 boot.uimg, 使用 boot.img
+    cp -f "$OUTPUT_DIR/boot.img" "$WORK_DIR/Image/"
+    echo "  -> 使用 boot.img (raw bin, 需用 go 命令加载)"
+fi
 
 # 占位镜像
 for img in rootfs recovery oem userdata misc; do
