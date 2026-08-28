@@ -75,6 +75,21 @@
    - 在 `Make.defs` 和 `CMakeLists.txt` 中注册
    - 寄存器操作封装为 `putreg32` / `getreg32`（除非 NuttX 已提供）
    - 错误路径用 `ierr()`/`iinfo()`/`iwarn()` 三个日志级别
+5. **参考代码优先级（强制）**：写任何 RK3506 外设驱动时，必须**只**以下列两处为事实基准，**不得凭芯片手册记忆或猜测寄存器/时序**：
+   - **Linux SDK**：`/home/b4qaq/project/RK3506G2/rk3506_linux6.1_sdk_v1.2.0_iot_evm/`
+     - 寄存器位域/基址：`hal/lib/CMSIS/Device/RK3506/Include/rk3506.h`
+     - HAL 驱动序列：`hal/lib/hal/src/<periph>.c`
+     - 时钟门控/mux/复位：`kernel-6.1/drivers/clk/rockchip/clk-rk3506.c`
+     - 引脚复用：`u-boot/arch/arm/dts/rk3506-pinctrl.dtsi` + `u-boot/drivers/pinctrl/rockchip/pinctrl-rk3506.c`
+     - 外设/板级：`u-boot/arch/arm/dts/rk3506*.dtsi`
+   - **已适配 A7 的 R258 移植**：`openvela/vendor/allwinnertech/chips/r528/`
+     - NuttX 侧驱动组织结构、`spi_ops`/MTD/bringup 的接法、HAL→NuttX 的封装套路（`drv/`、`drivers/rtos-hal/hal/`）。
+   - 寄存器地址/位/时序一律以 **Linux SDK** 为准；NuttX 集成方式（如何挂 `spi_ops`、`mtd_dev_s`、`netdev`、`audio` 等）优先照 **R258**。
+6. **遇到“两处都没有参考代码”的点，必须停下来询问用户是否继续**，不要自行发明实现。典型场景：
+   - Linux SDK 与 R258 都没覆盖某寄存器/时序/PHY 校准/DLL/延迟线调优；
+   - 需要在 NuttX 里自研一个 R258 没有对应物的上层框架（如 spi-mem/spi-nand MTD 桥）；
+   - SDK 只有 DMA/中断路径而要改轮询、或要做未经验证的时序简化。
+   - 询问时给出：(a) 卡在哪一步、(b) SDK/R258 各有什么、(c) 我打算怎么实现及风险。
 
 ### 3.5 提交前检查
 
