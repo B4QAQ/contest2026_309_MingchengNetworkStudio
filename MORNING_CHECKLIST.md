@@ -11,8 +11,8 @@
 
 | 文件 | 大小 | 说明 |
 |------|------|------|
-| `openvela/nand_firmware/update.img` | 9,785,898 B (md5 9378f69fd46b83b4daa7e5e10e29ffa5) | **全量刷机包 v7** (v6 A/B U-Boot + USB 修复 + /data 偏移更正) |
-| `openvela/cmake_out/hd-rk3506-evm_nsh/vela.bin` | 2,803,612 B | NuttX 固件 (含 /dev/ota + USB host 修复) |
+| `openvela/nand_firmware/update.img` | 9,785,898 B (md5 b2945eaccbd8c3653a3a05b20f8c2270) | **全量刷机包 v8** (v7 + /data littlefs + U盘 FAT/LFN + rpmsgtest 超时修复) |
+| `openvela/cmake_out/hd-rk3506-evm_nsh/vela.bin` | 2,869,148 B | NuttX 固件 (含 /dev/ota + USB host 修复 + littlefs/FAT) |
 | `openvela/nand_firmware/boot.fit` | 4,194,304 B | 单槽 FIT 镜像 (ota update 用它) |
 | `openvela/nand_firmware/parameter.txt` | — | v5 A/B 分区表 |
 
@@ -22,13 +22,16 @@
   - `341927d` board: OTA NSH 命令 + A/B 分区表 + bootcheck 开机钩子
   - `fb92df9` fix(chip): USB host 根因修复 — conn/drvr 接口重叠 + 切换 OTG1 + INNO PHY 上电 (v7)
   - `215a262` fix(board): /data userdata 起始扇区修正 0x14800→0x10800 (v7)
+  - `7db9a88` board: /data 切换 dhara+littlefs, 修复 mount failed:25 (v8)
+  - `8c745bd` board: defconfig 开 FAT/LFN, 补齐 U 盘挂载配置缺口 (v8)
+  - `cb40931` board: rpmsgtest 阻塞读改 poll+超时, 端点改名避开 NS 冲突 (v8)
 - 主仓 dev-ai-contest-2026:
   - `5d6f269` pack: A/B 双分区 OTA 打包 (v5) + OTA 固件二进制
   - `ca08796` chore: gitignore .mcu_build
 
 ⚠️ **分区布局变了 (v5)**, 与旧镜像不兼容, 必须 `upgrade_tool uf update.img` 全量刷, 不能只刷 boot。
 ⚠️ **v7 的 /data 起始扇区更正为 0x10800** (boot_b 结束处, 33MiB; v6 误写 0x14800)。
-旧 /data 数据丢失, 首启 rcS 会自动 mksmartfs, 无需手动干预。
+旧 /data 数据丢失, 首启 rcS 会自动格式化 (v8: littlefs -o autoformat), 无需手动干预。
 
 ---
 
@@ -41,7 +44,7 @@
 | misc | 11MB | 2MB | BCB(偏移0) + **AvbABData(偏移2048)** 槽位元数据 |
 | boot_a | 13MB | 10MB | NuttX FIT — 槽 A |
 | boot_b | 23MB | 10MB | NuttX FIT — 槽 B |
-| userdata | 33MB | 223MB | /data (dhara+SmartFS)。**v7 更正: 起始 0x10800 扇区 = 33MiB (boot_b 结束处); v6 误写 0x14800=41MiB 留了 8MiB 空洞** |
+| userdata | 33MB | 223MB | /data (dhara+littlefs, v8 改; v7 误配 SmartFS)。**v7 更正: 起始 0x10800 扇区 = 33MiB (boot_b 结束处); v6 误写 0x14800=41MiB 留了 8MiB 空洞** |
 
 recovery/system/vendor/oem/data 已删除 (无 Android 恢复流程, 不需要)。
 
@@ -186,7 +189,7 @@ gt911 节点。product ID 读 -110 ETIMEDOUT 忽略即可; 接上面板后仍失
   格式化造成的破坏"治愈"了; 且 U-Boot 已在内存里运行, 当次不受影响。
 - v6 修复页单位后起始扇区误写 0x14800 (41MB); **v7 更正为 0x10800 (33MB,
   boot_b 结束处, 与 parameter.txt 一致)**。旧 /data 数据会丢, 首次启动
-  rcS 检测 mount 失败会自动 mksmartfs 重新格式化, 无需手动干预。
+  rcS 检测 mount 失败会自动重新格式化 (v8: littlefs -o autoformat), 无需手动干预。
   KVDB 需重新配置。
 - 顺带: mtd.h 里 mtd_partition 的 "firstblock - offset in bytes" 注释是
   过时的 (实际单位 = geo.blocksize 块), 代码里已写注释说明。
@@ -252,4 +255,92 @@ nsh> date                         # NTP 时间
 nsh> ota update /data/boot.fit && nsh> reboot
 # 重启后:
 nsh> ota status && nsh> ota confirm
+```
+
+---
+
+## 7. v8 修复 (2026-08-30 白天追加): /data littlefs + U盘 FAT + rpmsgtest 超时
+
+> 对应你晨间反馈的四个问题: ① rpmsgtest 卡死 ② DHCP 未起 ③ /data mount failed: 25
+> ④ U 盘灯绿不会测。③ 已修, ① 已修, ②④ 是使用姿势 (见下), 另修了 U 盘配置缺口。
+
+### 7.1 /data mount failed: 25 — 根因 + 修复 (你已拍板方案 B)
+
+**根因 (两层叠加)**:
+1. **架构层**: SmartFS 绑定块设备时必须拿到 SMART 层的 BIOC_GETFORMAT ioctl
+   (`smartfs_utils.c:199`), 而这些 BIOC_* ioctl 只有 `drivers/mtd/smart.c`
+   (SMART FTL) 实现。我们的栈是 raw SPI NAND MTD → mtd_partition → **dhara**
+   → /dev/mtdblock0 (普通块设备), dhara 的 ioctl 全部透传给 NAND MTD
+   (`dhara.c:465`), MTD 不认识 BIOC_* → **ENOTTY = 25**。即 "dhara+SmartFS"
+   这个 v5 起的设计从未真正执行过, v7 是第一次暴露。
+2. **rcS 参数错误**: `mksmartfs /dev/mtdblock0 2048` 的第二位置参数是
+   nrootdirs (1-8, MULTI_ROOT_DIRS 开启时), 2048 直接报
+   "Invalid number of root directories" 且**跳过格式化**。就算 ioctl 通了这行也是错的。
+
+**修复 (方案 B, 你拍板)**: dhara 保留 (磨损均衡) + **littlefs** 挂 /data:
+- R258 参考就是 NAND FTL + littlefs (r528 `nuttx_nand_init.c:2082`), 符合 3.4.5
+- KVDB 只写 `/data/kvdb.db` 普通文件, 与文件系统类型无关 ✓
+- littlefs 原生支持块设备 + `mount -o autoformat` (首启自动格式化, 之后直接挂载)
+- rcS: `mount -t littlefs -o autoformat /dev/mtdblock0 /data`
+- defconfig: +CONFIG_FS_LITTLEFS=y (原 smartfs 相关保留不动, mksmartfs 不再被 rcS 调用)
+
+### 7.2 U 盘 "灯绿但不会测" — v7 缺 FAT 配置!
+
+**v7 的 defconfig 没开 CONFIG_FS_FAT** — U 盘枚举出 /dev/sda 没问题 (LED 绿
+说明供电/枚举大概率 OK), 但 `mount -t vfat` 会报错 (vfat 类型未注册)。
+v8 已加 `CONFIG_FS_FAT=y` + `FAT_LCNAMES` + `FAT_LFN` (长文件名)。
+
+**测试步骤 (v8 固件)**:
+```bash
+nsh> ls /dev                                  # 预期出现 sda
+nsh> mount -t vfat /dev/sda /tmp/usb          # /tmp/usb rcS 已预建
+nsh> ls /tmp/usb                              # 看到 U 盘文件即通过
+```
+- LED 绿 = U 盘拿到电, 不代表枚举完成; 以 `ls /dev` 出现 sda 为准。
+- 若 sda 不出现: DEBUG_USB_ERROR 已开, 看串口 ERROR 日志 (枚举失败会打原因)。
+
+### 7.3 rpmsgtest 卡死 — 阻塞读 bug 已修 + M0 诊断方法
+
+**Bug**: 主循环用阻塞 `read()`, 超时判定写在 read **之后** — M0 不回包时
+read 永久阻塞, 10s 超时永远到不了。v8 改为 `poll()(剩余超时) + read`,
+超时真实生效, FAIL 会退出而不是挂死。
+
+**端点改名**: "rpmsg-mcu0-test" → "rpmsg-mcu0-echo"。原因: M0 demo 会用
+NS announce 公告 "rpmsg-mcu0-test", A7 收到后会自动建同名设备节点; 测试
+端点再用同名会撞节点 (路由靠 dst 0x4003, 名字无关)。
+
+**M0 诊断方法 ( rpmsgtest 仍 FAIL 时)**:
+```bash
+nsh> ls /dev | grep rpmsg     # rpmsgtest FAIL 后看
+```
+- 出现 `/dev/rpmsg-rpmsg-mcu0-test` (NS 公告创建) → **M0 活着且完成链路握手**,
+  问题在 A7 发送/接收路径, 回来告诉我日志。
+- 没有 → M0 大概率卡在 `rpmsg_lite_wait_for_link_up` (没收到 A7 的 mailbox3
+  kick) 或没启动。A7 侧协议链路已静态核对一致 (set_status→notify→kick,
+  mbox isr→RPTUN_NOTIFY_ALL→两 vring 全处理), 需进一步硬件级排查。
+
+### 7.4 DHCP "不启动" — 大概率只是没等够
+
+netcfg 开机即跑 DHCP, 但 **GMAC link up 晚于 nsh> 出现** (驱动 5s 链路等待 +
+交换机 STP 10-30s), DHCP 客户端重试窗 ~30s (RETRIES=10)。你贴的日志里
+`DRaddr 10.0.0.1/Mask 255.255.255.0` 是 netinit 默认值, 不代表 DHCP 死了。
+
+**复测**: 开机后**等 40 秒**再 `ifconfig eth0`; 串口应出现
+`netcfg: dhcp on eth0 ok`。若打 `failed`: 看看同口普通设备能否上网 (STP/
+服务器侧问题), 或把日志发我。手动补跑 `ifconfig eth0 dhcp` 注意: 重复
+DISCOVER 服务器常不应答, 30s 后才报错, 不算死锁。
+
+### 7.5 slot_b 元数据数字异常 — 重刷后自然消除
+
+v7 板上 `ota status` 显示 slot_b {priority 0, tries 14, successful 7}
+(默认应为 {14,7,0})。v8 全量刷会清 misc, 元数据回到默认, 此疑点作废;
+若刷完 v8 后再出现, 再查。
+
+### 7.6 v8 刷机后 /data 快速验收
+
+```bash
+nsh> mount                              # 应有 /data type littlefs
+nsh> echo hello > /data/t.txt && cat /data/t.txt && rm /data/t.txt
+nsh> reboot                             # 重启
+nsh> ls /data                           # t.txt 已删 (autoformat 没有重新格式化, 数据保持)
 ```
