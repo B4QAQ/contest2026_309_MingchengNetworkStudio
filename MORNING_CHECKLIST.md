@@ -11,8 +11,8 @@
 
 | 文件 | 大小 | 说明 |
 |------|------|------|
-| `openvela/nand_firmware/update.img` | 9,785,898 B (md5 4defe2eb6941c9fbc4c89849d07e8525) | **全量刷机包 v8b** (v8 + rpmsg 缓存一致性根因修复 + USB 诊断超时转储) |
-| `openvela/cmake_out/hd-rk3506-evm_nsh/vela.bin` | 2,881,436 B | NuttX 固件 (含 /dev/ota + USB host 修复 + littlefs/FAT + USB INFO 跟踪) |
+| `openvela/nand_firmware/update.img` | 9,785,898 B (md5 6d102bf1e9639501dc57ae8b40d11be9) | **全量刷机包 v8c** (v8b + USB ACK 判据/进展感知等待 + 驱动日志宏修复 + curl TLS close 挂死修复) |
+| `openvela/cmake_out/hd-rk3506-evm_nsh/vela.bin` | 2,885,628 B | NuttX 固件 (含 /dev/ota + USB host v8c + littlefs/FAT + 驱动日志全量可见) |
 | `openvela/nand_firmware/boot.fit` | 4,194,304 B | 单槽 FIT 镜像 (ota update 用它) |
 | `openvela/nand_firmware/parameter.txt` | — | v5 A/B 分区表 |
 
@@ -27,6 +27,9 @@
   - `cb40931` board: rpmsgtest 阻塞读改 poll+超时, 端点改名避开 NS 冲突 (v8)
   - `bcc74cc` fix(chip,board): rpmsg 共享窗改 uncached 映射 (根因) + USB/rpmsg 诊断 (v8b)
   - `3ff636a` board: defconfig 开 DEBUG_USB_WARN/INFO 诊断跟踪 (v8b)
+  - `6fc7ffb` fix(chip): USB host 传输完成机制修复 — ACK 判据 + 进展感知等待 (v8c)
+  - `dbb8b4b` fix(chip,board): 驱动日志宏误用 INPUT 子系统 ierr/iwarn/iinfo, 全部静默 (v8c)
+  - external/curl/curl `f1a6fef21` fix: mbedtls_close 仅在 close_notify 已到达时读 (v8c)
 - 主仓 dev-ai-contest-2026:
   - `5d6f269` pack: A/B 双分区 OTA 打包 (v5) + OTA 固件二进制
   - `ca08796` chore: gitignore .mcu_build
@@ -301,16 +304,30 @@ nsh> ls /tmp/usb                              # 看到 U 盘文件即通过
 - LED 绿 = U 盘拿到电, 不代表枚举完成; 以 `ls /dev` 出现 sda 为准。
 - 若 sda 不出现: DEBUG_USB_ERROR 已开, 看串口 ERROR 日志 (枚举失败会打原因)。
 
-**v8b 实测新情况 (2026-08-30)**: U 盘枚举成功 (控制传输全过) 但 MSC 的
-bulk IN 挂死, /dev/sda 不出现; 拔线才报 `rk3506_chan_wait failed: -32`
-(-32 = 拔线中止, 非 STALL)。v8b 已加两层诊断:
-1. 驱动通道等待加 5s 超时 + 寄存器转储 (GINTSTS/HAINT/HCINT/HCCHAR/
-   HCTSIZ) — 设备沉默时不再永久挂死, 转储直接指出卡在哪一层
-   (XFRC 未处理 / NAK 静默 / 完全无中断)。
-2. defconfig 开 DEBUG_USB_WARN/INFO — 串口将出现每笔传输的
-   "ch%d start" / "rxflvl: ch%d INRECVD" / "ch%d done" 跟踪。
-**复测**: 插 U 盘等 ~10s, 把串口完整日志发我 (重点: CBW dump、
-ch 跟踪、超时转储)。
+**v8b 实测新情况 (2026-08-30)**: U 盘枚举成功（控制传输全过）但 MSC 的
+bulk IN 挂死, /dev/sda 不出现; 拔线才报 `rk3506_chan_wait failed: -32`。
+
+**v8c 根因修复（v8b INFO 跟踪直接定位, 三层）**:
+1. **NAK 循环被误杀**: 设备上电后对首个请求长时间 NAK（JMicron 桥初始化
+   慢）, 驱动 NAK 重试在 ISR 里静默跑（无日志）; v8b 的 5s 超时把"正在
+   重试"误判为"停滞"强拆——每个控制 IN 首次尝试都白等 5s。
+2. **XFRC 不置位**: NAK 重试序列后 DWC2 核心偶发不报 XFRC——数据已完整
+   收到（rxflvl 已 pop, xfrd==buflen）但 HCINT 只剩未 mask 的 ACK 位,
+   通道空转直到超时; 且 HCINTMSK 基线不含 CHH, 核心 self-halt 完全不可见
+   （偏离 u-boot dwc2 恒使能 CHHLTD 的参考行为）。
+3. **ep0 mask 方向残留**: 控制通道 IN/OUT 交替复用, mask 在 configure
+   时按当时方向写死, 反方向传输用错（OUT NYET/IN BBERR 错位）。
+
+**v8c 修复**: mask 每笔传输现算（恒含 CHH, ctrl/bulk IN 含 ACK）; ACK
+判据——数据收满或收到短包即按 XFRC 完成传输; NYET→EAGAIN 重发;
+chan_wait 改 500ms 切片轮询 progress——有中断进展就续期（3s 窗口/30s
+硬上限）, 真停滞 3s 才转储+取消（转储含 GINTMSK/progress, 可分辨
+"ISR 在跑但 halt 不生效" vs "中断未交付"）。
+
+**复测 (v8c 固件)**: 插 U 盘 → 串口会先出现枚举跟踪（含若干 NAK 期间
+的静默重试, 属正常）→ 预期 /dev/sda 出现 → `mount -t vfat /dev/sda
+/tmp/usb` → `ls /tmp/usb`。若仍失败: 把完整日志发我, 重点看
+"transfer stalled" 转储（现在含 GINTMSK/progress, 能定位到层）。
 
 ### 7.3 rpmsgtest 卡死 — 阻塞读 bug 已修 + v8b 根因修复 (缓存一致性)
 
@@ -329,12 +346,30 @@ store/load 访问 vring 元数据, 必须靠映射本身保证一致性 → 窗�
 **端点改名**: "rpmsg-mcu0-test" → "rpmsg-mcu0-echo" (避开 M0 NS announce
 同名节点冲突; 路由靠 dst 0x4003)。
 
-**诊断 (rpmsgtest FAIL 时自动执行 vring 探针)** — 读共享窗 vring idx 判断断点:
-- `A7->M0 (avail used)`: avail≥1 = 我们的 ping 已入 vring1; used≥1 = M0 消费了 ping
-- `M0->A7 (avail used)`: avail 起点 64 (A7 播种 64 个 rx 缓冲), used≥1 = A7
-  收到过 M0 的消息 (NS announce) = M0 活着且完成握手
-- 判读: avail=1,used=0 → M0 未启动或卡 link-up 前; used≥1 但无回包 → 回包
-  通道断; 全 0 → 检查 rptun/SMC 启动链
+**v8b 板上实测 (探针数据)**: `vring probe A7->M0 (avail=1 used=0)
+M0->A7 (avail=64 used=0)` —
+- ping 已入 vring1 (avail=1), A7 的 64 缓冲种子在 DDR 可见 (avail=64)
+  → **uncached 映射修复生效, A7 侧数据面正常**;
+- used 全 0 → **M0 从未消费 ping、从未发送任何报文** = M0 未启动或
+  卡在 link-up 之前 (kick 未到达 / rpmsg init 未跑)。
+
+**v8c 重大发现 — 驱动日志宏全部静默 (根因级)**: NuttX debug.h 的
+`ierr/iwarn/iinfo` 是 INPUT（输入子系统）模块宏（CONFIG_DEBUG_INPUT_*
+门控, 本工程未开）, 不是"中断上下文日志"; 全部 12 个驱动文件的错误/
+信息日志从第一天起编译为空——这就是 boot 日志里**从未出现 "M0
+firmware booted"（rptun 启动成功标志）也从未出现任何 rptun 报错**的
+原因。v8c 已全量改为 `_err/_warn/_info`（DEBUG_ERROR/WARN/INFO=y 已开）。
+
+**复测 (v8c 固件)**: 看 boot 日志（这次 rptun 的日志第一次真正可见）:
+- 出现 `M0 firmware booted at ...` → M0 启动成功, 若 rpmsgtest 仍
+  FAIL 且探针 used=0 → 问题在 mailbox3 kick 未到达 M0 / M0 rpmsg init
+  卡住, 带日志回来;
+- 出现 `SIP_MCU_CFG failed` 或其他 SMC/时钟报错 → M0 根本没启动成,
+  按报错修启动链;
+- 什么都没有 → boot 路径没执行到（bringup 顺序问题）, 带日志回来。
+
+**端点改名**: "rpmsg-mcu0-test" → "rpmsg-mcu0-echo" (避开 M0 NS announce
+同名节点冲突; 路由靠 dst 0x4003)。
 
 **A7/M0 协议链路静态核对结论** (rk3506_rptun.c 与 SDK rk3506-mcu test_demo
 / rpmsg-lite RK3506 platform): 地址一致 (link_id 0x03, ept 0x4003); A7
@@ -342,23 +377,34 @@ master init 尾部 set_status(DRIVER_OK)→notify→mailbox3 kick {CMD=0x03,
 DATA=RMSG} 释放 M0 link_state; A7 收包 isr 以 RPTUN_NOTIFY_ALL 上报,
 rproc_virtio_notified(RSC_NOTIFY_ID_ANY) 两 vring 全处理。
 
-### 7.4 curl "卡死" / DHCP — 先确认网络通不通
+### 7.4 curl HTTPS "卡住" — 根因: mbedtls_close 阻塞读 (v8c 已修)
 
-**curl 现象解读**: "只有 Ctrl+C 才显示结果" 最可能是 curl 卡在 TCP 连接
-(网络没通时 SYN 一直重试, NuttX connect 无超时), Ctrl+C 中止后 curl 打印
-错误信息 — 那个"结果"是报错。先按顺序确认网络:
+**现象 (v8b 板上实测)**: `curl https://stdl.b4qaq.cn/fwtb/info.json` —
+响应体其实早已完整收到, 但 curl 不退出、无输出; Ctrl+C 终止后 JSON
+一次性打印。
 
+**根因**: `external/curl/curl/lib/vtls/mbedtls.c` 的 `mbedtls_close()`
+在连接关闭时无条件 `mbedtls_ssl_read()` 一次（本意是消费已到达的
+close_notify、避免 RST）。上游 socket 非阻塞, 该 read 立即返回
+WANT_READ; NuttX socket 是阻塞的且 curl 未设 O_NONBLOCK——keep-alive
+服务器在响应后保持 TLS 会话不发 close_notify → 该 read 永久阻塞:
+easy_cleanup 卡死、stdout 缓冲不刷新, Ctrl+C 终止 curl 后退出 flush
+才"显示结果"。v8c 修复: `Curl_socket_check(fd,..,0)` 零超时探测,
+仅当 close_notify 已到达才读。OTA 的 `curl -o /data/boot.fit` 同样
+受益（否则下载完成也会挂）。
+
+**复测 (v8c 固件)**:
 ```bash
-nsh> ifconfig eth0           # 等 40s 再看! 有 inet addr 才算 DHCP 成功
-nsh> ping 192.168.10.1       # 先 ping 网关 (IP 以 ifconfig 为准)
-nsh> curl -v --connect-timeout 8 http://192.168.10.1/     # 局域网 http, 无 DNS 无 TLS
-nsh> curl -v --connect-timeout 8 http://example.com/      # 再试公网 (DNS+TLS)
+nsh> curl https://stdl.b4qaq.cn/fwtb/info.json    # 应立即返回提示符+JSON
+nsh> curl -v --max-time 15 https://stdl.b4qaq.cn/fwtb/info.json
 ```
-- ifconfig 无 IP: DHCP 没完成 — 看 `netcfg: dhcp on eth0 ok/failed` 是否
-  出现在串口 (GMAC link up 晚于 nsh>, DHCP 重试窗 ~30s, 开机要等够 40s)。
-- ping 网关通但 curl 公网卡 → DNS/TLS 问题, 把 -v 输出发我。
-- curl 全部超时报错但网络通 → 服务器/防火墙侧问题。
-- **--connect-timeout 8** 让 curl 自己退出, 不再需要 Ctrl+C。
+- 若仍有异常: 用第二条（`-v` 看停在响应哪一步, `--max-time 15` 保证
+  自己退出）, 把完整 -v 输出发我。
+
+**DHCP/网络排查（仍有效的通用步骤）**: `ifconfig eth0`（开机等 40s,
+有 inet addr 才算 DHCP 成功; 日志应见 `netcfg: dhcp on eth0 ok`）→
+`ping 192.168.10.1` → 再 curl。手动补跑 `ifconfig eth0 dhcp` 注意:
+服务器对重复 DISCOVER 常不应答, 30s 后报错不算死锁。
 
 ### 7.5 slot_b 元数据数字异常 — 重刷后自然消除
 
