@@ -45,6 +45,12 @@ recovery/system/vendor/oem/data 已删除 (无 Android 恢复流程, 不需要)�
 
 ## 2. OTA A/B 验收步骤 (本轮核心)
 
+> **前置条件 (2026-08-30 更新)**: 预编译 U-Boot 无 `CONFIG_ANDROID_AB`, 只认字面
+> `boot` 分区 → v5 首刷卡死 `FIT: No boot partition`。已用 SDK 源码重编出
+> 支持 A/B 的 U-Boot (见 `nand_firmware/UBOOT_BUILD.md`), 已打进当前
+> `update.img`。上电时 U-Boot 应打印 `A/B-slot: _a, successful: 0, tries-remain: 7`
+> ——看到这行说明新 U-Boot 在正常选槽。
+
 ### 2.1 首刷后基础检查
 
 ```bash
