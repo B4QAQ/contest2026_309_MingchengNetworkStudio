@@ -11,8 +11,8 @@
 
 | 文件 | 大小 | 说明 |
 |------|------|------|
-| `openvela/nand_firmware/update.img` | 9,785,898 B (md5 6d102bf1e9639501dc57ae8b40d11be9) | **全量刷机包 v8c** (v8b + USB ACK 判据/进展感知等待 + 驱动日志宏修复 + curl TLS close 挂死修复) |
-| `openvela/cmake_out/hd-rk3506-evm_nsh/vela.bin` | 2,885,628 B | NuttX 固件 (含 /dev/ota + USB host v8c + littlefs/FAT + 驱动日志全量可见) |
+| `openvela/nand_firmware/update.img` | 9,785,898 B (md5 7e47a533526777eb1ba7adc7d4230132) | **全量刷机包 v8d** (v8c + DWC2 RX FIFO 根因修复 + rpmsg 邮箱探针 + curl P1-P6 定位探针) |
+| `openvela/cmake_out/hd-rk3506-evm_nsh/vela.bin` | 2,885,628 B | NuttX 固件 (含 /dev/ota + USB host v8c+v8d + littlefs/FAT + 驱动日志全量可见) |
 | `openvela/nand_firmware/boot.fit` | 4,194,304 B | 单槽 FIT 镜像 (ota update 用它) |
 | `openvela/nand_firmware/parameter.txt` | — | v5 A/B 分区表 |
 
@@ -29,7 +29,10 @@
   - `3ff636a` board: defconfig 开 DEBUG_USB_WARN/INFO 诊断跟踪 (v8b)
   - `6fc7ffb` fix(chip): USB host 传输完成机制修复 — ACK 判据 + 进展感知等待 (v8c)
   - `dbb8b4b` fix(chip,board): 驱动日志宏误用 INPUT 子系统 ierr/iwarn/iinfo, 全部静默 (v8c)
+  - `97b96d1` fix(chip): DWC2 RX FIFO 128 卡死 HS bulk, 提到 SDK 值 512/256/224 (v8d)
+  - `f4e7c4b` board: rpmsgtest 超时探针加邮箱寄存器转储, 定位 M0 kick 链断点 (v8d)
   - external/curl/curl `f1a6fef21` fix: mbedtls_close 仅在 close_notify 已到达时读 (v8c)
+  - external/curl/curl `9a4601247` test: P1-P6 无缓冲定位探针 (v8d)
 - 主仓 dev-ai-contest-2026:
   - `5d6f269` pack: A/B 双分区 OTA 打包 (v5) + OTA 固件二进制
   - `ca08796` chore: gitignore .mcu_build
@@ -420,3 +423,107 @@ nsh> echo hello > /data/t.txt && cat /data/t.txt && rm /data/t.txt
 nsh> reboot                             # 重启
 nsh> ls /data                           # t.txt 已删 (autoformat 没有重新格式化, 数据保持)
 ```
+
+---
+
+## 8. v8d 修复 (2026-08-30 追加): U 盘 bulk 零事件根因 + rpmsg kick 探针 + curl 定位探针
+
+### 8.1 U 盘 bulk IN 零事件 — 真根因: DWC2 RX FIFO 太小 (v8d 已修)
+
+**v8c 板上数据回顾**: 枚举（mps=8/64 的控制传输）全部通过, 但 CSW 的
+bulk IN (mps=512) 零事件挂死: 通道 armed 正确（HCCHAR/HCTSIZ 无误）
+但 HCINT=0、核心一次 token 都不发。
+
+**根因**: DWC2 slave 模式下, 核心在发 IN token 前要求 RX FIFO 能同时
+容纳"该通道一个 max packet + 状态字"。HS bulk mps=512B → 512/4=128
+words + ~3 状态字 ≈ **131 words > 旧默认 GRXFSIZ=128 words** → 核心
+静默拒绝发 token（CHENA=1、HCINT=0、零中断）。mps=8/64 的控制传输只需
+~19 words, 所以枚举全过——完美解释"枚举过、bulk 死"。
+
+**修复**: `vendor/rockchip/chips/rk3506/Kconfig` 三个 FIFO 默认值
+128/96/96 → **512/256/224 words**, 与 SDK `hal_usb_core.c` 完全一致
+(GRXFSIZ=0x200, NPTX FIFO 0x100 @0x200, PTX FIFO 0xE0 @0x300)。
+v8c 的 ACK 判据/进展等待修复仍然有效（那是完成机制层, 这是能力层）。
+
+**复测 (v8d 固件)**: 同 7.2——插 U 盘 → /dev/sda → `mount -t vfat
+/dev/sda /tmp/usb` → `ls /tmp/usb`。这次 bulk IN 应该有事件了。
+
+### 8.2 rpmsg M0: 已确认启动, kick 链源码级核对完成, 加探针定位 (v8d)
+
+**v8c 板上数据**: boot 日志首次出现 `M0 firmware booted at 0xfff84000
+(27120 bytes)` → **M0 已被释放启动**（SIP_MCU_CFG 返回 0）。但
+rpmsgtest 仍 FAIL、探针仍 `avail=1/used=0 + avail=64/used=0` = M0
+从未消费 ping、从未发过任何报文。
+
+**本轮完成的源码级核对（结论: A7 侧 kick 协议完全正确）**:
+- **rk3506 mailbox 是 V2 语义**: dts compatible
+  `"rockchip,rk3506-mailbox", "rockchip,rk3576-mailbox"` → 内核
+  rk3576_drv_data。V2: 每方向一组寄存器 (INTEN@0x00/STATUS@0x04/CMD@0x08/
+  DATA@0x0c, B2A 在 +0x10), bit0=消息到达中断/STATUS, bit8=trigger
+  mode, 写需 HIWORD 写使能 (bits31:16)。
+- **SDK M0 HAL 的使能写法是对的**（此前怀疑"裸写无 WE 位"是我看漏）:
+  `MBOX_ChanEnable` V2 分支写 `A2B_INTEN = (1<<16|1)` — 带 WE ✓。
+  M0 在 rpmsg init 时会对 MBOX0/MBOX3 各写一次 A2B_INTEN=WE|1。
+- **kick 消息格式一致**: A7 写 MBOX3 A2B_CMD=0x03(link_id)/
+  A2B_DATA=0x524D5347(magic) == Linux 内核 rockchip_rpmsg_mbox 的
+  {cmd=link_id, data=magic} == M0 rpmsg_remote_cb 的期望。
+- **M0 回调链一致**: 第一次 kick → env_isr(6)=tvq → link_state=1 →
+  wait_for_link_up 释放 → ns_bind/create_ept/ns_announce。M0 的反向
+  kick: q0(vq6)→MBOX0 B2A, q1(vq7)→MBOX3 B2A, 我们 A7 两个 isr 都挂了。
+- **A7 上层链一致**: master init 尾部 set_status(DRIVER_OK) →
+  rproc_virtio_set_status 写资源表并 notify → 我们的 mbox3 kick。
+  确认 kick 一定发出。
+
+**剩余未知 = M0 是否活到 rpmsg init / kick 是否被 M0 中断消费**。
+静态分析到此无法再收窄, v8d 在 rpmsgtest 超时探针里加了**邮箱寄存器
+转储**（A7 侧直接读 MBOX0/MBOX3 寄存器, 一次刷机判四个问题）:
+
+```
+rpmsgtest: mbox probe MBOX3 A2B (inten=0x???????? status=0x????????)
+           B2A (status=0x????????) MBOX0 A2B (inten=0x????????)
+           B2A (status=0x????????)
+```
+
+判读表:
+| 现象 | 结论 |
+|------|------|
+| MBOX3 A2B_INTEN bit0=1（或 MBOX0 A2B_INTEN bit0=1） | **M0 活着**且跑完了 rpmsg init（它使能了自己的收中断）|
+| MBOX3 A2B_INTEN = 0x100（只有我们写的 bit8） | M0 **没活到** rpmsg init——卡在 rpmsg 之前（此时建议接 M0 串口）|
+| MBOX3 A2B_INTEN = 0 | 连 A7 自己的写都没了——A7 mailbox pclk 被门控/地址错 |
+| MBOX3 A2B_STATUS bit0=1 | 我们的 kick **还在路上没人收**——M0 的 INTMUX/NVIC 中断路径断 |
+| MBOX3 A2B_STATUS bit0=0 | kick 已被 M0 ISR 消费——若 vring 仍 used=0, 问题在 M0 rpmsg 内部（DATA 校验/发送路径）|
+| MBOX0/MBOX3 B2A_STATUS bit0=1 | **M0 反向 kick 过我们**而 A7 没服务——A7 收路径断（不太可能, 但探针能证）|
+
+**复测 (v8d 固件)**: `rpmsgtest`, 把 vring probe + **mbox probe 两段
+完整日志**发我。
+
+### 8.3 curl: v8c 修复后仍挂 → 加 P1-P6 定位探针 (v8d)
+
+**v8c 板上数据**: `-v` 完整走完（握手、200、body、
+"Connection #0 ... left intact"）后仍挂, Ctrl+C 才 flush。注意 v8c
+分析里有个误判已纠正: teardown 的 `Closing connection` 本来就不会打
+（close_all 用非 verbose 的 closure_handle）, 所以"没这行"不是证据。
+
+**静态分析已到头**: cleanup 链 easy_cleanup → Curl_close → multi_cleanup
+→ conncache_close_all → conn_shutdown → Curl_conn_close → ssl_cf_close
+→ mbedtls_close(已有 0 超时防护) → cf_socket_close → sclose()。除
+mbedtls_close 的 read（已防护）和最后的 close() 系统调用外无 I/O。
+**剩余嫌疑只有两个**: ① 防护后仍有一条 read 路径阻塞（极小概率）;
+② NuttX `close()` 本身阻塞。无法从源码进一步区分 → 上探针。
+
+**v8d 探针**（全部 `fprintf(stderr)+fflush`, 无缓冲, 一定按顺序出现）:
+- P1 `easy_perform returned` — 传输层正常返回
+- P2 `Curl_close` — teardown 开始
+- P3 `conn_shutdown` ×3 — 进入 / secondary 关完 / first 关完
+- P4 `mbedtls_close sockfd=? readable=?` + `done` — TLS 层防护判定
+- P5 `socket_close fd=?` + `done` — OS close() 前后
+- P6 `easy_cleanup returned` — 全部完成
+
+**复测 (v8d 固件)**: `curl https://stdl.b4qaq.cn/fwtb/info.json`,
+若还挂, Ctrl+C 后把**从 P1 开始的所有 P 行**发我。最后一行停在哪,
+根因就在哪个区间:
+- 停在 P4 readable=1 → close_notify 读仍阻塞（改删 close_notify read）
+- 停在 P5（无 done）→ **NuttX close() 阻塞**（查 net_close/tcp_close）
+- P1 没出现 → 问题不在 cleanup, 在别处（再分析）
+
+---
