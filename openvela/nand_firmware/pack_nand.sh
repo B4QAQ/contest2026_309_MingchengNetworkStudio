@@ -234,7 +234,11 @@ fi
 # 5. 准备 U-Boot FIT 镜像
 #--------------------------------------------------------------------
 echo "[4/7] 准备 U-Boot..."
+# U-Boot FIT 来源: UBOOT_IMG 环境变量 > nand_firmware/uboot.itb (自建 AB 版) >
+# SDK fit/uboot.itb (预编译, 无 CONFIG_ANDROID_AB, 只认名为 boot 的分区)
 UBOOT_SRC_CANDIDATES=(
+    "${UBOOT_IMG:+$UBOOT_IMG}"
+    "$SCRIPT_DIR/uboot.itb"
     "$SDK_DIR/u-boot/fit/uboot.itb"
     "$SDK_DIR/u-boot/u-boot.itb"
 )
