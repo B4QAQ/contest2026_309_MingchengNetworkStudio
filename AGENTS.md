@@ -15,13 +15,16 @@
 
 ## 2. 工作目录约定
 
-| 目录 | 用途 | 注意事项 |
-|------|------|----------|
-| `/home/b4qaq/project/` | 仓库根目录 | 比赛模板，不要乱改 |
-| `/home/b4qaq/project/openvela/` | 主代码（openvela 仓库） | 实际修改这里 |
-| `/home/b4qaq/project/RK3506G2/` | 厂商 SDK（参考用） | 不修改 |
-| `/home/b4qaq/project/openvela/cmake_out/` | 构建输出 | 可以 `rm -rf` |
-| `/home/b4qaq/project/openvela/nand_firmware/` | 烧录用镜像 | 提交 `parameter.txt` 和 `pack_nand.sh` |
+| 目录                                            | 用途                    | 注意事项                                   |
+| ----------------------------------------------- | ----------------------- | ------------------------------------------ |
+| `/home/b4qaq/project/`                        | 仓库根目录              | 比赛模板，不要乱改                         |
+| `/home/b4qaq/project/openvela/`               | 主代码（openvela 仓库） | 实际修改这里                               |
+| `/home/b4qaq/project/RK3506G2/`               | 厂商 SDK（参考用）      | 不修改                                     |
+| `/home/b4qaq/project/HD-RK3506-EVM`           | 厂商 文档（参考用）     | 不修改                                     |
+| `/home/b4qaq/project/nanopi_m4_rk3399`        | rk3399参考代码          | 不修改                                     |
+| `/home/b4qaq/project/OpenVelaDocs`            | OpenVela官方文档        | 不修改                                     |
+| `/home/b4qaq/project/openvela/cmake_out/`     | 构建输出                | 可以 `rm -rf`                            |
+| `/home/b4qaq/project/openvela/nand_firmware/` | 烧录用镜像              | 提交 `parameter.txt` 和 `pack_nand.sh` |
 
 ---
 
@@ -102,28 +105,50 @@
    - `nand_firmware/update.img` 存在
 4. 跑 `bash nand_firmware/pack_nand.sh` 看是否成功
 
+### 3.6 方案决策（用户强制参与）
+
+**除非用户特意说明放行，任何方案层面的决定都必须先让用户参与**：
+
+- 技术路线选择（如：自己造轮子 vs 用 NuttX/SDK 现成机制、轮询 vs 中断、兜底 hack vs 标准接口）
+- 架构与配置取舍（新增/修改 Kconfig、defconfig 选项的取舍）
+- 驱动实现方式的重大改动
+
+做法：先给出 (a) 备选方案、(b) 各自代价/风险、(c) 我的倾向及理由，等用户确认或拍板后再实施。用户直接指示的事项（"实现 X"）按指示做，但由该指示派生的子决策仍需说明并征求意见。
+
 ---
 
 ## 4. 已知限制 / 待修复
 
-| 项目 | 状态 | 备注 |
-|------|------|------|
-| `nuttx/arch/arm/Kconfig` 增加 `ARCH_CHIP_RK3506` | ✅ **必需保留** | 之前 AI 修改 |
-| `vendor/rockchip/boards/rk3506/hd-rk3506-evm/CMakeLists.txt` 重写 | ✅ **必需保留** | 修复了 34MB 零填充 bug |
-| `vendor/rockchip/boards/rk3506/hd-rk3506-evm/configs/parameter.txt` 重写 | ✅ **必需保留** | boot 分区调为 10MB；v3 改用 SDK 官方 parameter-evm-nand.txt |
-| `nand_firmware/pack_nand.sh` 重写 | ✅ **必需保留 (v4)** | v4: boot 分区打成 **FIT external-data 镜像** (`mkimage -E`, FDT<4KB + magic d00dfeed), U-Boot 默认 `boot_fit` 可自动引导 NuttX，上电零交互进 NSH；rkImageMaker 用 `-RK350F` |
-| `nand_firmware/nuttx.its` + `boot.fit` | ✅ **必需** | FIT 源/产物：kernel `load=0x02080000 entry=0x02080560`（真实地址，bit0=0 → v7-A ARM 模式）；boot.fit 同时覆盖 boot.img |
-| `nand_firmware/uboot.img` (预编译 813KB) | ✅ **必需** | MiniLoader 链式加载的 U-Boot FIT |
-| `nand_firmware/boot.uimg` (uImage 格式) | ✅ **必需** | U-Boot bootm 加载的 kernel 镜像 |
-| `rk3506_i2c.c` (v2) | ✅ **重写完成 + 修复** | 基于 Linux i2c-rk3x.c，clock divider 公式从 `(pclk/8/scl)-1` 修正为 `DIV_ROUND_UP(pclk, 8*scl) - 2` |
-| `rk3506_lowputc.c` | ✅ **已修复** | UART 时钟从 1.8432 MHz 修正为 24 MHz |
-| `rk3506_serial.c` | ✅ **已修复** | UART_SCLK 从 1.8432 MHz 修正为 24 MHz |
-| `hd_rk3506_bringup.c` | ✅ **已重写** | 不再因单个驱动失败中断后续初始化；添加 I2C 控制器初始化 |
-| `rk3506_vop.c` | ✅ **已修复** | WIN1_CTRL0 format 字段位域修正、GRF HIWORD_UPDATE 模式修正、dsp_layer_sel 修正 |
-| `rk3506_usbhost.c` | ⚠️ **可能有 bug** | 8000+ 行复杂驱动 |
-| `hd_rk3506_gt911.c` | ⚠️ **可能有 bug** | 2000+ 行 |
-| `hd_rk3506_st7701s.c` | ⚠️ **可能有 bug** | 1300+ 行 |
-| `{etc/init.d}` 空目录（残留） | ❌ **已删除** | 上一个 AI 笔误 |
+| 项目                                                                       | 状态                        | 备注                                                                                                                                                                                   |
+| -------------------------------------------------------------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `nuttx/arch/arm/Kconfig` 增加 `ARCH_CHIP_RK3506`                       | ✅**必需保留**        | 之前 AI 修改                                                                                                                                                                           |
+| `vendor/rockchip/boards/rk3506/hd-rk3506-evm/CMakeLists.txt` 重写        | ✅**必需保留**        | 修复了 34MB 零填充 bug                                                                                                                                                                 |
+| `vendor/rockchip/boards/rk3506/hd-rk3506-evm/configs/parameter.txt` 重写 | ✅**必需保留 (v5)**   | v5: A/B 双槽布局 — vnvm/uboot/misc/boot_a(10M)/boot_b(10M)/userdata(grow)，删 recovery/system/vendor/oem/data；**与旧布局不兼容，需全量刷**                                                                                                                            |
+| `nand_firmware/pack_nand.sh` 重写                                        | ✅**必需保留 (v5)**   | v5: A/B package-file（boot_a/boot_b 同 FIT 镜像 + misc 8KB 零占位，不含 rootfs/recovery/oem/userdata）；PARAM_FILE 优先级 环境 > 板级 v5 > SDK；v4 遗产：FIT external-data (`mkimage -E`)、`-RK350F` |
+| `nand_firmware/nuttx.its` + `boot.fit`                                 | ✅**必需**            | FIT 源/产物：kernel `load=0x02080000 entry=0x02080560`（真实地址，bit0=0 → v7-A ARM 模式）；boot.fit 同时覆盖 boot.img                                                              |
+| `nand_firmware/uboot.img` (预编译 813KB)                                 | ✅**必需**            | MiniLoader 链式加载的 U-Boot FIT                                                                                                                                                       |
+| `nand_firmware/boot.uimg` (uImage 格式)                                  | ✅**必需**            | U-Boot bootm 加载的 kernel 镜像                                                                                                                                                        |
+| `rk3506_i2c.c` (v2)                                                      | ✅**重写完成 + 修复** | 基于 Linux i2c-rk3x.c，clock divider 公式从 `(pclk/8/scl)-1` 修正为 `DIV_ROUND_UP(pclk, 8*scl) - 2`                                                                                |
+| `rk3506_lowputc.c`                                                       | ✅**已修复**          | UART 时钟从 1.8432 MHz 修正为 24 MHz                                                                                                                                                   |
+| `rk3506_serial.c`                                                        | ✅**已修复**          | UART_SCLK 从 1.8432 MHz 修正为 24 MHz                                                                                                                                                  |
+| `hd_rk3506_bringup.c`                                                    | ✅**已重写**          | 不再因单个驱动失败中断后续初始化；添加 I2C 控制器初始化                                                                                                                                |
+| `rk3506_vop.c`                                                           | ✅**已修复**          | WIN1_CTRL0 format 字段位域修正、GRF HIWORD_UPDATE 模式修正、dsp_layer_sel 修正                                                                                                         |
+| GMAC0 PHY ioctl + netinit monitor                                        | ⚠️**monitor 已回退**  | 驱动侧 SIOCMIINOTIFY/SIOCGMIIPHY/SIOCGMIIREG/SIOCSMIIREG 保留（休眠，无消费者）；**NETINIT_MONITOR 实测有害已关**：监控线程的 ifup/ifdown + MDIO ioctl 与驱动 5s 链路等待/ifup 持锁互相卡死，导致 dhcp/ping/curl 全部冻结。重开前提：ifup 去掉持锁 sleep（链路等待挪出锁外）+ 通知改 PHY 中断驱动，方案需 3.6 确认 |
+| GMAC0 日志策略                                                           | ✅**按用户要求**      | 只保留 link up/down（用户拍板不算错误）和错误日志（nerr）；"no link after Nms" 为 nerr；其余 info 全删。任何再增打印先过 3.6                                                                    |
+| 启动 DHCP 重试                                                           | ✅**根因已定位**      | 根因：交换机/路由器端口 STP listening/learning（10~30s）丢弃 BOOTP 广播，PHY 5s 就 up 但 boot DHCP 默认 3 重试（9s）全被吞；且 `netinit_net_bringup()` 的 DHCP 失败路径**静默 return 不打日志**（这就是"开了 DEBUG_ERROR 也没看到 ERROR"的谜底）。`NETUTILS_DHCPC_RETRIES=10`（~30s）覆盖 STP 窗口。曾误把它当 22:34 全卡死的元凶回退过——实际卡死是 NETINIT_MONITOR 锁竞争，重试只是拉长失败窗口 |
+| 系统时间 / TLS BADCERT_FUTURE (curl: 60)                                 | ✅**已修复**          | 根因：无电池 RTC，boot 时钟停在 1970，所有证书 notBefore 都"来自未来"。已开 `SYSTEM_NTPC=y`（ntpcstart/stop/status 命令）+ rcS 里 `ntpcstart`（daemon 后台指数退避重试 1s→2s→…→120s，60 次才退；网络一通即同步，之后每 60s 重同步）；netinit 在 DHCP 成功后也会启动（状态锁防重复）。`date` 可验证，强制立即重试用 `ntpcstop`+`ntpcstart` |
+| DNS 解析失败 / 无 nameserver (curl: 6 Could not resolve)                 | ✅**已修复**          | 根因：`NETINIT_DNS` 未开，netinit 从不设置 DNS；解析器里有没有 nameserver **完全取决于 DHCP 回包是否带 option 6**——某次 boot 的 ACK 没带（boot DHCP 已成功拿到 IP/网关，DNS 却是空），curl/ping 按名字立即失败。已开 `NETINIT_DNS=y`+`NETINIT_DNSIPADDR=0xc0a80a01`（netinit 预设网关 192.168.10.1 作 DNS 兜底，DHCP 带了就覆盖）；`NETDB_DNSCLIENT_RECV_TIMEOUT` 30→5s（死 nameserver 时解析 ≤15s 而非 90s）。**注意**：boot DHCP 成功后手动再跑 `ifconfig eth0 dhcp`，服务器对重复 DISCOVER 常不应答 → 10×3s=30s 才报错，不是死锁，也不需要再跑 |
+| 控制台 Ctrl+C（curl 卡终端）                                             | ✅**已修复**          | 根因：`CONFIG_TTY_SIGINT` 未开，串口 Ctrl+C 无法给前台任务发 SIGINT，NSH 等卡死的 curl 无法打断。已开 `TTY_SIGINT=y`（NSH 前台运行子命令时自动 TIOCSCTTY 绑定子任务 pid）                     |
+| curl DNS "getaddrinfo() thread failed to start" (curl: 6)                | ✅**已修复**          | 根因：threaded resolver（`curl_config.h` 的 `USE_THREADS_POSIX`）要起 pthread + 用环回 TCP 手搓 socketpair 自检，任一环失败就报这条误导性错误。已注释掉该宏改走 `CURLRES_SYNCH` 同步解析（getaddrinfo 直接在 curl 任务里跑，真实 EAI_* 错误可见）。apps/external/curl/curl_config.h 属 openvela 自带的移植配置文件，改它不算动上游 curl 源码 |
+| TLS 熵源 "CTR_DRBG - entropy source failed" (-0x0034)                    | ✅**已修复**          | 根因：mbedtls NuttX 熵 poll 走 `getrandom()` → `/dev/urandom`，板上没这个设备。已开 `CRYPTO=y`+`CRYPTO_RANDOM_POOL=y`+`DEV_URANDOM=y`+`DEV_URANDOM_RANDOM_POOL=y`（BLAKE2s 熵池 + IRQ 喂熵，不用裸 xorshift128）。注意 `CRYPTO_RANDOM_POOL` 在 `if CRYPTO` 块内，只加它不加 `CRYPTO` 会被 kconfig 静默丢弃；choice 算法切换需显式写 `DEV_URANDOM_RANDOM_POOL=y` |
+| TLS CA 证书 "Error reading ca cert file" (curl: 77)                      | ✅**已修复**          | 根因：curl 默认信任库路径 `/etc/ssl/curl/ca-certificates.crt`（`curl_config.h` 的 `CURL_CA_BUNDLE`）在板上是空目录。已把宿主机 ca-certificates 包的 bundle（121 个根证书，178KB）放进板级 romfs `src/etc/ssl/curl/`，并在 `src/CMakeLists.txt` 的 `nuttx_add_romfs(RCRAWS ...)` 里登记（RAW 文件原样打包，romfs 大小 +178KB） |
+| `rk3506_usbhost.c`                                                       | ⚠️**可能有 bug**    | 8000+ 行复杂驱动                                                                                                                                                                       |
+| `hd_rk3506_gt911.c`                                                      | ⚠️**可能有 bug**    | 2000+ 行                                                                                                                                                                               |
+| `hd_rk3506_st7701s.c`                                                    | ⚠️**可能有 bug**    | 1300+ 行                                                                                                                                                                               |
+| `{etc/init.d}` 空目录（残留）                                            | ❌**已删除**          | 上一个 AI 笔误                                                                                                                                                                         |
+| `/data 分区位置错误（潜伏 bug）`                                          | ✅**已修复**          | bringup 把擦块索引当 mtd_partition 的页索引传，/data 实际映射 3.7MB 处 384KB（在 uboot 分区内！）。没炸是因为每次全量刷都重写 uboot 分区。已改为页单位传参 + userdata 0x14800 扇区（v5 布局）。mtd.h 的 "offset in bytes" 注释是过时的（实际单位=geo.blocksize） |
+| A/B 双分区 OTA                                                            | ✅**代码完成，未上板** | `rk3506_ota.c` /dev/ota（AvbABData @ misc+2048，U-Boot CONFIG_ANDROID_AB 协议）+ `ota` NSH 命令 + rcS bootcheck（try 递减/回滚）+ parameter.txt v5（boot_a/boot_b 双 10MB 槽）。**分区布局变更，旧镜像不兼容，需全量刷**。验收见 `MORNING_CHECKLIST.md` §2 |
+| FSPI 并发锁                                                               | ✅**已修复**          | 多 MTD 分区消费者（dhara /data 与 OTA misc/boot_a/boot_b）可并发进 FSPI 控制器；`rk3506_fspi_nand_op` 已加互斥锁串行化                                                                 |
 
 **`vendor/rockchip/boards/rk3506/hd-rk3506-evm/src/{etc/` 目录** ❌ 这是上一个 AI 用错误的 `cp` 命令创建的（文件名有 `{` 和 `}`），目录是空的，已删除。
 
@@ -131,29 +156,29 @@
 
 ## 5. 关键文件速查
 
-| 任务 | 看这里 |
-|------|--------|
-| 修改 NSH 配置 | `vendor/rockchip/boards/rk3506/hd-rk3506-evm/configs/nsh/defconfig` |
-| 修改 U-Boot/Loader 流程 | `nand_firmware/parameter.txt` + `nand_firmware/pack_nand.sh` |
-| 修改 boot 流程 | `nuttx/arch/arm/src/armv7-a/arm_head.S`（慎改） |
-| 修改中断 | `vendor/rockchip/chips/rk3506/rk3506_irq.c` |
-| 添加外设 | `vendor/rockchip/boards/rk3506/hd-rk3506-evm/src/hd_rk3506_appinit.c` |
-| 修改 Kconfig | `nuttx/arch/arm/Kconfig`（顶层）+ `vendor/rockchip/chips/rk3506/Kconfig`（芯片） |
-| 改链接脚本 | `vendor/rockchip/boards/rk3506/hd-rk3506-evm/scripts/ld.script` |
+| 任务                    | 看这里                                                                               |
+| ----------------------- | ------------------------------------------------------------------------------------ |
+| 修改 NSH 配置           | `vendor/rockchip/boards/rk3506/hd-rk3506-evm/configs/nsh/defconfig`                |
+| 修改 U-Boot/Loader 流程 | `nand_firmware/parameter.txt` + `nand_firmware/pack_nand.sh`                     |
+| 修改 boot 流程          | `nuttx/arch/arm/src/armv7-a/arm_head.S`（慎改）                                    |
+| 修改中断                | `vendor/rockchip/chips/rk3506/rk3506_irq.c`                                        |
+| 添加外设                | `vendor/rockchip/boards/rk3506/hd-rk3506-evm/src/hd_rk3506_appinit.c`              |
+| 修改 Kconfig            | `nuttx/arch/arm/Kconfig`（顶层）+ `vendor/rockchip/chips/rk3506/Kconfig`（芯片） |
+| 改链接脚本              | `vendor/rockchip/boards/rk3506/hd-rk3506-evm/scripts/ld.script`                    |
 
 ---
 
 ## 6. 测试矩阵
 
-| 测试 | 命令 | 通过标准 |
-|------|------|----------|
-| 干净编译 | 见 3.1 | 退出码 0，无 warning |
-| 启动 NSH | 烧录后重启 | `nsh>` 提示符 |
-| 内存检测 | `nsh> free` | 显示 128MB |
-| 文件系统 | `nsh> mount` | 至少 `/etc` 挂载 |
-| 进程列表 | `nsh> ps` | 至少 NSH 进程 |
+| 测试     | 命令                   | 通过标准                          |
+| -------- | ---------------------- | --------------------------------- |
+| 干净编译 | 见 3.1                 | 退出码 0，无 warning              |
+| 启动 NSH | 烧录后重启             | `nsh>` 提示符                   |
+| 内存检测 | `nsh> free`          | ~27.5MB（RAM 缩到 0x1B80000，顶部 2MB 让给 rpmsg 共享窗，属预期）  |
+| 文件系统 | `nsh> mount`         | 至少 `/etc` 挂载                |
+| 进程列表 | `nsh> ps`            | 至少 NSH 进程                     |
 | LCD 显示 | `nsh> lvgl_homepage` | 屏幕显示 UI（需 menuconfig 启用） |
-| USB 设备 | 插 U 盘 | `/dev/sda` 出现 |
+| USB 设备 | 插 U 盘                | `/dev/sda` 出现                 |
 
 ---
 
