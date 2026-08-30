@@ -1,16 +1,17 @@
 #!/bin/bash
 #
-# openvela RK3506 NAND 固件打包脚本（v3 — SDK 官方流程）
+# openvela RK3506 NAND 固件打包脚本（v5 — A/B 双分区 OTA）
 #
-# 关键改进 (round 10)：
-#   1. 使用 SDK 官方的 afptool + rkImageMaker 工具链
-#   2. 使用 SDK 官方的 rk3506-package-file（包含 bootloader/parameter/uboot/boot/rootfs...）
-#   3. 使用 SDK 官方 parameter.txt 格式（parameter-evm-nand.txt）
-#   4. rkImageMaker 必须用 -RK3506 (字母) 参数，chip tag 由 IDB 提供
-#   5. 不再使用自定义的 system/vendor/data 分区
+# 关键改进 (v5)：
+#   1. parameter.txt 换成板级 A/B 布局 (boot_a/boot_b 双槽, 无 recovery/oem),
+#      板级文件优先于 SDK 的 parameter-evm-nand.txt (那是旧单 boot 布局)
+#   2. package-file 改为内置 A/B 版本: boot_a/boot_b 都写同一个 FIT 镜像,
+#      misc 写 8KB 零占位 (U-Boot 首次启动自动初始化 AvbABData -> 启动 boot_a)
+#   3. 其余沿用 SDK 官方 afptool + rkImageMaker 流程 (-RK350F chip tag)
 #
-# 烧录流程：
-#   BootROM -> MiniLoaderAll.bin (SPL) -> U-Boot FIT -> NuttX (boot.img)
+# A/B 启动链：
+#   BootROM -> MiniLoaderAll.bin (SPL) -> U-Boot (boot_fit, 读 misc@2048 的
+#   AvbABData 选槽) -> boot_a/boot_b 中的 NuttX FIT -> NuttX rcS `ota bootcheck`
 #
 set +e
 
@@ -32,10 +33,12 @@ AFP_TOOL="${AFP_TOOL:-$SDK_DIR/tools/linux/Linux_Pack_Firmware/rockdev/afptool}"
 RK_IMAGE_MAKER="${RK_IMAGE_MAKER:-$SDK_DIR/tools/linux/Linux_Pack_Firmware/rockdev/rkImageMaker}"
 LINUX_PACK_DIR="${LINUX_PACK_DIR:-$SDK_DIR/tools/linux/Linux_Pack_Firmware/rockdev}"
 
-# 板级 parameter.txt（来自 SDK 官方）
-PARAM_FILE="${PARAM_FILE:-$SDK_DIR/device/rockchip/rk3506/parameter-evm-nand.txt}"
+# 分区表: 环境变量 > 板级 A/B parameter.txt > SDK parameter-evm-nand.txt
+# (板级 v5 是 A/B 双槽布局; SDK 那份是旧单 boot 布局, 只在没有板级文件时兜底)
+BOARD_PARAM="$NUTTX_DIR/vendor/rockchip/boards/rk3506/hd-rk3506-evm/configs/parameter.txt"
+PARAM_FILE="${PARAM_FILE:-$BOARD_PARAM}"
 if [ ! -f "$PARAM_FILE" ]; then
-    PARAM_FILE="$NUTTX_DIR/vendor/rockchip/boards/rk3506/hd-rk3506-evm/configs/parameter.txt"
+    PARAM_FILE="$SDK_DIR/device/rockchip/rk3506/parameter-evm-nand.txt"
 fi
 
 echo "========================================"
@@ -64,6 +67,12 @@ if [ ! -x "$BOOT_MERGER" ] || [ ! -x "$AFP_TOOL" ] || [ ! -x "$RK_IMAGE_MAKER" ]
     echo "  AFP_TOOL        = $AFP_TOOL"
     echo "  RK_IMAGE_MAKER  = $RK_IMAGE_MAKER"
     exit 1
+fi
+
+# A/B 布局自检: 分区表必须定义 boot_a/boot_b, 否则 U-Boot 的 A/B 选择
+# 没有意义 (旧单 boot 布局会静默退化成单槽).
+if ! grep -q "boot_a" "$PARAM_FILE" || ! grep -q "boot_b" "$PARAM_FILE"; then
+    echo "警告: $PARAM_FILE 不含 boot_a/boot_b 分区 (旧布局), OTA A/B 不可用!"
 fi
 
 NUTTX_SIZE=$(stat -c %s "$NUTTX_BIN")
@@ -196,7 +205,7 @@ ITS_EOF
     ( cd "$OUTPUT_DIR" && "$MKIMAGE" -f nuttx.its -E -p 0x1000 boot.fit > /dev/null 2>&1 )
     if [ -f "$OUTPUT_DIR/boot.fit" ]; then
         FIT_SIZE=$(stat -c %s "$OUTPUT_DIR/boot.fit")
-        # boot 分区是 10MB, 镜像填充到 4MB (和 boot.img 一致)
+        # boot_a/boot_b 分区各 10MB, 镜像填充到 4MB (和 boot.img 一致)
         FIT_ALIGNED=$(( (FIT_SIZE + 0x3FF) & ~0x3FF ))
         [ "$FIT_ALIGNED" -lt 4194304 ] && FIT_ALIGNED=4194304
         [ "$FIT_ALIGNED" -ne "$FIT_SIZE" ] && truncate -s "$FIT_ALIGNED" "$OUTPUT_DIR/boot.fit"
@@ -254,50 +263,49 @@ echo "[5/7] 准备 rockdev 目录..."
 rm -rf "$WORK_DIR"
 mkdir -p "$WORK_DIR/Image"
 
-# 拷贝 SDK package-file（如果存在），否则用我们简化的版本
-if [ -f "$LINUX_PACK_DIR/rk3506-package-file" ]; then
-    cp -f "$LINUX_PACK_DIR/rk3506-package-file" "$WORK_DIR/package-file"
-    echo "  使用 SDK 官方 rk3506-package-file"
-else
-    cat > "$WORK_DIR/package-file" << EOF
+# A/B 双槽 package-file (内置, 不用 SDK 的 rk3506-package-file — 那份列的
+# boot/rootfs/recovery/oem 在 v5 布局里已不存在).  boot_a/boot_b 写同一个
+# FIT 镜像; misc 写 8KB 零占位, U-Boot 首次启动发现元数据非法后自动重置
+# 默认值并引导 boot_a.  userdata 不列 (全量刷不清用户 /data).
+cat > "$WORK_DIR/package-file" << EOF
 # NAME		Relative path
 package-file	package-file
 bootloader	Image/MiniLoaderAll.bin
 parameter	Image/parameter.txt
 uboot       Image/uboot.img
-boot        Image/boot.img
-rootfs      Image/rootfs.img
-recovery	Image/recovery.img
-oem			Image/oem.img
-userdata    Image/userdata.img
+boot_a      Image/boot_a.img
+boot_b      Image/boot_b.img
 misc		Image/misc.img
 backup		RESERVED
 EOF
-    echo "  使用内置 rk3506-package-file"
-fi
+echo "  使用内置 A/B package-file (boot_a/boot_b/misc, 无 rootfs/recovery/oem)"
 
 # 拷贝所有镜像
 cp -f "$OUTPUT_DIR/MiniLoaderAll.bin" "$WORK_DIR/Image/"
 cp -f "$PARAM_FILE" "$WORK_DIR/Image/parameter.txt"
 cp -f "$OUTPUT_DIR/uboot.img" "$WORK_DIR/Image/"
 
-# boot 分区内容: 优先用 boot.fit (FIT external-data 镜像)
+# boot_a/boot_b 内容: 优先用 boot.fit (FIT external-data 镜像)
 #   -> U-Boot 默认 bootcmd 的 boot_fit 能直接识别并自动引导 NuttX
 #      (FDT magic 0xd00dfeed + FDT<4KB + external data), 上电自动进 NSH.
+#      两个槽写同一镜像: 首刷后 boot_a 是默认启动槽, boot_b 作为 OTA 目标.
 # 回退: boot.uimg (legacy uImage, 需手动 bootm) 或 boot.img (raw bin, 需手动 go).
 if [ -f "$OUTPUT_DIR/boot.fit" ]; then
-    cp -f "$OUTPUT_DIR/boot.fit" "$WORK_DIR/Image/boot.img"
-    echo "  -> boot 分区使用 boot.fit (FIT, boot_fit 可自动引导)"
+    cp -f "$OUTPUT_DIR/boot.fit" "$WORK_DIR/Image/boot_a.img"
+    cp -f "$OUTPUT_DIR/boot.fit" "$WORK_DIR/Image/boot_b.img"
+    echo "  -> boot_a/boot_b 使用 boot.fit (FIT, boot_fit 可自动引导)"
 elif [ -f "$OUTPUT_DIR/boot.uimg" ]; then
-    cp -f "$OUTPUT_DIR/boot.uimg" "$WORK_DIR/Image/boot.img"
-    echo "  -> boot 分区使用 boot.uimg (uImage, 需 bootm)"
+    cp -f "$OUTPUT_DIR/boot.uimg" "$WORK_DIR/Image/boot_a.img"
+    cp -f "$OUTPUT_DIR/boot.uimg" "$WORK_DIR/Image/boot_b.img"
+    echo "  -> boot_a/boot_b 使用 boot.uimg (uImage, 需 bootm)"
 else
-    cp -f "$OUTPUT_DIR/boot.img" "$WORK_DIR/Image/"
-    echo "  -> boot 分区使用 boot.img (raw bin, 需 go)"
+    cp -f "$OUTPUT_DIR/boot.img" "$WORK_DIR/Image/boot_a.img"
+    cp -f "$OUTPUT_DIR/boot.img" "$WORK_DIR/Image/boot_b.img"
+    echo "  -> boot_a/boot_b 使用 boot.img (raw bin, 需 go)"
 fi
 
-# 占位镜像
-for img in rootfs recovery oem userdata misc; do
+# 占位镜像 (misc: BCB+AvbABData 区域, 全零 -> U-Boot 首启重置为默认槽位元数据)
+for img in misc; do
     if [ ! -f "$WORK_DIR/Image/${img}.img" ]; then
         dd if=/dev/zero of="$WORK_DIR/Image/${img}.img" bs=1K count=8 2>/dev/null
     fi
@@ -341,9 +349,14 @@ echo "  打包完成"
 echo "========================================"
 echo ""
 echo "  输出文件:"
-ls -lh "$OUTPUT_DIR"/update.img "$OUTPUT_DIR"/MiniLoaderAll.bin "$OUTPUT_DIR"/uboot.img "$OUTPUT_DIR"/boot.img "$OUTPUT_DIR"/parameter.txt 2>/dev/null
+ls -lh "$OUTPUT_DIR"/update.img "$OUTPUT_DIR"/MiniLoaderAll.bin "$OUTPUT_DIR"/uboot.img "$OUTPUT_DIR"/boot.img "$OUTPUT_DIR"/boot.fit 2>/dev/null
 echo ""
-echo "  烧录方法 (使用 Rockchip upgrade_tool):"
-echo "    1. 开发板进入 Loader 模式 (短接 RECOVERY + 插 USB)"
-echo "    2. sudo upgrade_tool uf $OUTPUT_DIR/update.img     # 烧录完整固件"
-echo "    3. 或单分区: sudo upgrade_tool di boot $OUTPUT_DIR/boot.img"
+echo "  A/B 烧录/升级方法 (Rockchip upgrade_tool):"
+echo "    1. 首刷/全量: 开发板进 Loader 模式 (短接 RECOVERY + 插 USB)"
+echo "       sudo upgrade_tool uf $OUTPUT_DIR/update.img"
+echo "       (boot_a/boot_b 同镜像, misc 清零 -> U-Boot 启动 boot_a)"
+echo "    2. 单槽升级 (板上 ota update 流程之外的手动方式):"
+echo "       sudo upgrade_tool di boot_b $OUTPUT_DIR/boot.fit && reboot 后 ota confirm"
+echo "    3. 板上 OTA (推荐): 拷贝 boot.fit 到 /data 后"
+echo "       nsh> ota update /data/boot.fit && nsh> reboot"
+echo "       新槽首启后 nsh> ota status 查看, nsh> ota confirm 固化"
