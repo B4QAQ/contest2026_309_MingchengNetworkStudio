@@ -11,8 +11,8 @@
 
 | 文件 | 大小 | 说明 |
 |------|------|------|
-| `openvela/nand_firmware/update.img` | 9,785,898 B (md5 b2945eaccbd8c3653a3a05b20f8c2270) | **全量刷机包 v8** (v7 + /data littlefs + U盘 FAT/LFN + rpmsgtest 超时修复) |
-| `openvela/cmake_out/hd-rk3506-evm_nsh/vela.bin` | 2,869,148 B | NuttX 固件 (含 /dev/ota + USB host 修复 + littlefs/FAT) |
+| `openvela/nand_firmware/update.img` | 9,785,898 B (md5 4defe2eb6941c9fbc4c89849d07e8525) | **全量刷机包 v8b** (v8 + rpmsg 缓存一致性根因修复 + USB 诊断超时转储) |
+| `openvela/cmake_out/hd-rk3506-evm_nsh/vela.bin` | 2,881,436 B | NuttX 固件 (含 /dev/ota + USB host 修复 + littlefs/FAT + USB INFO 跟踪) |
 | `openvela/nand_firmware/boot.fit` | 4,194,304 B | 单槽 FIT 镜像 (ota update 用它) |
 | `openvela/nand_firmware/parameter.txt` | — | v5 A/B 分区表 |
 
@@ -25,6 +25,8 @@
   - `7db9a88` board: /data 切换 dhara+littlefs, 修复 mount failed:25 (v8)
   - `8c745bd` board: defconfig 开 FAT/LFN, 补齐 U 盘挂载配置缺口 (v8)
   - `cb40931` board: rpmsgtest 阻塞读改 poll+超时, 端点改名避开 NS 冲突 (v8)
+  - `bcc74cc` fix(chip,board): rpmsg 共享窗改 uncached 映射 (根因) + USB/rpmsg 诊断 (v8b)
+  - `3ff636a` board: defconfig 开 DEBUG_USB_WARN/INFO 诊断跟踪 (v8b)
 - 主仓 dev-ai-contest-2026:
   - `5d6f269` pack: A/B 双分区 OTA 打包 (v5) + OTA 固件二进制
   - `ca08796` chore: gitignore .mcu_build
@@ -299,36 +301,64 @@ nsh> ls /tmp/usb                              # 看到 U 盘文件即通过
 - LED 绿 = U 盘拿到电, 不代表枚举完成; 以 `ls /dev` 出现 sda 为准。
 - 若 sda 不出现: DEBUG_USB_ERROR 已开, 看串口 ERROR 日志 (枚举失败会打原因)。
 
-### 7.3 rpmsgtest 卡死 — 阻塞读 bug 已修 + M0 诊断方法
+**v8b 实测新情况 (2026-08-30)**: U 盘枚举成功 (控制传输全过) 但 MSC 的
+bulk IN 挂死, /dev/sda 不出现; 拔线才报 `rk3506_chan_wait failed: -32`
+(-32 = 拔线中止, 非 STALL)。v8b 已加两层诊断:
+1. 驱动通道等待加 5s 超时 + 寄存器转储 (GINTSTS/HAINT/HCINT/HCCHAR/
+   HCTSIZ) — 设备沉默时不再永久挂死, 转储直接指出卡在哪一层
+   (XFRC 未处理 / NAK 静默 / 完全无中断)。
+2. defconfig 开 DEBUG_USB_WARN/INFO — 串口将出现每笔传输的
+   "ch%d start" / "rxflvl: ch%d INRECVD" / "ch%d done" 跟踪。
+**复测**: 插 U 盘等 ~10s, 把串口完整日志发我 (重点: CBW dump、
+ch 跟踪、超时转储)。
 
-**Bug**: 主循环用阻塞 `read()`, 超时判定写在 read **之后** — M0 不回包时
-read 永久阻塞, 10s 超时永远到不了。v8 改为 `poll()(剩余超时) + read`,
-超时真实生效, FAIL 会退出而不是挂死。
+### 7.3 rpmsgtest 卡死 — 阻塞读 bug 已修 + v8b 根因修复 (缓存一致性)
 
-**端点改名**: "rpmsg-mcu0-test" → "rpmsg-mcu0-echo"。原因: M0 demo 会用
-NS announce 公告 "rpmsg-mcu0-test", A7 收到后会自动建同名设备节点; 测试
-端点再用同名会撞节点 (路由靠 dst 0x4003, 名字无关)。
+**Bug 1 (v8 修)**: 主循环用阻塞 `read()`, 超时判定写在 read **之后** — M0 不回包时
+read 永久阻塞。v8 改为 `poll()(剩余超时) + read`, FAIL 会退出而不是挂死。
 
-**M0 诊断方法 ( rpmsgtest 仍 FAIL 时)**:
+**根因 (v8b 修): rpmsg 共享窗缓存一致性**。rk3506_start.c 的 MMU 身份映射把
+128MiB DDR 全部映射为 **cached**, rpmsg 窗 0x03c00000-0x03e00000 (vring0/vring1
++ 缓冲池) 也在其中。但 **Cortex-M0 没有 cache 且与 A7 无硬件一致性**: A7 写的
+vring 描述符 / avail-used idx 停在 A7 dcache 里, M0 从 DDR 读到的是陈旧数据;
+两边各持一套失同步的 vring 视图 → 数据面完全断流 (mailbox kick 走寄存器
+不受影响, 所以 M0 可能已完成 link-up 但收不到任何报文)。open-amp 用普通
+store/load 访问 vring 元数据, 必须靠映射本身保证一致性 → 窗口改映射
+**device/uncached** (`rk3506_start.c`: 60 段 cached + 2 段 device + 66 段 cached)。
+
+**端点改名**: "rpmsg-mcu0-test" → "rpmsg-mcu0-echo" (避开 M0 NS announce
+同名节点冲突; 路由靠 dst 0x4003)。
+
+**诊断 (rpmsgtest FAIL 时自动执行 vring 探针)** — 读共享窗 vring idx 判断断点:
+- `A7->M0 (avail used)`: avail≥1 = 我们的 ping 已入 vring1; used≥1 = M0 消费了 ping
+- `M0->A7 (avail used)`: avail 起点 64 (A7 播种 64 个 rx 缓冲), used≥1 = A7
+  收到过 M0 的消息 (NS announce) = M0 活着且完成握手
+- 判读: avail=1,used=0 → M0 未启动或卡 link-up 前; used≥1 但无回包 → 回包
+  通道断; 全 0 → 检查 rptun/SMC 启动链
+
+**A7/M0 协议链路静态核对结论** (rk3506_rptun.c 与 SDK rk3506-mcu test_demo
+/ rpmsg-lite RK3506 platform): 地址一致 (link_id 0x03, ept 0x4003); A7
+master init 尾部 set_status(DRIVER_OK)→notify→mailbox3 kick {CMD=0x03,
+DATA=RMSG} 释放 M0 link_state; A7 收包 isr 以 RPTUN_NOTIFY_ALL 上报,
+rproc_virtio_notified(RSC_NOTIFY_ID_ANY) 两 vring 全处理。
+
+### 7.4 curl "卡死" / DHCP — 先确认网络通不通
+
+**curl 现象解读**: "只有 Ctrl+C 才显示结果" 最可能是 curl 卡在 TCP 连接
+(网络没通时 SYN 一直重试, NuttX connect 无超时), Ctrl+C 中止后 curl 打印
+错误信息 — 那个"结果"是报错。先按顺序确认网络:
+
 ```bash
-nsh> ls /dev | grep rpmsg     # rpmsgtest FAIL 后看
+nsh> ifconfig eth0           # 等 40s 再看! 有 inet addr 才算 DHCP 成功
+nsh> ping 192.168.10.1       # 先 ping 网关 (IP 以 ifconfig 为准)
+nsh> curl -v --connect-timeout 8 http://192.168.10.1/     # 局域网 http, 无 DNS 无 TLS
+nsh> curl -v --connect-timeout 8 http://example.com/      # 再试公网 (DNS+TLS)
 ```
-- 出现 `/dev/rpmsg-rpmsg-mcu0-test` (NS 公告创建) → **M0 活着且完成链路握手**,
-  问题在 A7 发送/接收路径, 回来告诉我日志。
-- 没有 → M0 大概率卡在 `rpmsg_lite_wait_for_link_up` (没收到 A7 的 mailbox3
-  kick) 或没启动。A7 侧协议链路已静态核对一致 (set_status→notify→kick,
-  mbox isr→RPTUN_NOTIFY_ALL→两 vring 全处理), 需进一步硬件级排查。
-
-### 7.4 DHCP "不启动" — 大概率只是没等够
-
-netcfg 开机即跑 DHCP, 但 **GMAC link up 晚于 nsh> 出现** (驱动 5s 链路等待 +
-交换机 STP 10-30s), DHCP 客户端重试窗 ~30s (RETRIES=10)。你贴的日志里
-`DRaddr 10.0.0.1/Mask 255.255.255.0` 是 netinit 默认值, 不代表 DHCP 死了。
-
-**复测**: 开机后**等 40 秒**再 `ifconfig eth0`; 串口应出现
-`netcfg: dhcp on eth0 ok`。若打 `failed`: 看看同口普通设备能否上网 (STP/
-服务器侧问题), 或把日志发我。手动补跑 `ifconfig eth0 dhcp` 注意: 重复
-DISCOVER 服务器常不应答, 30s 后才报错, 不算死锁。
+- ifconfig 无 IP: DHCP 没完成 — 看 `netcfg: dhcp on eth0 ok/failed` 是否
+  出现在串口 (GMAC link up 晚于 nsh>, DHCP 重试窗 ~30s, 开机要等够 40s)。
+- ping 网关通但 curl 公网卡 → DNS/TLS 问题, 把 -v 输出发我。
+- curl 全部超时报错但网络通 → 服务器/防火墙侧问题。
+- **--connect-timeout 8** 让 curl 自己退出, 不再需要 Ctrl+C。
 
 ### 7.5 slot_b 元数据数字异常 — 重刷后自然消除
 
