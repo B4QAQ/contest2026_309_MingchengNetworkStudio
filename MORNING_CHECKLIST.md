@@ -11,8 +11,8 @@
 
 | 文件 | 大小 | 说明 |
 |------|------|------|
-| `openvela/nand_firmware/update.img` | 9,777,706 B | **全量刷机包** (boot_a/boot_b 双槽 + misc) |
-| `openvela/cmake_out/hd-rk3506-evm_nsh/vela.bin` | 2,782,320 B | NuttX 固件 (含 /dev/ota) |
+| `openvela/nand_firmware/update.img` | 9,785,898 B (md5 9378f69fd46b83b4daa7e5e10e29ffa5) | **全量刷机包 v7** (v6 A/B U-Boot + USB 修复 + /data 偏移更正) |
+| `openvela/cmake_out/hd-rk3506-evm_nsh/vela.bin` | 2,803,612 B | NuttX 固件 (含 /dev/ota + USB host 修复) |
 | `openvela/nand_firmware/boot.fit` | 4,194,304 B | 单槽 FIT 镜像 (ota update 用它) |
 | `openvela/nand_firmware/parameter.txt` | — | v5 A/B 分区表 |
 
@@ -20,11 +20,15 @@
 - vendor/rockchip 独立仓 (openvela-rk3506-scripting 分支):
   - `5d41b78` chip: SPI NAND A/B OTA 槽位管理器 /dev/ota
   - `341927d` board: OTA NSH 命令 + A/B 分区表 + bootcheck 开机钩子
+  - `fb92df9` fix(chip): USB host 根因修复 — conn/drvr 接口重叠 + 切换 OTG1 + INNO PHY 上电 (v7)
+  - `215a262` fix(board): /data userdata 起始扇区修正 0x14800→0x10800 (v7)
 - 主仓 dev-ai-contest-2026:
   - `5d6f269` pack: A/B 双分区 OTA 打包 (v5) + OTA 固件二进制
   - `ca08796` chore: gitignore .mcu_build
 
 ⚠️ **分区布局变了 (v5)**, 与旧镜像不兼容, 必须 `upgrade_tool uf update.img` 全量刷, 不能只刷 boot。
+⚠️ **v7 的 /data 起始扇区更正为 0x10800** (boot_b 结束处, 33MiB; v6 误写 0x14800)。
+旧 /data 数据丢失, 首启 rcS 会自动 mksmartfs, 无需手动干预。
 
 ---
 
@@ -37,7 +41,7 @@
 | misc | 11MB | 2MB | BCB(偏移0) + **AvbABData(偏移2048)** 槽位元数据 |
 | boot_a | 13MB | 10MB | NuttX FIT — 槽 A |
 | boot_b | 23MB | 10MB | NuttX FIT — 槽 B |
-| userdata | 41MB | 223MB | /data (dhara+SmartFS) |
+| userdata | 33MB | 223MB | /data (dhara+SmartFS)。**v7 更正: 起始 0x10800 扇区 = 33MiB (boot_b 结束处); v6 误写 0x14800=41MiB 留了 8MiB 空洞** |
 
 recovery/system/vendor/oem/data 已删除 (无 Android 恢复流程, 不需要)。
 
@@ -128,17 +132,62 @@ nsh> ota boot-a      # 也可手动随时切回 A
 
 ---
 
-## 3. 隐藏 bug 修复 (重要, 请知悉)
+## 3. v7 USB host 修复验收 (2026-08-30 追加)
 
-**/data 分区位置错误 (潜伏 bug, 本轮修复)**
+**v6 首刷崩溃根因** (`rk3506_usbhost.c:2136` DEBUGASSERT, usbhost_waiter 线程):
+三层叠加 bug, 已全部修复:
+1. **接口结构重叠 (真正的崩溃元凶)**: 驱动把整个 `rk3506_usbhost_s` 强转成
+   `usbhost_connection_s`, 但结构体第一个成员是 `usbhost_driver_s` —
+   `conn->wait` 别名到 `drvr->ep0configure`。waiter 线程首次 CONN_WAIT 就带着
+   垃圾参数调进 ep0configure 触发断言 (崩溃发生在任何 USB 连接事件之前)。
+2. **初始化了错误的控制器**: 板上 host 口是 OTG1 (USB-A, DTS `dr_mode=host`),
+   旧代码 host 初始化 OTG0 — 那是 Type-C 烧录口 (`dr_mode=peripheral`)。
+3. **INNO USB2 PHY 从未上电**: POR 后 GRF phy_sus=0x1d1 (suspend), UTMI 线态
+   全是垃圾 → 即使接了真设备也枚举不到/读到垃圾描述符。
+
+已验证 (二进制级): conn.wait/enumerate 指向真正的 rk3506_wait/rk3506_enumerate;
+drvr->ep0configure 增加 maxpacketsize>64 clamp + funcaddr 校验 (垃圾枚举优雅失败
+不再 panic); DEBUG_USB_ERROR 打开 (USB 错误日志此前全部静默)。
+
+### 3.1 U 盘验收 (重要: 插对口!)
+
+- **插板边缘的 USB-A 大口 (host 口)**, ❌ 不是 Type-C (那是烧录口, 对面是 PC)。
+- 开机日志预期: `USB Host (OTG1, USB-A) initialized, waiter started`
+- 插 U 盘:
+  ```bash
+  nsh> ls /dev          # 预期出现 sda
+  nsh> mkdir -p /tmp/usb && mount -t vfat /dev/sda /tmp/usb
+  nsh> ls /tmp/usb      # 看到 U 盘文件即通过
+  ```
+- 若枚举失败: 现在 DEBUG_USB_ERROR 已开, 会打 `ERROR: ...` 具体
+  原因 (此前崩溃前一行日志都没有就是因为这个被静默)。
+
+### 3.2 GT911 触摸 -110: 属预期, 不是 bug
+
+你确认过台架上面板没接。SDK 里 480×800 ST7701S 面板的 dtsi 本来就没有
+gt911 节点。product ID 读 -110 ETIMEDOUT 忽略即可; 接上面板后仍失败再查。
+
+### 3.3 已知限制 (记录在案, 不阻塞验收)
+
+- **USB 集线器不可用**: defconfig 的 USBHOST_HUB=y 此前被 Kconfig 依赖
+  静默丢弃, v7 修复 select 后真正生效, 但驱动未实现 asynch 接口 —
+  插 USB hub 会崩。U 盘/HID 直插走同步路径, 不受影响。hub 支持要做的话
+  需补驱动 asynch 实现 (按 3.6 走)。
+
+---
+
+
+
+**/data 分区位置错误 (潜伏 bug, 修复 + v7 更正)**
 
 - 旧 bringup 把擦块索引当 mtd_partition 的页索引传, 导致 /data 实际映射在
   **3.7MB 处的 384KB** (落在 uboot 分区内!), 而不是 229MB 的 userdata 区。
 - 之前没炸是因为: 每次全量刷 update.img 都会重写 uboot 分区, 把 dhara
   格式化造成的破坏"治愈"了; 且 U-Boot 已在内存里运行, 当次不受影响。
-- 本轮修复后 /data 正确映射 41MB..256MB。**旧 /data 数据会丢** (旧数据
-  本来就写在 uboot 分区里, 不是真的 userdata), 首次启动 rcS 检测 mount
-  失败会自动 mksmartfs 重新格式化, 无需手动干预。KVDB 需重新配置。
+- v6 修复页单位后起始扇区误写 0x14800 (41MB); **v7 更正为 0x10800 (33MB,
+  boot_b 结束处, 与 parameter.txt 一致)**。旧 /data 数据会丢, 首次启动
+  rcS 检测 mount 失败会自动 mksmartfs 重新格式化, 无需手动干预。
+  KVDB 需重新配置。
 - 顺带: mtd.h 里 mtd_partition 的 "firstblock - offset in bytes" 注释是
   过时的 (实际单位 = geo.blocksize 块), 代码里已写注释说明。
 
