@@ -1,0 +1,200 @@
+# 隔夜工作验收清单 (2026-02-28 夜间 → 早晨)
+
+> 本轮目标: "将所有 Vela 支持的能力都进行适配" 收尾 — **A/B 双分区 OTA** 全套实现。
+> 上一轮已交付: CAN / WDT / SARADC / PWM / AMP rpmsg (A7 侧 rptun + M0 启动 + rpmsgtest)。
+> 本轮新增: OTA A/B 双槽 + ota NSH 命令 + FSPI 并发锁 + /data 分区位置修复。
+> 音频 / RTC / WiFi-BT 按你的决定跳过。
+
+---
+
+## 0. 产物
+
+| 文件 | 大小 | 说明 |
+|------|------|------|
+| `openvela/nand_firmware/update.img` | 9,777,706 B | **全量刷机包** (boot_a/boot_b 双槽 + misc) |
+| `openvela/cmake_out/hd-rk3506-evm_nsh/vela.bin` | 2,782,320 B | NuttX 固件 (含 /dev/ota) |
+| `openvela/nand_firmware/boot.fit` | 4,194,304 B | 单槽 FIT 镜像 (ota update 用它) |
+| `openvela/nand_firmware/parameter.txt` | — | v5 A/B 分区表 |
+
+提交记录:
+- vendor/rockchip 独立仓 (openvela-rk3506-scripting 分支):
+  - `5d41b78` chip: SPI NAND A/B OTA 槽位管理器 /dev/ota
+  - `341927d` board: OTA NSH 命令 + A/B 分区表 + bootcheck 开机钩子
+- 主仓 dev-ai-contest-2026:
+  - `5d6f269` pack: A/B 双分区 OTA 打包 (v5) + OTA 固件二进制
+  - `ca08796` chore: gitignore .mcu_build
+
+⚠️ **分区布局变了 (v5)**, 与旧镜像不兼容, 必须 `upgrade_tool uf update.img` 全量刷, 不能只刷 boot。
+
+---
+
+## 1. 新分区表 (v5, A/B)
+
+| 分区 | 偏移 | 大小 | 用途 |
+|------|------|------|------|
+| vnvm | 1MB | 2MB | NV (MAC 等, 不变) |
+| uboot | 3MB | 8MB | U-Boot (不变) |
+| misc | 11MB | 2MB | BCB(偏移0) + **AvbABData(偏移2048)** 槽位元数据 |
+| boot_a | 13MB | 10MB | NuttX FIT — 槽 A |
+| boot_b | 23MB | 10MB | NuttX FIT — 槽 B |
+| userdata | 41MB | 223MB | /data (dhara+SmartFS) |
+
+recovery/system/vendor/oem/data 已删除 (无 Android 恢复流程, 不需要)。
+
+---
+
+## 2. OTA A/B 验收步骤 (本轮核心)
+
+### 2.1 首刷后基础检查
+
+```bash
+nsh> ota status
+```
+预期 (misc 全零 → U-Boot 首次启动自动写默认元数据):
+```
+OTA: metadata valid, last_boot=a
+  slot_a: priority=15 tries=7 successful=1 fit=yes   ← 首刷后可能是 0 tries 烧掉几次, 见 2.2
+  slot_b: priority=14 tries=7 successful=0 fit=yes
+  active: slot_a (U-Boot would boot this now)
+```
+(首刷时 boot_a/boot_b 烧的是同一个镜像, 所以两个槽 fit=yes 是正常的。)
+
+### 2.2 ota confirm (固化当前槽)
+
+每次新槽首次启动后, rcS 的 `ota bootcheck` 会烧掉一个 try; 7 次内不
+`ota confirm` 就会回滚。健康检查完就固化:
+
+```bash
+nsh> ota bootcheck   # 手动跑一次看行为: "slot_x not confirmed yet, try burned (N left)"
+nsh> ota confirm     # → "slot_x marked successful (permanent)"
+nsh> ota status      # successful=1, 之后 bootcheck 不再烧 try
+```
+
+### 2.3 完整 OTA 升级流程 (核心验收)
+
+前提: 新固件镜像 `boot.fit` 放到 /data (U 盘或网络):
+
+```bash
+# 方式 A: U 盘
+mkdir -p /tmp/usb && mount -t vfat /dev/sda /tmp/usb
+cp /tmp/usb/boot.fit /data/boot.fit
+
+# 方式 B: 网络 (TFTP/HTTP 皆可)
+curl -o /data/boot.fit http://192.168.10.100:8000/boot.fit
+
+# 执行 A/B 升级 (自动写"非当前槽", 全量擦除→流式写→逐字节回读校验→激活)
+nsh> ota update /data/boot.fit
+```
+预期输出顺序:
+1. `ota: writing /data/boot.fit (4194304 bytes) to slot_b` (当前 A → 写 B)
+2. `ota: wrote 4194304 bytes into slot_b`
+3. `ota: readback verify OK (4194304 bytes)` ← 逐字节校验必须 OK
+4. `ota: slot_b activated (priority 15, tries 7). Run reboot...`
+
+```bash
+nsh> reboot
+# 重启后:
+nsh> ota status    # active: slot_b, successful=0
+nsh> ota confirm   # 固化 B; 若不固化, 7 次重启后自动回滚到 A
+```
+
+### 2.4 回滚验收 (可选但建议)
+
+刷一个"故意坏的"镜像验证保护逻辑 — 注意: 镜像内容损坏会被**回读校验**拦下
+(不会 activate), 所以回滚测试要模拟"镜像合法但启动后异常":
+
+```bash
+# 让新槽跑着但不 confirm, 连续重启 7 次 (或手动 ota boot-a 切回旧槽)
+# 第 7 次启动时 bootcheck 输出: "ROLLBACK: slot_b tries exhausted,
+#   marked unbootable; slot_a restored as boot target"
+nsh> ota boot-a      # 也可手动随时切回 A
+```
+
+### 2.5 ota 命令速查
+
+| 命令 | 作用 |
+|------|------|
+| `ota status` | 元数据 + 两槽状态 + 当前 active |
+| `ota bootcheck` | 烧 try / 耗尽回滚 (rcS 每次开机自动跑) |
+| `ota confirm` | 当前槽 successful=1 (永久) |
+| `ota boot-a` / `ota boot-b` | 手动切换启动槽 (校验 FIT magic) |
+| `ota update <file> [-f]` | 擦非活动槽 → 写 → 校验 → 激活; `-f` 强制 (不推荐) |
+
+---
+
+## 3. 隐藏 bug 修复 (重要, 请知悉)
+
+**/data 分区位置错误 (潜伏 bug, 本轮修复)**
+
+- 旧 bringup 把擦块索引当 mtd_partition 的页索引传, 导致 /data 实际映射在
+  **3.7MB 处的 384KB** (落在 uboot 分区内!), 而不是 229MB 的 userdata 区。
+- 之前没炸是因为: 每次全量刷 update.img 都会重写 uboot 分区, 把 dhara
+  格式化造成的破坏"治愈"了; 且 U-Boot 已在内存里运行, 当次不受影响。
+- 本轮修复后 /data 正确映射 41MB..256MB。**旧 /data 数据会丢** (旧数据
+  本来就写在 uboot 分区里, 不是真的 userdata), 首次启动 rcS 检测 mount
+  失败会自动 mksmartfs 重新格式化, 无需手动干预。KVDB 需重新配置。
+- 顺带: mtd.h 里 mtd_partition 的 "firstblock - offset in bytes" 注释是
+  过时的 (实际单位 = geo.blocksize 块), 代码里已写注释说明。
+
+**FSPI 并发锁**
+
+- 修复前多个 MTD 分区消费者 (/data 的 dhara 与 OTA 的 misc/boot_a/boot_b)
+  可并发进 FSPI 控制器, 操作交错会损坏传输。已在 `rk3506_fspi_nand_op`
+  加互斥锁串行化。
+
+---
+
+## 4. OTA 设计决策记录 (3.6 要求, 夜间自主决策, 早晨可否决)
+
+| 决策 | 选择 | 理由 / 备选 |
+|------|------|------------|
+| OTA 路线 | 完整 A/B 双槽 (你已拍板, "做完整") | 备选单槽+recovery 已否决 |
+| 元数据格式 | U-Boot 原生 AvbABData @ misc+2048 | 与 prebuilt U-Boot (CONFIG_ANDROID_AB) 兼容, 不改 U-Boot; 备选自造格式需换 U-Boot |
+| try 递减 | 用户态 rcS `ota bootcheck` | U-Boot boot_fit 只选槽不递减 (反汇编+源码确认); 备选改 U-Boot 违反"不重编 U-Boot"现状 |
+| 回滚语义 | tries 耗尽 → 槽 priority=0, 另一槽恢复 15/7 | 与 Android bootctl 语义一致 |
+| 确认方式 | 手动 `ota confirm` | 自动确认会失去重试保护; 你可否决为 rcS 里 health-check 后自动 confirm |
+| 写入保护 | 拒写 active 槽 + 回读校验通过才 activate + -f 强制 | 防呆优先 |
+| 坏块策略 | 槽窗口含 factory bad block → 拒绝更新 (-EIO) | U-Boot 线性读 FIT, 无法跳块; 运行期写坏 → 中止, 槽保持未激活 (安全) |
+| misc 擦除粒度 | 只擦 misc 块 0, 回写页 0-1 | 保住 BCB (偏移 0) 与其他元数据 |
+
+**已接受的残余风险** (你睡前确认过 brick 风险):
+1. rcS 跑 bootcheck **之前** kernel panic → try 不递减 → 新槽无限重试
+   (不会伤旧槽数据, 手动 `ota boot-a` 或重刷可救)。
+2. `upgrade_tool uf` 后 misc 被清零 → U-Boot 重置默认元数据 → 启动 boot_a
+   (boot_a 始终保持 confirm 过的镜像即可视为"出厂槽")。
+3. U-Boot 的 `android_slotsufix=_x` bootargs 对 NuttX 无效 (仅 U-Boot 内部用)。
+
+---
+
+## 5. 上轮遗留验收提醒 (未变, 再贴一遍)
+
+1. **CAN 引脚映射**: J9 CAN0/CAN1 ↔ RM_IO 的对应关系需你确认 (我按
+   pinctrl dtsi + 原理图推的, 万用表量一下 TX 引脚有无波形即可)。
+2. **AMP link-id 0x03**: M0 demo 的 MASTER_ID=0/REMOTE_ID=3; 内核 dtsi
+   里 0x02 是 CPU2 场景, 不要混淆。`nsh> rpmsgtest` 期望
+   `Rockchip rpmsg linux test!` 回包。
+3. **M0 启动路径是本夜唯一未经硬件验证的 AMP 环节** (NuttX SMC
+   0x82000028 + 内嵌固件; 预编译 U-Boot 无 ROCKCHIP_AMP, 嵌入 TEE 有
+   SIP handler, 静态确认可走)。若 rpmsgtest FAIL: `ota` 无关, 先看
+   `dmesg` 式日志里 "M0 booted" 是否出现。
+4. **RAM 缩到 27.5MB** (CONFIG_RAM_SIZE=0x1B80000): `free` 显示 ~27.5MB
+   是预期的 (顶部 2MB 让给 rpmsg 共享窗 0x03c00000)。
+5. **无 RTC**: 时间来自 NTP (`ntpcstart` 已在 rcS); `date` 验证。
+6. `wtdog` 看门狗 / `cansend can0` CAN 回环 / `pwm` / `adc` 命令不变。
+
+---
+
+## 6. 快速冒烟序列 (建议顺序)
+
+```bash
+nsh> free && ps && mount          # 基线
+nsh> ota status                   # A/B 元数据 (本轮核心)
+nsh> ota confirm                  # 固化
+nsh> rpmsgtest                    # AMP 链路
+nsh> candump can0 &  cansend can0 123#DEADBEEF   # CAN 回环
+nsh> date                         # NTP 时间
+# U 盘拷 boot.fit 后:
+nsh> ota update /data/boot.fit && nsh> reboot
+# 重启后:
+nsh> ota status && nsh> ota confirm
+```
