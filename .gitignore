@@ -9,6 +9,8 @@ HD-RK3506-EVM/
 OpenVelaDocs/
 RK3506G2/
 lfs/
+uboot_build/
+openvela/nand_firmware/v4_backup_update.img
 nanopi_m4_rk3399/
 openvela/.repo/
 openvela/cmake_out/
