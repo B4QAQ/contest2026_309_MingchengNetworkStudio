@@ -12,3 +12,4 @@ lfs/
 nanopi_m4_rk3399/
 openvela/.repo/
 openvela/cmake_out/
+openvela/nand_firmware/.mcu_build/
