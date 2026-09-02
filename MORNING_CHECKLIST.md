@@ -11,7 +11,7 @@
 
 | 文件 | 大小 | 说明 |
 |------|------|------|
-| `openvela/nand_firmware/update.img` | 9,785,898 B (md5 1819415189aeecadb7e8e2ae60956bc0) | **全量刷机包 v8e** (v8d + U 盘挂载点 ENOTDIR 根因修复 + rpmsg mbox 时钟门控根因修复 + 邮箱探针 v2) |
+| `openvela/nand_firmware/update.img` | 9,785,898 B (md5 e1bd5cac11b41f90ebb0de60aa1291a3) | **全量刷机包 v8e** (原始 curl 8c2a01f3e + U 盘挂载点 ENOTDIR 根因修复 + rpmsg mbox 时钟门控根因修复 + 邮箱探针 v2) |
 | `openvela/cmake_out/hd-rk3506-evm_nsh/vela.bin` | 2,885,628 B | NuttX 固件 (含 /dev/ota + USB host v8c+v8d + littlefs/FAT + 驱动日志全量可见) |
 | `openvela/nand_firmware/boot.fit` | 4,194,304 B | 单槽 FIT 镜像 (ota update 用它) |
 | `openvela/nand_firmware/parameter.txt` | — | v5 A/B 分区表 |
@@ -33,8 +33,9 @@
   - `f4e7c4b` board: rpmsgtest 超时探针加邮箱寄存器转储, 定位 M0 kick 链断点 (v8d)
   - `1d25a3d` fix(chip): rk3506_rptun mbox 时钟门控写反, PCLK_MAILBOX 被关死致 rpmsg 全链路失效 (v8e)
   - `0f757ef` board: U 盘挂载点改 /mnt/usb (mount ENOTDIR 根因) + rpmsgtest 邮箱探针 v2 (v8e)
-  - external/curl/curl `f1a6fef21` fix: mbedtls_close 仅在 close_notify 已到达时读 (v8c)
-  - external/curl/curl `9a4601247` test: P1-P6 无缓冲定位探针 (v8d)
+  - external/curl/curl `f1a6fef21` fix: mbedtls_close 仅在 close_notify 已到达时读 (v8c) — **v8e 已按用户要求回退**
+  - external/curl/curl `9a4601247` test: P1-P6 无缓冲定位探针 (v8d) — **v8e 已按用户要求回退**
+  - external/curl/curl **v8e: 回退到仓库原始版本 `8c2a01f3e`**（curl 源码不再有任何本地改动）
 - 主仓 dev-ai-contest-2026:
   - `5d6f269` pack: A/B 双分区 OTA 打包 (v5) + OTA 固件二进制
   - `ca08796` chore: gitignore .mcu_build
@@ -382,7 +383,10 @@ master init 尾部 set_status(DRIVER_OK)→notify→mailbox3 kick {CMD=0x03,
 DATA=RMSG} 释放 M0 link_state; A7 收包 isr 以 RPTUN_NOTIFY_ALL 上报,
 rproc_virtio_notified(RSC_NOTIFY_ID_ANY) 两 vring 全处理。
 
-### 7.4 curl HTTPS "卡住" — 根因: mbedtls_close 阻塞读 (v8c 已修)
+### 7.4 curl HTTPS "卡住" — 根因: mbedtls_close 阻塞读 (v8c 已修; v8e 已回退原始 curl)
+
+> **v8e 注意**: 用户要求 curl 使用仓库原始版本, 外部 curl 源码仓已回退到
+> `8c2a01f3e`, 本节的 mbedtls_close 修复已不在固件中, 仅作历史记录。
 
 **现象 (v8b 板上实测)**: `curl https://stdl.b4qaq.cn/fwtb/info.json` —
 响应体其实早已完整收到, 但 curl 不退出、无输出; Ctrl+C 终止后 JSON
@@ -499,7 +503,10 @@ rpmsgtest: mbox probe MBOX3 A2B (inten=0x???????? status=0x????????)
 **复测 (v8d 固件)**: `rpmsgtest`, 把 vring probe + **mbox probe 两段
 完整日志**发我。
 
-### 8.3 curl: v8c 修复后仍挂 → 加 P1-P6 定位探针 (v8d)
+### 8.3 curl: v8c 修复后仍挂 → 加 P1-P6 定位探针 (v8d; v8e 已回退原始 curl)
+
+> **v8e 注意**: 用户要求 curl 使用仓库原始版本, P1-P6 探针与 mbedtls_close
+> 修复一并回退到 `8c2a01f3e`, 本节仅作历史记录。
 
 **v8c 板上数据**: `-v` 完整走完（握手、200、body、
 "Connection #0 ... left intact"）后仍挂, Ctrl+C 才 flush。注意 v8c
