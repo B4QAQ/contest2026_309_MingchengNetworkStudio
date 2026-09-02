@@ -11,7 +11,7 @@
 
 | 文件 | 大小 | 说明 |
 |------|------|------|
-| `openvela/nand_firmware/update.img` | 9,785,898 B (md5 7e47a533526777eb1ba7adc7d4230132) | **全量刷机包 v8d** (v8c + DWC2 RX FIFO 根因修复 + rpmsg 邮箱探针 + curl P1-P6 定位探针) |
+| `openvela/nand_firmware/update.img` | 9,785,898 B (md5 1819415189aeecadb7e8e2ae60956bc0) | **全量刷机包 v8e** (v8d + U 盘挂载点 ENOTDIR 根因修复 + rpmsg mbox 时钟门控根因修复 + 邮箱探针 v2) |
 | `openvela/cmake_out/hd-rk3506-evm_nsh/vela.bin` | 2,885,628 B | NuttX 固件 (含 /dev/ota + USB host v8c+v8d + littlefs/FAT + 驱动日志全量可见) |
 | `openvela/nand_firmware/boot.fit` | 4,194,304 B | 单槽 FIT 镜像 (ota update 用它) |
 | `openvela/nand_firmware/parameter.txt` | — | v5 A/B 分区表 |
@@ -31,6 +31,8 @@
   - `dbb8b4b` fix(chip,board): 驱动日志宏误用 INPUT 子系统 ierr/iwarn/iinfo, 全部静默 (v8c)
   - `97b96d1` fix(chip): DWC2 RX FIFO 128 卡死 HS bulk, 提到 SDK 值 512/256/224 (v8d)
   - `f4e7c4b` board: rpmsgtest 超时探针加邮箱寄存器转储, 定位 M0 kick 链断点 (v8d)
+  - `1d25a3d` fix(chip): rk3506_rptun mbox 时钟门控写反, PCLK_MAILBOX 被关死致 rpmsg 全链路失效 (v8e)
+  - `0f757ef` board: U 盘挂载点改 /mnt/usb (mount ENOTDIR 根因) + rpmsgtest 邮箱探针 v2 (v8e)
   - external/curl/curl `f1a6fef21` fix: mbedtls_close 仅在 close_notify 已到达时读 (v8c)
   - external/curl/curl `9a4601247` test: P1-P6 无缓冲定位探针 (v8d)
 - 主仓 dev-ai-contest-2026:
@@ -527,3 +529,70 @@ mbedtls_close 的 read（已防护）和最后的 close() 系统调用外无 I/O
 - P1 没出现 → 问题不在 cleanup, 在别处（再分析）
 
 ---
+
+## 9. v8e 修复 (追加): U 盘 mount failed:20 根因 + rpmsg mbox 时钟门控根因
+
+### 9.1 U 盘 `mount failed: 20` — 根因: 挂载点不能在挂载点之下 (v8e 已修)
+
+**v8d 板上数据**: `mount -t vfat /dev/sda /tmp/usb` → `mount failed: 20`
+(ENOTDIR), 但 sda 已出现（v8d FIFO 修复让 MSC bulk 通了）。
+
+**根因 (NuttX fs_mount.c 源码级)**: `mount()` 先 `inode_find(target)`,
+而 `_inode_search()` 对"路径下落到某个挂载点时"直接停在那个 MOUNTPT
+inode 返回 OK（relpath=剩余段）。`/tmp` 已被 bringup 挂了 tmpfs, 所以
+`inode_find("/tmp/usb")` 命中的是 **/tmp 挂载点 inode**; 而
+`FSNODEFLAG_TYPE_MOUNTPT(3) != FSNODEFLAG_TYPE_PSEUDODIR(0)`,
+fs_mount.c 的 `!INODE_IS_PSEUDODIR(mountpt_inode)` 于是返回 **-ENOTDIR**。
+即: **NuttX mount() 不能在另一文件系统的挂载点之下再创建挂载点**。
+rcS 里的 `mkdir /tmp/usb` 建的是 tmpfs 目录, mount 根本不看它。
+
+**修复**: 挂载点改到伪根下 `/mnt/usb`（`mount -t vfat /dev/sda /mnt/usb`）。
+mount 对不存在的目标会用 `inode_reserve_path()` 在伪根里自动创建, 无需
+mkdir。注意 `/data/usb` 也不行（/data 是 littlefs 挂载点, 同样 ENOTDIR）。
+
+**复测 (v8e 固件)**: 插 U 盘 → `ls /dev` 见 sda → `mount -t vfat
+/dev/sda /mnt/usb` → `ls /mnt/usb` 看到文件即通过。
+
+### 9.2 rpmsg 一直 FAIL — 真根因: A7 把 PCLK_MAILBOX 写门控了 (v8e 已修)
+
+**v8d 板上数据**: mbox 探针全零（MBOX3/MBOX0 的 A2B INTEN/STATUS、
+B2A STATUS 全 0）, 但 boot 日志有 "M0 firmware booted" = M0 已释放。
+A7 侧源码级核对过 kick 协议、V2 语义、M0 HAL 使能写法、回调链, 全部
+一致——就是找不到 M0 不响应的原因。
+
+**根因 (v8e 定位)**: `rk3506_mbox_init()` 原来有一行"开 PCLK_MAILBOX":
+```c
+putreg32(RK3506_MBOX_WE(13) | (1u << 13), CRU + 0x800 + 6*4);
+```
+问题在 **Rockchip 门控是 SET_TO_DISABLE 语义**: 内核 `GFLAGS =
+CLK_GATE_HIWORD_MASK | CLK_GATE_SET_TO_DISABLE`（写 1 = 关时钟, 写 0
+带 WE = 开时钟）; 本仓 SPI1 驱动 `rk3506_spi1_clock_init()` 也是
+`putreg32(gates << 16, reg)`（数据位=0 才开门）。所以上面这行写的是
+**关时钟**的值——**v8b 起每次 boot A7 都亲手把 PCLK_MAILBOX 关死了**:
+之后所有 mbox 寄存器读=0、写被丢, v8d 探针全零、kick 永不落地、M0
+永远收不到; `mbox_send` 的忙等读 A2B_STATUS 恒 0 于是从不等待、静默
+"成功", 假象完整。
+
+**修复 (rk3506_rptun.c)**: 写 0 带 WE 开 PCLK_MAILBOX + PCLK_INTMUX
+(CON6 bits13,14), mcu_boot 里补开 PCLK_UART4 + SCLK_UART4 (CON11
+bits8,13) 给 M0 调试串口。
+
+**探针 v2 (v8e)**: INTEN 可能只写不可读, 判读改以 **CRU 门控原始值 +
+MBOX3 A2B_CMD/DATA 回读**为准:
+```
+rpmsgtest: mbox probe MBOX3 A2B (inten=.. status=.. cmd=0x? data=0x?)
+           B2A (status=..)
+rpmsgtest: mbox probe MBOX0 A2B (inten=..) B2A (status=..)
+           CRU gates CON5=0x? CON6=0x? CON11=0x?
+```
+判读:
+| 现象 | 结论 |
+|------|------|
+| CON6 bit13=1 | PCLK_MAILBOX 仍被门控（v8b-v8d 的 bug）|
+| MBOX3 A2B_CMD=0x03 且 DATA=0x524d5347 | A7 kick 落地 |
+| A2B_STATUS bit0=1（且 kick 落地）| M0 的 mailbox/INTMUX 中断路径断 |
+| A2B_STATUS bit0=0（且 kick 落地）| M0 ISR 已消费, 但无 ns_announce → M0 卡 rpmsg 内部, 接 M0 串口 GPIO1_C2/C3 @1500000 |
+
+**复测 (v8e 固件)**: `rpmsgtest`, 把 vring probe + mbox probe v2 两段
+完整日志发我。若 CON6 bit13=1 说明还有别的代码在关它; 若 kick 落地
+且被消费但仍 FAIL, 则需要接 M0 调试串口看 M0 侧日志。
