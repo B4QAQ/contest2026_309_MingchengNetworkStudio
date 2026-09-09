@@ -11,7 +11,7 @@
 
 | 文件 | 大小 | 说明 |
 |------|------|------|
-| `openvela/nand_firmware/update.img` | 9,785,898 B (md5 e1bd5cac11b41f90ebb0de60aa1291a3) | **全量刷机包 v8e** (原始 curl 8c2a01f3e + U 盘挂载点 ENOTDIR 根因修复 + rpmsg mbox 时钟门控根因修复 + 邮箱探针 v2) |
+| `openvela/nand_firmware/update.img` | 9,785,898 B (md5 bb6290b113e2272961c6863a325cb73c) | **全量刷机包 v8f** (原始 curl 8c2a01f3e + U 盘挂载点 ENOTDIR 修复 + rpmsg mbox 时钟门控修复 + **kick 丢边沿竞态修复(握手)** + 邮箱探针 v2) |
 | `openvela/cmake_out/hd-rk3506-evm_nsh/vela.bin` | 2,885,628 B | NuttX 固件 (含 /dev/ota + USB host v8c+v8d + littlefs/FAT + 驱动日志全量可见) |
 | `openvela/nand_firmware/boot.fit` | 4,194,304 B | 单槽 FIT 镜像 (ota update 用它) |
 | `openvela/nand_firmware/parameter.txt` | — | v5 A/B 分区表 |
@@ -33,6 +33,7 @@
   - `f4e7c4b` board: rpmsgtest 超时探针加邮箱寄存器转储, 定位 M0 kick 链断点 (v8d)
   - `1d25a3d` fix(chip): rk3506_rptun mbox 时钟门控写反, PCLK_MAILBOX 被关死致 rpmsg 全链路失效 (v8e)
   - `0f757ef` board: U 盘挂载点改 /mnt/usb (mount ENOTDIR 根因) + rpmsgtest 邮箱探针 v2 (v8e)
+  - `3e2e503` fix(chip): mcu_boot 等 M0 武装邮箱接收后再放行 kick, 修复丢边沿竞态 (v8f)
   - external/curl/curl `f1a6fef21` fix: mbedtls_close 仅在 close_notify 已到达时读 (v8c) — **v8e 已按用户要求回退**
   - external/curl/curl `9a4601247` test: P1-P6 无缓冲定位探针 (v8d) — **v8e 已按用户要求回退**
   - external/curl/curl **v8e: 回退到仓库原始版本 `8c2a01f3e`**（curl 源码不再有任何本地改动）
@@ -603,3 +604,60 @@ rpmsgtest: mbox probe MBOX0 A2B (inten=..) B2A (status=..)
 **复测 (v8e 固件)**: `rpmsgtest`, 把 vring probe + mbox probe v2 两段
 完整日志发我。若 CON6 bit13=1 说明还有别的代码在关它; 若 kick 落地
 且被消费但仍 FAIL, 则需要接 M0 调试串口看 M0 侧日志。
+
+## 10. v8f 修复: rpmsg kick 丢边沿竞态 (v8e 板上数据定位)
+
+### 10.1 v8e 板上实测: 时钟修复生效, M0 活着, kick 落地, 但仍不通
+
+```
+CRU gates CON5=0x00000000 CON6=0x00000000 CON11=0x00000000
+MBOX3 A2B (inten=0x00000101 status=0x00000001
+           cmd=0x00000003 data=0x524d5347) B2A (status=0x00000000)
+MBOX0 A2B (inten=0x00000101) B2A (status=0x00000000)
+vring A7->M0 (avail=1 used=0)  M0->A7 (avail=64 used=0)
+```
+逐条判读:
+| 观测 | 结论 |
+|------|------|
+| CON6 bit13/14 = 0 | **v8e 时钟门控修复生效**, mailbox/intmux pclk 已开 |
+| **MBOX0 A2B_INTEN=0x101** | A7 侧代码对 MBOX0 只写 B2A_STATUS/B2A_INTEN, **从不写 A2B_INTEN** → 这个值全部是 M0 写的 ⇒ **M0 活着且执行到了 rpmsg/mailbox init** |
+| MBOX3 A2B_CMD=0x03 DATA=0x524d5347 | **kick 物理落地**（v8d 时寄存器全 0） |
+| MBOX3 A2B_STATUS bit0=1 | kick 永久 pending, **M0 的 ISR 从未运行** |
+| B2A_STATUS 全 0 | M0 从未反向 kick |
+
+### 10.2 根因: A7 kick 早于 M0 武装接收中断, 上升沿丢失
+
+时序证据（boot 日志紧邻两行）:
+```
+rk3506_mcu_boot: M0 firmware booted at 0xfff84000 (27120 bytes)
+rk3506_mbox_send: ERROR: mailbox3 A2B busy, kick dropped (cmd=0x03)
+```
+A7 在释放 M0 后**几微秒**就发出 DRIVER_OK kick, 而 M0 此刻还在跑
+HAL_Init / UART / INTMUX / rpmsg init, `A2B_INTEN bit0` 仍是 0。
+A2B_STATUS 的 0→1 边沿在**接收中断被屏蔽**时发生 → M0 收不到 IRQ →
+不会 w1c 清状态 → 之后每一发 kick 都被 `A2B busy` 拒绝（那两条
+"kick dropped" 是修复后的**正确行为**, 不是新 bug）→ rpmsg 永远
+link 不上。
+
+### 10.3 修复 (方案 A, 用户拍板): mcu_boot 就绪握手
+
+`rk3506_mcu_boot()` 释放 M0 后轮询 `MBOX3.A2B_INTEN bit0`
+（该位**只有 M0 会写**, A7 只写 bit8, 因此是天然的"远端接收已武装"
+握手信号）, 最多 1 s / 每 1 ms 一轮; 就绪后 w1c 清一次 A2B_STATUS,
+保证首发 kick 产生干净的 0→1 边沿。`mcu_boot` 由 rptun `start` 调用,
+**早于框架首次 notify**, 所以覆盖所有 kick, 且不存在重复投递。
+超时打 ERROR 后继续, 不影响其他功能。
+
+### 10.4 复测 (v8f 固件)
+
+正常应看到 boot 日志多出一行:
+```
+rk3506_mcu_boot: M0 mailbox rx armed after N ms
+```
+（N 通常个位数 ms）且**不再出现** "kick dropped"。然后 `rpmsgtest`
+应当 PASS。若仍 FAIL, 看新的探针判读:
+- `M0 rx IS armed ... yet the kick is STILL PENDING` → 握手成功但 M0
+  的 **INTMUX/NVIC 投递通路**断, 其 ISR 不运行 → 必须接 M0 UART4
+  (GPIO1_C2/C3 @1500000, 该串口时钟 v8e 已打开) 看 M0 侧日志
+- `M0 never armed its rx (A2B_INTEN bit0=0)` + boot 里有 "rx not armed
+  after 1000 ms" → M0 没起来或卡在 rpmsg init 之前
