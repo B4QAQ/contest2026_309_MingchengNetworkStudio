@@ -11,7 +11,7 @@
 
 | 文件 | 大小 | 说明 |
 |------|------|------|
-| `openvela/nand_firmware/update.img` | 9,785,898 B (md5 3837fc10ce05c8a131e6dc3592ab29ae) | **全量刷机包 v8g** (原始 curl 8c2a01f3e + U 盘挂载点 ENOTDIR 修复 + rpmsg mbox 时钟门控修复 + kick 丢边沿竞态修复(握手) + **M0 时基时钟 STCLK_M0/PCLK_TIMER/CLK_TIMER0_CH5 补开 + 执行金丝雀** + 邮箱探针 v3) |
+| `openvela/nand_firmware/update.img` | 9,785,898 B (md5 d4c903a465753dcb4a03c7970a5aa5b0) | **全量刷机包 v8h** (原始 curl 8c2a01f3e + U 盘挂载点 ENOTDIR 修复(**已验收**) + rpmsg mbox 时钟门控修复 + kick 竞态握手 + M0 时基时钟补开 + 执行金丝雀 + **INTMUX 就绪握手 + 向量表/INTMUX/复位/隔离探针** + 邮箱探针 v4) |
 | `openvela/cmake_out/hd-rk3506-evm_nsh/vela.bin` | 2,889,724 B | NuttX 固件 (含 /dev/ota + USB host v8c+v8d **已板上验收** + littlefs/FAT + 驱动日志全量可见) |
 | `openvela/nand_firmware/boot.fit` | 4,194,304 B | 单槽 FIT 镜像 (ota update 用它) |
 | `openvela/nand_firmware/parameter.txt` | — | v5 A/B 分区表 |
@@ -34,7 +34,8 @@
   - `1d25a3d` fix(chip): rk3506_rptun mbox 时钟门控写反, PCLK_MAILBOX 被关死致 rpmsg 全链路失效 (v8e)
   - `0f757ef` board: U 盘挂载点改 /mnt/usb (mount ENOTDIR 根因) + rpmsgtest 邮箱探针 v2 (v8e)
   - `3e2e503` fix(chip): mcu_boot 等 M0 武装邮箱接收后再放行 kick, 修复丢边沿竞态 (v8f)
-  - `48aa2fc` fix(chip): 补开 M0 时基时钟 STCLK_M0/PCLK_TIMER/CLK_TIMER0_CH5 (v8g) — **真根因**
+  - `48aa2fc` fix(chip): 补开 M0 时基时钟 STCLK_M0/PCLK_TIMER/CLK_TIMER0_CH5 (v8g)
+  - `ae86676` fix(chip): 用 INTMUX 使能位做 M0 就绪握手, 补向量表/INTMUX/复位探针 (v8h)
   - external/curl/curl `f1a6fef21` fix: mbedtls_close 仅在 close_notify 已到达时读 (v8c) — **v8e 已按用户要求回退**
   - external/curl/curl `9a4601247` test: P1-P6 无缓冲定位探针 (v8d) — **v8e 已按用户要求回退**
   - external/curl/curl **v8e: 回退到仓库原始版本 `8c2a01f3e`**（curl 源码不再有任何本地改动）
@@ -747,3 +748,71 @@ N 应该是**真实的个位/十位 ms**（不再是 0），且**不再有 kick 
 | `M0 ran (canary dirtied N/768 words) but never armed its mailbox rx` | M0 跑过但死在 rpmsg init 之前 | 接 M0 UART4 GPIO1_C2/C3 @1500000 看它停在哪 |
 | `armed after N ms` 但 rpmsgtest 仍 FAIL 且探针报 `M0 rx IS armed ... STILL PENDING` | M0 已武装但 INTMUX/NVIC 投递断 | 查 M0 侧 INTMUX/NVIC |
 | 探针报 `the M0 has NO TIMEBASE` | 时基门控没写进去 | 查 CON6/CON8 写入是否被覆盖 |
+
+---
+
+## 12. v8h 复测（rpmsg 决定性取数）
+
+**镜像**：`update.img` md5 `d4c903a465753dcb4a03c7970a5aa5b0`（9,785,898 B），分区布局未变但**建议仍全量刷**。
+
+### 12.1 先纠正一条我自己的错误结论
+
+v8g 我把"缺 M0 时基时钟"写成了**真根因**，这是过头了。逐行走 M0 初始化路径后：
+
+| 我当时的假设 | 源码事实 |
+|---|---|
+| `HAL_Init()` 会因为没有时基而死循环 | `hal_base.c:162-183` 四步全是纯写寄存器，**无任何轮询** |
+| `HAL_TIMER_SysTimerInit()` 会等计数器 | `hal_timer.c:87-100` 读一次 CONTROLREG、写 LOAD_COUNT、置 ENABLE，不等 |
+| `HAL_UART_Init()`/打印会用 HAL 延时 | `hal_uart.c:331-367` 无延时；`SerialOutChar` 轮询的是 UART 自己的 `USR` |
+| SysTick 开着所以要 `STCLK_M0` | SysTick 只由 `HAL_SystemCoreClockUpdate()` 初始化（`hal_base.c:192-200`），`main.c` 从不调用 |
+| assert 可能死循环 | `HAL_ASSERT` 在本工程是**空宏**（无 `HAL_ASSERT_ON`） |
+| — | demo 里**第一个 `HAL_DelayMs()` 在 link-up 之后**（`test_demo.c:278-280`） |
+
+⇒ **v8g 该修（否则 link-up 后第一次 `HAL_DelayMs(1)` 必死循环），但它解释不了"M0 一条指令没执行"。根因仍未定。**
+
+### 12.2 v8h 的取数逻辑：三分判读，不需要接串口
+
+mailbox 中断是**电平敏感**的（`rk3502.dtsi:803` `IRQ_TYPE_LEVEL_HIGH`；`rockchip-mailbox.c:255-291` 是典型"共享电平线"写法：STATUS 为 0 就 `IRQ_NONE`，处理完末尾 w1c 撤电平）。因此 `A2B_STATUS b0=1` 与 `A2B_INTEN b0=1` **长期共存在电平语义下不可能是"丢边沿"**，只剩三种可能，v8h 用两个新寄存器把它们分开：
+
+| `0xfff840bc`（IRQ31 向量槽） | `0xff2a000c` bit21（INTMUX EN） | 结论与下一步 |
+|---|---|---|
+| `0x00000000` | 任意 | **M0 零执行，或地址 0 对它不可写**。后者更阴险：Cortex-M0 无 VTOR，向量表固定在 0，镜像里 64 个 IRQ 向量是 `.space (64*4)` 全零（`start_rk3506_mcu.S:41`），靠 `hal_nvic.c:55` 运行时写 `(uint32_t*)0x0U` 填。写不进 ⇒ 首个 IRQ 跳 0（thumb 位=0）⇒ HardFault ⇒ 现象与"ISR 从不运行"一模一样。查 SMC `MCU_CODE_START_ADDR` 重映射与 `HRESETN_M0`(CON05 b10) |
+| 非 0（应为奇数=thumb） | `0` | M0 跑起来了，但**死在 `HAL_MBOX_RegisterClient()` 与 `HAL_INTMUX_EnableIRQ()` 之间**（`rpmsg_platform.c:178..295`）。这时才值得接 M0 UART4 GPIO1_C2/C3 @1500000 |
+| 非 0 | `1` | 整条 mailbox→INTMUX→NVIC 已武装。再看 `0xff2a008c` bit21：为 0 ⇒ 电平根本没进 INTMUX（查 `PCLK_INTMUX` CON6 b14、`PRESETN_INTMUX`/`PRESETN_MAILBOX` CON6 b14/13、`MCU_ISO_CON1/3`）；为 1 而仍不进 ISR ⇒ 回到向量表/NVIC |
+
+### 12.3 握手信号升级（为什么 INTMUX 位严格优于 `A2B_INTEN bit0`）
+
+`MAILBOX_BB_3_IRQn` = 117 + `NUM_INTERRUPTS`(32) = 149（`soc.h:271`），经 `hal_intmux.c:323-328` 换算＝INTMUX 输入 117 ＝ group 3 / bit 21 → `INTMUX_OUT3` → M0 NVIC IRQ 31。
+
+- **唯一写者**是 M0 自己的 `rpmsg_platform.c:295`，而那是 `rpmsg_lite_remote_init()` 的**最后一步**
+- A7 / u-boot / OP-TEE / Linux **全 SDK 无一处访问 INTMUX**（只有 `clk-rk3506.c:359` 的 `PCLK_INTMUX` 门控）
+- **POR 值为 0** ⇒ 不可能像 `A2B_INTEN bit0` 那样是上次 boot 的陈旧值
+- 位置在 `HAL_MBOX_RegisterClient()` 之后，而后者的 `MBOX_ChanEnable()`（`hal_mbox.c:74-84`）**先 w1c 清 `A2B_STATUS` 再开 INTEN** —— 这才是真正吃掉早到 kick 的地方，也证明 v8f 的握手方向没错
+
+实现为两阶段且**不可能回退到 v8f 之下**：先等 `A2B_INTEN bit0`（≤1s），再等 INTMUX bit21（+100ms）；后者超时只 `_warn` 并继续，以防 INTMUX 万一在 A7 侧读不到反而变差。
+
+### 12.4 复测步骤
+
+```
+# 1) 全量刷 v8h 后，看 bringup 里 mcu_boot 的这一行（三种之一）
+#    成功：  M0 ready after N ms: mailbox rx armed and INTMUX group3 bit21 set M ms later
+#    警告：  WARNING: M0 armed its mailbox rx after N ms but INTMUX group3 bit21 stayed clear ...
+#    失败：  ERROR: M0 never executed a single instruction: canary ... AND IRQ31 vector slot still 0
+#            ERROR: M0 dirtied N/768 canary words but its IRQ31 vector slot is STILL 0 ...
+#            ERROR: M0 is alive (canary N/768 dirty, IRQ31 vector 0x...) but never armed ...
+nsh> rpmsgtest
+# 2) 重点抄这一行的全部字段
+#    rpmsgtest: M0 delivery path INTMUX EN=0x... FLAG=0x... bit21 en=? pending=? |
+#               IRQ31 vector=0x... | resets CON0=.. CON5=.. CON6=.. | iso CON1=.. CON3=..
+```
+
+`iso CON1/CON3` 全 SDK 无写者、复位值未知，这次只是**采数**，不做判断。
+
+### 12.5 顺带记录的 SDK 事实（省下将来重查）
+
+- **不存在 mailbox 中断路由寄存器**：GRF `SOC_CON13`（`0xff288034`）的 `*_INTR_MCU_SEL` / `*_INTR_INTMUX_SEL` 只覆盖 GPIO1_1/2/3 与 TIMER1CH5/DSMC；8 根 mailbox 线（AP_0..3→GIC SPI 138+x，BB_0..3→INTMUX 输入 114+x）是**硬连线**
+- `MAILBOX_8MUX1_IRQn`（M0 NVIC #22）全 SDK 无任何使用，也找不到选择它的寄存器，**不要当备用通路**
+- A 核唯一"不配 M0 就永远收不到中断"的寄存器是 `PMU_INT_MASK_CON` `0xff90000c` = `0x00060004`（`glb_int_mask_mcu=0`），我们已照抄；`rk3506.h` 里没有 PMU 这一块的位定义，位序无法交叉验证
+- CON5 bit11 = `SWCLKTCK_M0_EN`（`rk3506.h:18671`），u-boot 开它有依据（v8g 注释里"查无此物"的说法已改）
+- SDK 出厂 `main.c:10` 的 `TEST_DEMO` 和 `test_demo.c:13` 的 `RPMSG_LINUX_TEST` **都是注释掉的**；我们的 blob 已手工打开（`strings` 可见 `rpmsg-mcu0-test`）
+- `amp.its:20` 的 `udelay = <1000000>` ⇒ 厂商在放行 M0 后等整整 1 秒，与我们 1s 轮询上限同量级
