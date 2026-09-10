@@ -11,8 +11,8 @@
 
 | 文件 | 大小 | 说明 |
 |------|------|------|
-| `openvela/nand_firmware/update.img` | 9,785,898 B (md5 bb6290b113e2272961c6863a325cb73c) | **全量刷机包 v8f** (原始 curl 8c2a01f3e + U 盘挂载点 ENOTDIR 修复 + rpmsg mbox 时钟门控修复 + **kick 丢边沿竞态修复(握手)** + 邮箱探针 v2) |
-| `openvela/cmake_out/hd-rk3506-evm_nsh/vela.bin` | 2,885,628 B | NuttX 固件 (含 /dev/ota + USB host v8c+v8d + littlefs/FAT + 驱动日志全量可见) |
+| `openvela/nand_firmware/update.img` | 9,785,898 B (md5 3837fc10ce05c8a131e6dc3592ab29ae) | **全量刷机包 v8g** (原始 curl 8c2a01f3e + U 盘挂载点 ENOTDIR 修复 + rpmsg mbox 时钟门控修复 + kick 丢边沿竞态修复(握手) + **M0 时基时钟 STCLK_M0/PCLK_TIMER/CLK_TIMER0_CH5 补开 + 执行金丝雀** + 邮箱探针 v3) |
+| `openvela/cmake_out/hd-rk3506-evm_nsh/vela.bin` | 2,889,724 B | NuttX 固件 (含 /dev/ota + USB host v8c+v8d **已板上验收** + littlefs/FAT + 驱动日志全量可见) |
 | `openvela/nand_firmware/boot.fit` | 4,194,304 B | 单槽 FIT 镜像 (ota update 用它) |
 | `openvela/nand_firmware/parameter.txt` | — | v5 A/B 分区表 |
 
@@ -34,6 +34,7 @@
   - `1d25a3d` fix(chip): rk3506_rptun mbox 时钟门控写反, PCLK_MAILBOX 被关死致 rpmsg 全链路失效 (v8e)
   - `0f757ef` board: U 盘挂载点改 /mnt/usb (mount ENOTDIR 根因) + rpmsgtest 邮箱探针 v2 (v8e)
   - `3e2e503` fix(chip): mcu_boot 等 M0 武装邮箱接收后再放行 kick, 修复丢边沿竞态 (v8f)
+  - `48aa2fc` fix(chip): 补开 M0 时基时钟 STCLK_M0/PCLK_TIMER/CLK_TIMER0_CH5 (v8g) — **真根因**
   - external/curl/curl `f1a6fef21` fix: mbedtls_close 仅在 close_notify 已到达时读 (v8c) — **v8e 已按用户要求回退**
   - external/curl/curl `9a4601247` test: P1-P6 无缓冲定位探针 (v8d) — **v8e 已按用户要求回退**
   - external/curl/curl **v8e: 回退到仓库原始版本 `8c2a01f3e`**（curl 源码不再有任何本地改动）
@@ -661,3 +662,88 @@ rk3506_mcu_boot: M0 mailbox rx armed after N ms
   (GPIO1_C2/C3 @1500000, 该串口时钟 v8e 已打开) 看 M0 侧日志
 - `M0 never armed its rx (A2B_INTEN bit0=0)` + boot 里有 "rx not armed
   after 1000 ms" → M0 没起来或卡在 rpmsg init 之前
+
+## 11. v8g 真根因: M0 从来没有时基, 卡死在 HAL_Init()
+
+### 11.1 v8f 板上数据把问题逼到了死角
+
+```
+rk3506_mcu_boot: M0 mailbox rx armed after 0 ms      ← 不可能
+rk3506_mbox_send: ERROR: mailbox3 A2B busy, kick dropped   x3
+MBOX3 A2B (inten=0x101 status=0x1 cmd=0x03 data=0x524d5347)
+```
+- `armed after 0 ms`: M0 不可能在 0ms 内跑完 HAL/UART/INTMUX/rpmsg init
+  → `A2B_INTEN bit0=1` 是**上次遗留的陈旧值**（mailbox 不随 A7 温复位而
+  复位），v8f 的握手实际是空操作
+- 3 条 dropped = kick #1 静默成功(mbox_send 只在失败时打日志) + #2#3#4
+  被拒；清 A2B_STATUS 那步是有效的（内核 rockchip-mailbox.c:176 证明
+  STATUS 是纯 w1c，不需要 HIWORD）
+- ⇒ **我们其实从来没有任何证据证明 M0 执行过一条指令**
+
+### 11.2 逐项源码核对（把所有"我们可能配错"的假设一一排除）
+
+| 检查项 | 结论 |
+|---|---|
+| A7 启动序列 | 与 u-boot `fit_standalone_release()` **逐寄存器一致**：CRU_BASE 0xff9a0000 + GATE_CON5 0x814、0x0c000000、GRF 0xff288090=0x0bcd3d80、PMU 0xff90000c=0x00060004 ✓ |
+| link-id / mailbox | `test_demo.c` MASTER_ID=0 / REMOTE_ID=3 → link 0x03 + mailbox3 ✓ 我们是对的 |
+| 共享内存窗 | 工程链接脚本 `hal/project/rk3506-mcu/GCC/gcc_bus_m0.ld`: `LINUX_RPMSG ORIGIN=0x03c00000 LENGTH=0x200000` ✓ 与我们一致（CMSIS 模板里的 0xa0000000 被工程覆盖，虚警） |
+| 加载地址 | `Image/amp.its` `load = <0xfff84000>` ✓ |
+| 固件内容 | blob 里含 `rpmsg-mcu0-test` / `Rockchip rpmsg linux test!` → RPMSG_LINUX_TEST 确实编进去了 ✓ |
+| M0 SRAM | dtsi `mcu_reserved 0xfff80000 + 0xc000`，镜像在 0xfff84000 → 可用 32KiB，与链接脚本 RAM=0x8000 / SP=0x7c00 吻合 ✓ |
+
+### 11.3 真根因: dtsi 列的 6 个 AMP 时钟, 我们只开了 4 个
+
+`rk3506-amp.dtsi` 的 `rockchip_amp` 节点**明确列出 A 侧必须替 AMP 核
+使能的时钟**：
+```
+clocks = <&cru HCLK_M0>, <&cru STCLK_M0>,
+         <&cru SCLK_UART4>, <&cru PCLK_UART4>,
+         <&cru PCLK_TIMER>, <&cru CLK_TIMER0_CH5>;
+```
+Linux 由 `rockchip-amp` 驱动把这 6 个全部 `clk_prepare_enable`；
+**u-boot 只开 HCLK_M0**（`CLKGATE_CON5=0x0c000000`，即 bit10；bit11 在
+`clk-rk3506.c` 里查无此物）。我们照抄了 u-boot，于是漏了三个：
+
+| 时钟 | 门控位 (clk-rk3506.c) | v8f 前 |
+|---|---|---|
+| `PCLK_TIMER` | `CLKGATE_CON(6)` bit 2 | ❌ 未开 |
+| `CLK_TIMER0_CH5` | `CLKGATE_CON(6)` bit 8 | ❌ 未开 |
+| `STCLK_M0` | `CLKGATE_CON(8)` bit 2 | ❌ 未开 |
+
+而 M0 的 `hal_conf.h` 里 **`SYS_TIMER` 就是 `TIMER5`**（=
+CLK_TIMER0_CH5）且 **`HAL_SYSTICK_MODULE_ENABLED`** 打开（SysTick 时钟
+= STCLK_M0）；`main.c` 第一件事就是 `HAL_Init()`。**时基三个时钟全被
+门控 → 计数器永不前进 → 任何 HAL 延时都是死循环 → M0 卡死在
+HAL_Init()，压根到不了 rpmsg init。**
+
+这一条同时解释 v8f 全部三个现象：INTEN bit0 是陈旧值(M0 从未写过)、
+A2B_STATUS 永久 pending(ISR 从不运行)、vring 从不被消费。
+
+### 11.4 v8g 改了什么
+
+1. `mcu_boot` 步骤 1b：`CLKGATE_CON(6) <- WE(2)|WE(8)`、
+   `CLKGATE_CON(8) <- WE(2)`（SET_TO_DISABLE，写 WE + 数据 0 = 开门），
+   在拷贝固件和放行 M0**之前**完成
+2. 握手去污染：放行 M0 前先 `WE(0)` 清掉 MBOX3/MBOX0 的 A2B_INTEN bit0，
+   于是"armed after N ms"只可能是 M0 本次启动写的
+3. **执行金丝雀**：M0 偏移 `0x7000..0x7c00`（3KiB，bss/heap + 下行栈，
+   远高于 0x69f0 镜像末尾）填 `0xa5a5a5a5`，握手超时后回读
+4. 探针 v3：加 `CON8`/`SEL23` 转储 + M0 时基三位判读
+
+### 11.5 复测 (v8g, md5 3837fc10ce05c8a131e6dc3592ab29ae)
+
+预期 boot 日志：
+```
+rk3506_mcu_boot: M0 firmware booted at 0xfff84000 (27120 bytes)
+rk3506_mcu_boot: M0 mailbox rx armed after N ms (M0 is alive this boot)
+```
+N 应该是**真实的个位/十位 ms**（不再是 0），且**不再有 kick dropped**，
+然后 `rpmsgtest` 应 PASS。
+
+若仍失败，日志现在能直接二分，不需要接串口：
+| 日志 | 含义 | 下一步 |
+|---|---|---|
+| `M0 never executed a single instruction: canary ... fully intact` | M0 一条指令都没跑 | 查 SMC code-start 重映射 / M0 核门控 |
+| `M0 ran (canary dirtied N/768 words) but never armed its mailbox rx` | M0 跑过但死在 rpmsg init 之前 | 接 M0 UART4 GPIO1_C2/C3 @1500000 看它停在哪 |
+| `armed after N ms` 但 rpmsgtest 仍 FAIL 且探针报 `M0 rx IS armed ... STILL PENDING` | M0 已武装但 INTMUX/NVIC 投递断 | 查 M0 侧 INTMUX/NVIC |
+| 探针报 `the M0 has NO TIMEBASE` | 时基门控没写进去 | 查 CON6/CON8 写入是否被覆盖 |
