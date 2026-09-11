@@ -11,7 +11,7 @@
 
 | 文件 | 大小 | 说明 |
 |------|------|------|
-| `openvela/nand_firmware/update.img` | 9,785,898 B (md5 d4c903a465753dcb4a03c7970a5aa5b0) | **全量刷机包 v8h** (原始 curl 8c2a01f3e + U 盘挂载点 ENOTDIR 修复(**已验收**) + rpmsg mbox 时钟门控修复 + kick 竞态握手 + M0 时基时钟补开 + 执行金丝雀 + **INTMUX 就绪握手 + 向量表/INTMUX/复位/隔离探针** + 邮箱探针 v4) |
+| `openvela/nand_firmware/update.img` | 9,785,898 B (md5 601f6b7f2a6413474415a9b247bf61f1) | **全量刷机包 v8i** (原始 curl 8c2a01f3e + U 盘 **已验收** + rpmsg **已验收**(mbox 时钟 + kick 竞态握手 + M0 时基时钟 + INTMUX 就绪握手) + **全部调试日志已按用户要求清除**：USB INFO/WARN 关、GMAC0 全静默、rpmsg 探针块与 info/warn 删净) |
 | `openvela/cmake_out/hd-rk3506-evm_nsh/vela.bin` | 2,889,724 B | NuttX 固件 (含 /dev/ota + USB host v8c+v8d **已板上验收** + littlefs/FAT + 驱动日志全量可见) |
 | `openvela/nand_firmware/boot.fit` | 4,194,304 B | 单槽 FIT 镜像 (ota update 用它) |
 | `openvela/nand_firmware/parameter.txt` | — | v5 A/B 分区表 |
@@ -35,7 +35,10 @@
   - `0f757ef` board: U 盘挂载点改 /mnt/usb (mount ENOTDIR 根因) + rpmsgtest 邮箱探针 v2 (v8e)
   - `3e2e503` fix(chip): mcu_boot 等 M0 武装邮箱接收后再放行 kick, 修复丢边沿竞态 (v8f)
   - `48aa2fc` fix(chip): 补开 M0 时基时钟 STCLK_M0/PCLK_TIMER/CLK_TIMER0_CH5 (v8g)
-  - `ae86676` fix(chip): 用 INTMUX 使能位做 M0 就绪握手, 补向量表/INTMUX/复位探针 (v8h)
+  - `ae86676` fix(chip): 用 INTMUX 使能位做 M0 就绪握手, 补向量表/INTMUX/复位探针 (v8h) — **rpmsg 板上 PASS**
+  - `2577148` build(board): 关掉 USB DEBUG_INFO/WARN, 只保留 ERROR (v8i)
+  - `afed146` chip(gmac0): 按用户要求移除全部网络日志 (v8i)
+  - `9f3f034` chip(rptun)+board: 删除 rpmsg 探针块与 info/warn 日志, 保留 err (v8i)
   - external/curl/curl `f1a6fef21` fix: mbedtls_close 仅在 close_notify 已到达时读 (v8c) — **v8e 已按用户要求回退**
   - external/curl/curl `9a4601247` test: P1-P6 无缓冲定位探针 (v8d) — **v8e 已按用户要求回退**
   - external/curl/curl **v8e: 回退到仓库原始版本 `8c2a01f3e`**（curl 源码不再有任何本地改动）
@@ -816,3 +819,61 @@ nsh> rpmsgtest
 - CON5 bit11 = `SWCLKTCK_M0_EN`（`rk3506.h:18671`），u-boot 开它有依据（v8g 注释里"查无此物"的说法已改）
 - SDK 出厂 `main.c:10` 的 `TEST_DEMO` 和 `test_demo.c:13` 的 `RPMSG_LINUX_TEST` **都是注释掉的**；我们的 blob 已手工打开（`strings` 可见 `rpmsg-mcu0-test`）
 - `amp.its:20` 的 `udelay = <1000000>` ⇒ 厂商在放行 M0 后等整整 1 秒，与我们 1s 轮询上限同量级
+
+---
+
+## 13. v8i 日志清理（rpmsg 已验收后收尾）
+
+**镜像**：`update.img` md5 `601f6b7f2a6413474415a9b247bf61f1`（9,785,898 B）；`vela.bin` 2,889,724 → **2,877,436 B**（-12,288）。
+
+### 13.1 rpmsg 结案
+
+```
+nsh> rpmsgtest
+rpmsgtest: endpoint /dev/rpmsg-rpmsg-mcu0-echo (src 0x30 -> dst 0x4003) created, sending payload...
+rpmsgtest: sent "ping from vela" (15 bytes), waiting for reply (10s timeout)...
+rpmsgtest: reply (26 bytes): "Rockchip rpmsg linux test!"
+rpmsgtest: PASS
+```
+
+**v8g 与 v8h 缺一不可**：v8h 的 INTMUX 握手保证首个 kick 落在 M0 武装之后；v8g 补的时基时钟让 M0 在 link-up 之后 `test_demo.c:278-280` 的 `while (cb_sta != 1) HAL_DelayMs(1)` 不再死循环——这正是 §12.1 自我更正时指出的、时基唯一真正致命的位置。
+
+### 13.2 按用户拍板删除的日志
+
+| 范围 | 删了什么 | 保留什么 |
+|---|---|---|
+| **USB** | defconfig 去掉 `DEBUG_USB_WARN`/`DEBUG_USB_INFO`（v8b 为查 MSC bulk 挂死临时开的，也是 `ls /mnt/usb` 乱码的原因） | `CONFIG_DEBUG_USB=y` + `DEBUG_USB_ERROR=y` |
+| **网络** | GMAC0 **完全静默**：8 处 `nerr`（TX 超时/DMA 错误/Init/Start/irq_attach/PHYInit/PHYStartup 失败/no link after Nms）+ 2 处 `syslog(LOG_INFO)` link up/down；连带移除删空的 if/else、改 `ret = HAL_GMAC_PHYStartup()` 为裸调用、移除 `#include <syslog.h>` | 错误处理路径本身：返回值、`NETDEV_TXERRORS`、`up_disable_irq`、`netdev_carrier_on/off` 一个没动 |
+| **rpmsg** | `hd_rk3506_rpmsgtest.c` **603→272 行**：`rpmsgtest_mbox_probe()`/`rpmsgtest_vring_probe()` 两个函数（约 18 条 printf）、两个 helper、30 多个寄存器宏及其注释、超时分支的两个调用、文件头 6 行描述；`rk3506_rptun.c` 删 3 条 `_info` + 2 条 `_warn` | rpmsgtest 的结果输出（endpoint/sent/reply/PASS）与全部 `fprintf(stderr)` 真实失败原因；rptun 的 **8 条 `_err`**；v8h 的 INTMUX 等待循环本身（那是握手逻辑不是日志） |
+
+`mbox_isr` 删掉 warn 后 `cmd`/`data` 变成只写不读，但这两个寄存器读取与内核 `rockchip-mailbox.c` 的 ISR 一致、且 kick 只当门铃用不解析载荷，故**保留读取并加 `UNUSED()`**——零行为变化。
+
+### 13.3 验证
+
+- 干净构建 `exit 0`，**我改的三个文件零告警**
+- nxstyle：rptun 16→**15**、gmac0 63→**47**、rpmsgtest 4→**4**（全部不劣于基线）
+- 固件字符串核对：11 条被删日志**全部消失**，4 条应保留的**仍在**
+- `cmake_out/.config` 确认 `# CONFIG_DEBUG_USB_WARN is not set` / `# CONFIG_DEBUG_USB_INFO is not set`
+- `pack exit 0`
+
+### 13.4 ⚠️ 一个我引入的副作用，需要你拍板
+
+关掉 `DEBUG_USB_INFO` 后，全局 warning 从 45 → **51**，新增的 6 条全部来自**上游文件** `nuttx/drivers/usbhost/usbhost_storage.c` 的 `usbhost_dumpcbw()`/`usbhost_dumpcsw()`：
+
+```
+usbhost_storage.c:482:9: warning: format '%x' expects argument of type 'unsigned int',
+                         but argument 3 has type 'uint32_t' {aka 'long unsigned int'}
+```
+
+**机理**：这两个函数的守卫是 `CONFIG_DEBUG_USB && CONFIG_DEBUG_INFO`（全局 INFO，不是 USB_INFO），所以函数体一直在编译。`uinfo` 在 USB_INFO=y 时展开成 `_info`，关掉后展开成 `debug.h:108` 的 `_none`：
+
+```c
+#  define _none(format, ...)     do { if (0) syslog(LOG_ERR, format, ##__VA_ARGS__); } while (0)
+```
+
+注释写着 "don't call syslog while performing the compiler's format check" —— 它**故意**保留格式检查，于是把上游一直存在的 `%08x` vs `uint32_t`（本 ABI 上是 `unsigned long`）不匹配暴露出来了。
+
+**性质**：`if (0)` 死代码，零运行时影响；是上游的既有缺陷，不是我们的新 bug。
+
+**要不要修**：修法就是把那 4 处 `%08x` 改成 `%08" PRIx32 "`（外加 `#include <inttypes.h>`）。但这要动 `nuttx/drivers/` 上游通用代码，**AGENTS 3.4.1 明确要求"不要碰"**，所以我没擅自改。你说改我就改，一个小提交；你说不改就挂在这儿记录着。
+
