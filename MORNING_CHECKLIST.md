@@ -11,7 +11,7 @@
 
 | 文件 | 大小 | 说明 |
 |------|------|------|
-| `openvela/nand_firmware/update.img` | 9,785,898 B (md5 601f6b7f2a6413474415a9b247bf61f1) | **全量刷机包 v8i** (原始 curl 8c2a01f3e + U 盘 **已验收** + rpmsg **已验收**(mbox 时钟 + kick 竞态握手 + M0 时基时钟 + INTMUX 就绪握手) + **全部调试日志已按用户要求清除**：USB INFO/WARN 关、GMAC0 全静默、rpmsg 探针块与 info/warn 删净) |
+| `openvela/nand_firmware/update.img` | 9,785,898 B (md5 459824931f434d63f619e32cc8524be5) | **全量刷机包 v8j** (原始 curl 8c2a01f3e + U 盘 **已验收** + rpmsg **已验收** + 调试日志已按用户要求清除 + **M0 停核序列(修复概率性 Data abort)** + **NSH 行长 80→256 / 参数 7→16**) |
 | `openvela/cmake_out/hd-rk3506-evm_nsh/vela.bin` | 2,889,724 B | NuttX 固件 (含 /dev/ota + USB host v8c+v8d **已板上验收** + littlefs/FAT + 驱动日志全量可见) |
 | `openvela/nand_firmware/boot.fit` | 4,194,304 B | 单槽 FIT 镜像 (ota update 用它) |
 | `openvela/nand_firmware/parameter.txt` | — | v5 A/B 分区表 |
@@ -39,6 +39,8 @@
   - `2577148` build(board): 关掉 USB DEBUG_INFO/WARN, 只保留 ERROR (v8i)
   - `afed146` chip(gmac0): 按用户要求移除全部网络日志 (v8i)
   - `9f3f034` chip(rptun)+board: 删除 rpmsg 探针块与 info/warn 日志, 保留 err (v8i)
+  - `26822bb` chip(rptun): 加载固件前先把 M0 停住 (v8j) — **修复概率性 Data abort**
+  - `b544287` build(board): 放宽 NSH 命令行长度与参数个数 (v8j)
   - external/curl/curl `f1a6fef21` fix: mbedtls_close 仅在 close_notify 已到达时读 (v8c) — **v8e 已按用户要求回退**
   - external/curl/curl `9a4601247` test: P1-P6 无缓冲定位探针 (v8d) — **v8e 已按用户要求回退**
   - external/curl/curl **v8e: 回退到仓库原始版本 `8c2a01f3e`**（curl 源码不再有任何本地改动）
@@ -876,4 +878,91 @@ usbhost_storage.c:482:9: warning: format '%x' expects argument of type 'unsigned
 **性质**：`if (0)` 死代码，零运行时影响；是上游的既有缺陷，不是我们的新 bug。
 
 **要不要修**：修法就是把那 4 处 `%08x` 改成 `%08" PRIx32 "`（外加 `#include <inttypes.h>`）。但这要动 `nuttx/drivers/` 上游通用代码，**AGENTS 3.4.1 明确要求"不要碰"**，所以我没擅自改。你说改我就改，一个小提交；你说不改就挂在这儿记录着。
+
+---
+
+## 14. v8j —— M0 停核 + NSH 长度 + curl 记录纠正
+
+**镜像**：`update.img` md5 `459824931f434d63f619e32cc8524be5`；`vela.bin` 2,877,436 B。
+
+### 14.1 概率性 Data abort：根因是我的 bug
+
+板上 v8h 概率复现。用 git 里的 v8h 源码重建带符号镜像解出调用栈：
+
+```
+rpmsg_virtio_start_worker → rpmsg_init_vdev_with_config+0x412
+  → mm_memalign+0x3a → mm_malloc+0x17c        Data abort DFAR=0x3d
+```
+
+崩溃指令 `ldr r3,[r1,#8]`（`r1 = node->blink = 0x35`，`0x35+8 = 0x3d` ✅），是 `mm_malloc` 的自由链表完整性校验。分配请求本身正常（对齐是常量 `#8`）⇒ **堆在这次分配之前就已被写坏**，rpmsg 的 malloc 只是第一个踩到污染节点的**探测者**，不是元凶。
+
+**根因**：`rk3506_mcu_boot()` **从来没让 M0 进过复位**。A7 热重启（含崩溃时 `Reset board on recursive assert` 自触发的那次）不复位 M0 ⇒ 上一代固件仍在 `0xfff84000` 执行，而我们直接 `memcpy` 覆盖它正在跑的代码/向量表/.data/.bss。跑飞的 Cortex-M0 拥有完整 4 GiB 地址空间，可以写进 A7 DRAM。这是唯一能同时解释「堆里出现 0x35」和「概率出现」的机制，也解释了崩溃→重启→M0 还活着→再崩的自我延续。
+
+### 14.2 同时更正 v8h 的一个错误断言
+
+那行日志本身自相矛盾：
+
+```
+M0 ready after 0 ms: ... INTMUX group3 bit21 set 0 ms later
+(M0 finished rpmsg init this boot, IRQ31 vector 0x00000000)
+```
+
+按 §12 v8h 自己的三分判读表，**向量槽 = 0 ⇒ M0 零执行**。我当时断言"INTMUX bit21 POR=0 所以不可能是陈旧值，比 A2B_INTEN bit0 严格更好"——**错了**。POR=0 只对冷上电成立。真相不是"寄存器残留"，而是**上一代 M0 还活着在驱动这两个信号**。`A2B_INTEN bit0`（v8f）同理。我把 v8f 的错误换了个寄存器又犯了一遍。
+
+### 14.3 修复（用户按 3.4.6 拍板）
+
+新增 `rk3506_mcu_hold()`，两级停核、弱假设在先：
+
+| 步 | 动作 | 依据 |
+|---|---|---|
+| 1 | `0xff90000c <- 0x00060000`（`mcu_rst_dis_cfg=0`） | u-boot 把这位置 1 作为释放的**最后**一步，清它即原厂序列倒着走。必须排第一：它读作 1 时 CRU 复位请求可能整个被屏蔽 |
+| 2 | `0xff9a0a14 <- 0x0c000c00`（`HRESETN_M0`+`RESETN_M0_JTAG`） | rk3506.h:19111/19113；外推 |
+| 3 | **金丝雀实测自证**：填充 → 等 2ms → 回读 | 停住了不可能被碰，没停住几乎必被脏化（M0 的 bss/heap 就在那）。脏了报 `_err` |
+| 4 | `0xff9a0a18` 脉冲 `PRESETN_MAILBOX`+`PRESETN_INTMUX` | 让两个握手信号不可能来自上一次会话 |
+| 5→ | memcpy → SMC → 解除 CRU 复位 → 写 PMU_INT_MASK_VAL | 收尾寄存器状态与 u-boot `fit_standalone_release()` 完全一致 |
+
+**极性陷阱**（已写进宏注释）：SOFTRST 数据位 1 = **断言复位**；CLKGATE（SET_TO_DISABLE）数据位 1 = **关时钟**。两套寄存器极性相反，跨族抄错就是灾难。子代理报告里给的 `writel(0x01040104, 0xff9a0818)` 就是这么错的（正确是只写 WE 的 `0x01040000`，我现有代码本来就对）。
+
+**安全红线**：不碰 `CON05` b6/b7（`ARESETN_SYSRAM`/`HRESETN_SYSRAM`，正是要加载的那块 SRAM），不碰 `CON00`（A7 自己的核复位组）。
+
+**未获 SDK 背书**（已在代码注释标注）：全 SDK **无一处**断言过 M0 复位；rk3506 更是这一族里唯一连释放都不走 CRU 的（rk3562/rk3576/rk3528 都写 SOFTRST 解除，rk3506 的 `CRU_SOFTRST_CON5` 宏是死代码）；释放归 TEE 还是归 `mcu_rst_dis_cfg` 无法判定（只有预编译 `rk3506_tee_v2.10.bin`）；SDK 未规定任何 softreset 脉宽（取 20us）。**故第 2 级停核是外推，由金丝雀在板上自证**——这正是保留金丝雀（本来准备删）的意义。
+
+**首刷要看**：如果出现 `ERROR: M0 still running with HRESETN_M0 asserted`，说明 CRU 停核在 rk3506 上无效，需要改走别的路子；没有这条错误就说明停住了，外推被证实。
+
+### 14.4 NSH 命令行长度
+
+根因是配置不是缺陷：defconfig 从未写过这两项，一直吃默认 `LINELEN=80` / `MAXARGUMENTS=7`。已改 **256 / 16**。
+
+### 14.5 curl：我的 v8c 记录作废
+
+原记录的机理**站不住**，逐条查证：
+
+| 证据 | 位置 |
+|---|---|
+| curl 无条件把 socket 设非阻塞 | `cf-socket.c:1079` `curlx_nonblock(ctx->sock, TRUE)` |
+| 走 fcntl 路径且非 lwip | `curl_config.h:194 HAVE_FCNTL_O_NONBLOCK`；`curl_setup_once.h:220 sfcntl=fcntl` |
+| NuttX 认 O_NONBLOCK | `fs_fcntl.c:99-113` → `file_ioctl(FIONBIO)` |
+| 传到 TCP 连接标志 | `netdev_ioctl.c:1756` 置 `_SF_NONBLOCK`；`tcp_recvfrom.c:721` 据此判断 |
+
+socket 本来就是非阻塞的，`mbedtls_close()` 那个读应立即返回 WANT_READ，**不该挂**。而且补丁**已不存在**（curl 回原始 `8c2a01f3e`，`mbedtls.c:1050` 原样还在）。另排除：本仓 curl 8.4.0-DEV，`Curl_conn_shutdown` 优雅关闭超时是 8.8+ 才有的。
+
+**下一步先取证，不改码**（用户已同意），三个板上实验不用重烧：
+
+1. `curl -o /tmp/o https://... ; echo DONE=$?`
+   - 文件完整但 `DONE` 迟迟不出 ⇒ 卡在退出/清理
+   - `DONE` 立刻出 ⇒ **根本没卡死**，是 stdout 全缓冲未刷
+2. `curl -v ...` —— 停住前的最后一行属于哪个阶段
+3. `curl --max-time 20` —— 能被打断=卡在传输状态机，打不断=卡在系统调用
+
+**否决记录**（另一 AI 的建议）：
+- `CURLOPT_FORBID_REUSE`+`HTTP/1.0`：机制上**能绕开**（服务器主动关 → close_notify 或 FIN 都让读返回），但不治本、全局牺牲 keep-alive/HTTP1.1，且 NSH 的 curl 自建 easy handle，"在初始化代码里设置"等于改 curl 源码，与"用仓库原始版本"冲突。
+- 「改 `nuttx/drivers/net/tcp_*.c` 让 FIN 映射 POLLHUP」：**三重错误**——该路径不存在（TCP socket poll 在 `nuttx/net/tcp/tcp_netpoll.c`）；NuttX 早已在 4 处设 `POLLERR|POLLHUP`；卡点根本没走 `poll()`，而我们的场景服务器压根**没发 FIN**。
+
+### 14.6 验证
+
+- 干净构建 `exit 0`，`rk3506_rptun.c` **零告警**；全局 51 = v8i 基线，无新增
+- nxstyle `rk3506_rptun.c` **15 = 基线**
+- `.config` 确认 `CONFIG_NSH_LINELEN=256` / `CONFIG_NSH_MAXARGUMENTS=16`
+- 固件字符串 + 反汇编确认 `0x0c000c00` / `0x60006000` / `0x60000000` 均已落地
+- `pack exit 0`
 
