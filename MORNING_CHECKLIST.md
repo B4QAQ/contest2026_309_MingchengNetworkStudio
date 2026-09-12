@@ -1036,3 +1036,24 @@ ps
 
 辅助实验：`curl --max-time 20 ...` —— 若 ~20s 报 `Operation timed out ... with 115 out of 115 bytes`（DONE=28）⇒ 挂在 multi loop 内（T1 类）；若 20s 到了毫无反应 ⇒ 挂在 loop 外的阻塞调用（T2 类）。
 
+### 16.3 curl 实验批 2（2026-09-12）—— 全部传输都能完成，挂点在传输后
+
+板上四连测：`curl --version` 秒退；`file://`(177KB)、`http://192.168.10.1/`(无 DNS 无 TLS)、`https://... --max-time 20` 三个传输**全部完整完成**（收到全部字节、打印 `left intact`/`Closing connection`），但**除 --version 外全部要 Ctrl+C 才出输出**。--max-time 20 未触发（传输 0.3s 就完成，挂在其后）。
+
+已用源码钉死的事实：
+
+- `tool_operate.c:649` 的 `fclose(outs->stream)` **检查了返回值**，失败会报 `CURLE_WRITE_ERROR(23)` 并打印 `Failed writing body`——DONE=0 证明 **fclose 成功**，tmpfs-close 挂死理论排除
+- `Curl_infof`（curl_trc.c:118-133）每行**显式补 `
+`** 后经 `Curl_debug` 写 stderr；NuttX stderr 行缓冲（task_initinfo.c）→ 每行本应实时上屏——但实际全部憋到 Ctrl+C，**输出去向是独立疑点**
+- NSH curl 是**原版 tool**（tool_main.c/tool_operate.c，Makefile MAINSRC 证实），无 fmultidone，无 setvbuf
+- 之前"后台实验挂在很早期"的判读**可能错了**：sleep 5 < DNS 重试预算（5s×RETRIES），那次也许只是 DNS 慢，不是挂——"挂点漂移"可能不存在，真实现象只有一个：**传输完成后进程不退出**
+- `--max-time` 不触发 + ps 显示 `Waiting Semaphore` ⇒ 挂在 multi loop 之后的尾部（cleanup/exit 段）的某个信号量等待，SIGINT→EINTR→继续→exit 0
+
+待跑判读实验：
+```
+curl -v -o /tmp/info3.json https://stdl.b4qaq.cn/fwtb/info.json &
+sleep 10; ls -l /tmp/info3.json; ps        # 文件尺寸+状态定位挂点(115=传完/64=卡在fclose/无=更早)
+curl -s -o /tmp/info4.json https://... ; echo DONE=$?      # 静默:若正常退出⇒输出行参与
+curl -o /tmp/info5.json https://... 2>/dev/null ; echo DONE=$?  # stderr 去 null
+```
+
