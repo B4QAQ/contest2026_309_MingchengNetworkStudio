@@ -11,7 +11,7 @@
 
 | 文件 | 大小 | 说明 |
 |------|------|------|
-| `openvela/nand_firmware/update.img` | 9,785,898 B (md5 459824931f434d63f619e32cc8524be5) | **全量刷机包 v8j** (原始 curl 8c2a01f3e + U 盘 **已验收** + rpmsg **已验收** + 调试日志已按用户要求清除 + **M0 停核序列(修复概率性 Data abort)** + **NSH 行长 80→256 / 参数 7→16**) |
+| `openvela/nand_firmware/update.img` | md5 699c8695efbc5334991fa49ce46a2ab5 | **全量刷机包 v8k** (v8j 全部 + **iomux 调试日志已删**) |
 | `openvela/cmake_out/hd-rk3506-evm_nsh/vela.bin` | 2,889,724 B | NuttX 固件 (含 /dev/ota + USB host v8c+v8d **已板上验收** + littlefs/FAT + 驱动日志全量可见) |
 | `openvela/nand_firmware/boot.fit` | 4,194,304 B | 单槽 FIT 镜像 (ota update 用它) |
 | `openvela/nand_firmware/parameter.txt` | — | v5 A/B 分区表 |
@@ -41,6 +41,7 @@
   - `9f3f034` chip(rptun)+board: 删除 rpmsg 探针块与 info/warn 日志, 保留 err (v8i)
   - `26822bb` chip(rptun): 加载固件前先把 M0 停住 (v8j) — **修复概率性 Data abort**
   - `b544287` build(board): 放宽 NSH 命令行长度与参数个数 (v8j)
+  - `25f2aed` chip(iomux): 删除 iomux 日志 (v8k)
   - external/curl/curl `f1a6fef21` fix: mbedtls_close 仅在 close_notify 已到达时读 (v8c) — **v8e 已按用户要求回退**
   - external/curl/curl `9a4601247` test: P1-P6 无缓冲定位探针 (v8d) — **v8e 已按用户要求回退**
   - external/curl/curl **v8e: 回退到仓库原始版本 `8c2a01f3e`**（curl 源码不再有任何本地改动）
@@ -965,4 +966,31 @@ socket 本来就是非阻塞的，`mbedtls_close()` 那个读应立即返回 WAN
 - `.config` 确认 `CONFIG_NSH_LINELEN=256` / `CONFIG_NSH_MAXARGUMENTS=16`
 - 固件字符串 + 反汇编确认 `0x0c000c00` / `0x60006000` / `0x60000000` 均已落地
 - `pack exit 0`
+
+---
+
+## 15. v8k —— iomux 日志删除 + curl 排查中段
+
+**镜像**：`update.img` md5 `699c8695efbc5334991fa49ce46a2ab5`。
+
+### 15.1 iomux 日志
+
+用户点名 `rk3506_ioc_mux_set: IOC mux: ...` 让去掉。`rk3506_iomux.c` 共 4 条 `_info()`、无错误路径日志可保留，**全删**；连带删掉只被日志用到的 `inttypes.h`/`debug.h`/`syslog.h`。顺带修掉既有 `RK3506_GRF_PMU_ADDR` 重复定义告警（本地与 `hardware/rk3506_memorymap.h:99` 同值重复，删本地版）——全局告警 51→50。nxstyle 28→24。固件中 `IOC mux`/`IOMUX` 字符串计数 0。
+
+### 15.2 curl 实验 1 的解读（等实验 2/3）
+
+用户跑 `curl -H "Connection: close" -o /tmp/info.json ... ; echo DONE=$?`，按 Ctrl+C 后才打印 meter + `DONE=0`。三个硬事实：
+
+- `TimeSpent = --:--:--` ⇒ 传输 0.3s 就完成了
+- meter 行 Ctrl+C 才出现 ⇒ 挂点在 `progress_finalize` 之前 = 还在 multi loop 里
+- `DONE=0` ⇒ SIGINT 唤醒后**成功**退出，排除失败/中止路径
+
+源码侧已逐行排除整条清理链的阻塞点（multi_done → Curl_disconnect → conn_shutdown → Curl_conn_close → `do_close`：`mbedtls_close` 的无条件读在非阻塞 socket 立即返回 WANT_READ；`sclose`=`close()`；NuttX `tcp_close`/`tcp_shutdown`/`inet_close` 均非阻塞）。剩两种可能：
+
+- (a) **真阻塞**：卡在 poll 信号量（ps 显示 `Waiting Semaphore`）
+- (b) **假阻塞真自旋**：循环空转（ps 显示 `Running`/`Ready` 且占 CPU）
+
+待用户跑实验 2（`curl -v ...` 看挂在哪个阶段）和实验 3（`curl ... &` + `sleep 3` + `ps` 看 STATE/EVENT）二分。
+
+**源码排查中顺带确认的既有正确行为**（避免再被误导）：NuttX `tcp_netpoll.c:86-88` 把 `TCP_RXCLOSE` 映射为 `POLLIN`（peer 干净 FIN 会唤醒 poll）；`tcp_pollsetup` 在 `conn->readahead != NULL || backlog || (shutdown & SHUT_RD)` 时同步报 `POLLRDNORM`。**注意对方 AI 说的"NuttX poll 不处理 FIN"是错的**——RXCLOSE→POLLIN 一直存在。
 
