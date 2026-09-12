@@ -11,7 +11,7 @@
 
 | 文件 | 大小 | 说明 |
 |------|------|------|
-| `openvela/nand_firmware/update.img` | md5 699c8695efbc5334991fa49ce46a2ab5 | **全量刷机包 v8k** (v8j 全部 + **iomux 调试日志已删**) |
+| `openvela/nand_firmware/update.img` | md5 f915312cb69a9717be9ae2076184bc1e | **全量刷机包 v8l** (v8k 全部 + **FSPI 启动日志已删**) |
 | `openvela/cmake_out/hd-rk3506-evm_nsh/vela.bin` | 2,889,724 B | NuttX 固件 (含 /dev/ota + USB host v8c+v8d **已板上验收** + littlefs/FAT + 驱动日志全量可见) |
 | `openvela/nand_firmware/boot.fit` | 4,194,304 B | 单槽 FIT 镜像 (ota update 用它) |
 | `openvela/nand_firmware/parameter.txt` | — | v5 A/B 分区表 |
@@ -42,6 +42,7 @@
   - `26822bb` chip(rptun): 加载固件前先把 M0 停住 (v8j) — **修复概率性 Data abort**
   - `b544287` build(board): 放宽 NSH 命令行长度与参数个数 (v8j)
   - `25f2aed` chip(iomux): 删除 iomux 日志 (v8k)
+  - `9d60ef5` chip(fspi): 删除 FSPI 启动日志 (v8l)
   - external/curl/curl `f1a6fef21` fix: mbedtls_close 仅在 close_notify 已到达时读 (v8c) — **v8e 已按用户要求回退**
   - external/curl/curl `9a4601247` test: P1-P6 无缓冲定位探针 (v8d) — **v8e 已按用户要求回退**
   - external/curl/curl **v8e: 回退到仓库原始版本 `8c2a01f3e`**（curl 源码不再有任何本地改动）
@@ -993,4 +994,45 @@ socket 本来就是非阻塞的，`mbedtls_close()` 那个读应立即返回 WAN
 待用户跑实验 2（`curl -v ...` 看挂在哪个阶段）和实验 3（`curl ... &` + `sleep 3` + `ps` 看 STATE/EVENT）二分。
 
 **源码排查中顺带确认的既有正确行为**（避免再被误导）：NuttX `tcp_netpoll.c:86-88` 把 `TCP_RXCLOSE` 映射为 `POLLIN`（peer 干净 FIN 会唤醒 poll）；`tcp_pollsetup` 在 `conn->readahead != NULL || backlog || (shutdown & SHUT_RD)` 时同步报 `POLLRDNORM`。**注意对方 AI 说的"NuttX poll 不处理 FIN"是错的**——RXCLOSE→POLLIN 一直存在。
+
+---
+
+## 16. v8l —— FSPI 日志删除 + curl 排查：锁定两个候选
+
+**镜像**：`update.img` md5 `f915312cb69a9717be9ae2076184bc1e`。
+
+### 16.1 FSPI 日志
+
+8 条 `_info` 全删（无 `_err`/`_warn` 可保留），连带 3 个 include；DLL 调谐控制流未动。注意 `rk3506_spinand_fspi.c:894` 的 `syslog(LOG_INFO, "FSPI: SPI NAND READ_ID ...")` 是 MTD 层同名打印，**本次未动**。
+
+### 16.2 curl 实验 2（-v）的新证据与两个候选
+
+用户跑 `curl -v -o /tmp/info.json ...`，全部输出（含 stderr 的 verbose 行）都在 Ctrl+C 后才出现，最后一行是 `* Connection #0 to host stdl.b4qaq.cn left intact`。
+
+源码侧新确认：
+
+- **"left intact" 是普通 `infof`**（`multi.c:803`，非 DEBUGF）——在 `multi_done()` 收尾、连接**还回连接缓存**时打印。它后面紧跟 `Curl_safefree(data->state.buffer)` 就 return。所以**挂点在 multi_done 结束之后**。
+- **NuttX 的 stderr 是行缓冲**（`task_initinfo.c:64-86`：stdin/stdout/stderr 三个流统一给 64B 缓冲 + `__FS_FLAG_LBF`，因 `CONFIG_STDIO_LINEBUFFER=y`）。按常理 `-v` 行带 `
+` 应该实时刷出来——但用户两次实验都是 Ctrl+C 前**零输出**，这一点尚未解释，是待用户确认的关键事实问题。
+- **`Curl_poll` 把 EINTR 吞掉返回 0**（`select.c`："make EINTR from select or poll not a lethal error"）——所以一次 Ctrl+C 不是"杀死"curl，而是给 poll 喂了一次超时式唤醒；若此后的同步状态检查能看到成功（连接其实已在协议栈里建好），curl 就顺势走完，exit 0。这解释了 DONE=0。
+
+两个候选（病根不同，必须靠实验二分）：
+
+- **(T1) 挂在 connect-wait 的 poll**：TCP 三次握手在协议栈里已完成但唤醒丢失，curl 干等；一次 SIGINT → poll 返回 0 → `getsockopt(SO_ERROR)=0` 已连接 → 顺势跑完 0.3s 传输 → exit 0。疑点：`Curl_pgrsStartNow` 在 `Curl_pretransfer`（`transfer.c:1415`）就启动计时，若挂在 connect，`TimeSpent` 应该含挂起时长，但 meter 显示 `<1s`。
+- **(T2) 挂在传输完成之后**（left intact 之后）的某个单次阻塞调用——cache 归还 / msg 处理 / `curl_multi_cleanup` 链路；SIGINT → EINTR → 该调用报错返回 → 继续清理 → exit 0。与 meter `<1s` 吻合（传输 0.3s 就完了，挂在其后）。
+
+**决定性实验（一个串口就够，用户之前以为不行）**：
+
+```
+curl -v -o /tmp/info.json https://stdl.b4qaq.cn/fwtb/info.json 2>/tmp/v.log &
+sleep 5
+cat /tmp/v.log
+ps
+```
+
+- `&` 把 curl 放后台，shell 立即可用（一个串口完全够，不需要第二个）。
+- stderr 重定向到文件后，按行缓冲规则 `-v` 轨迹**实时**写进 `/tmp/v.log`；`cat` 看到的最后一行 = 挂死的精确位置。
+- `ps` 看 curl 的 STATE/EVENT：`Waiting Semaphore` = 真阻塞（T1/T2 的 poll 或单次调用）；`Running/Ready` = 自旋。
+
+辅助实验：`curl --max-time 20 ...` —— 若 ~20s 报 `Operation timed out ... with 115 out of 115 bytes`（DONE=28）⇒ 挂在 multi loop 内（T1 类）；若 20s 到了毫无反应 ⇒ 挂在 loop 外的阻塞调用（T2 类）。
 
