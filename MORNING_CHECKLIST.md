@@ -1057,3 +1057,26 @@ curl -s -o /tmp/info4.json https://... ; echo DONE=$?      # 静默:若正常退
 curl -o /tmp/info5.json https://... 2>/dev/null ; echo DONE=$?  # stderr 去 null
 ```
 
+### 16.4 curl 实验批 3 —— 挂点在传输开始之前，"输出憋住"是错觉
+
+板上结果：① 后台 curl 10 秒后 `/tmp/info3.json` **不存在**（stat failed: 2）+ ps `Waiting Semaphore`；② `curl -s` **照挂**（DONE=0）；③ 命令被截断没跑成。
+
+关键源码事实：
+
+- `-o` 输出文件是**惰性创建**的（`tool_cb_wrt.c:220` / `tool_cb_hdr.c:184`，第一个响应字节到达才 fopen）⇒ ① 文件不存在 = **连响应都没收到**，挂在传输开始之前
+- `-o` 文件大小理论（64 字节截断）因此**作废**，那条判读无效
+- **② `-s` 照挂 ⇒ 与"往控制台写输出"完全无关**；之前-v 运行"输出憋到 Ctrl+C"的真相是：**输出当时根本不存在**——进程挂在传输前，Ctrl+C 踢醒后 0.3s 跑完全程，所有输出都是踢醒之后才产生的，不是缓冲憋住的
+- meter `Time Spent --:--:--`（`time2str: seconds<=0 → "--:--:--"`）⇒ pretransfer→完成 <1s，**挂点在 pretransfer 之前**
+- `curl --version` 秒退 ⇒ `main_init`（含 `curl_global_init`/`get_libcurl_info`/`config_init`）没问题
+- `file://` 也挂 ⇒ 与网络/DNS/TLS 无关，在通用启动/multi 机制里
+- NuttX `poll(NULL,0,1000)` 源码路径（fs_poll.c → nxsem_tickwait(1000 ticks@1ms)）返回正常；无 TICKLESS；无 NET_LOCAL（wakeup_pair 必失败 → nfds=0 路径，有界）
+- curl simple_lock 是自旋锁（atomic），不会显示 Waiting Semaphore；NuttX pthread_mutex_lock 对 EINTR 是重试的，SIGINT 踢不醒——所以卡点不是这两类
+
+挂点窗口收窄到：`operate → curl_share_init → run_all_transfers → create_transfer/curl_easy_init/config2setopts → multi_add_handle → 第一次 multi_poll → 第一次 multi_perform 的 MSTATE_INIT/pretransfer → MSTATE_CONNECT/create_conn(URL 解析之前)`。100% 复现（每次传输都挂）、信号量等待、SIGINT→EINTR→放行成功。
+
+待跑二分实验：
+```
+curl http:// ; echo DONE=$?                 # 畸形 URL: 练到 create_conn URL 解析才失败, 覆盖前半段全部
+curl -o /tmp/x file:///nonexistent_xyz ; echo DONE=$?   # file 协议 fopen 失败: 覆盖到协议 connect
+```
+
