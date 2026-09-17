@@ -1,0 +1,338 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+if ARCH_CHIP_RK3506
+
+menu "Rockchip RK3506 Peripheral Selection"
+
+config RK3506_UART0
+	bool "UART 0"
+	default y
+	select UART0_SERIALDRIVER
+	select ARCH_HAVE_SERIAL_TERMIOS
+	---help---
+		Enable UART0 (debug console, base 0xFF0A0000, IRQ 66).
+
+config RK3506_UART1
+	bool "UART 1"
+	default n
+	select UART1_SERIALDRIVER
+	select ARCH_HAVE_SERIAL_TERMIOS
+	---help---
+		Enable UART1 (base 0xFF0B0000, IRQ 67).
+
+config RK3506_UART2
+	bool "UART 2"
+	default n
+	select UART2_SERIALDRIVER
+	select ARCH_HAVE_SERIAL_TERMIOS
+	---help---
+		Enable UART2 (base 0xFF0C0000, IRQ 68).
+
+config RK3506_UART3
+	bool "UART 3"
+	default n
+	select UART3_SERIALDRIVER
+	select ARCH_HAVE_SERIAL_TERMIOS
+	---help---
+		Enable UART3 (base 0xFF0D0000, IRQ 69).
+
+config RK3506_UART4
+	bool "UART 4"
+	default n
+	select UART4_SERIALDRIVER
+	select ARCH_HAVE_SERIAL_TERMIOS
+	---help---
+		Enable UART4 (base 0xFF0E0000, IRQ 70).
+
+config RK3506_UART5
+	bool "UART 5"
+	default n
+	select UART5_SERIALDRIVER
+	select ARCH_HAVE_SERIAL_TERMIOS
+	---help---
+		Enable UART5 (base 0xFF4E0000, IRQ 71).
+
+config RK3506_VOP
+	bool "RK3506 VOP Framebuffer"
+	default n
+	depends on VIDEO_FB
+	---help---
+		Enable the RK3506 VOP (Video Output Processor) framebuffer driver.
+		Provides /dev/fb0 with 480x854 RGB565 output via the RGB interface.
+
+config RK3506_I2C
+	bool "RK3506 I2C Bus Controller"
+	default n
+	depends on I2C
+	---help---
+		Enable the RK3506 I2C bus controller driver.
+		Supports I2C0 (0xFF040000, IRQ 40), I2C1 (0xFF050000, IRQ 41),
+		and I2C2 (0xFF060000, IRQ 42).
+		Compatible with RK3399 I2C controller (i2c-rk3x).
+
+config RK3506_USBHOST
+	bool "RK3506 DWC2 USB Host Controller"
+	default n
+	depends on USBHOST
+	select USBHOST_HAVE_ASYNCH
+	---help---
+		Enable the DWC2 USB Host Controller driver for the RK3506 SoC.
+		Supports both OTG0 (0xFF740000) and OTG1 (0xFF780000) controllers.
+		Provides 12 host channels per controller for full-speed and low-speed
+		USB device enumeration.
+
+if RK3506_USBHOST
+
+config RK3506_USBHOST_OTG1
+	bool "Enable OTG1 Controller"
+	default n
+	---help---
+		Enable the second DWC2 OTG controller (OTG1 at 0xFF780000, IRQ 79).
+		When disabled, only OTG0 is available.
+
+config RK3506_DWC2_RXFIFO_SIZE
+	int "RX FIFO Size (32-bit words)"
+	default 512
+	---help---
+		Size of the RX FIFO in 32-bit words. Must hold the largest
+		packet + status words: for HS bulk (512B packets) at least
+		131 words are needed; 128 (the old default) is exactly one
+		512B packet with NO status room, and the core then silently
+		refuses to issue IN tokens for bulk channels (channel stays
+		enabled, zero interrupts). SDK HAL uses 0x200 (512 words).
+
+config RK3506_DWC2_NPTXFIFO_SIZE
+	int "Non-periodic TX FIFO Size (32-bit words)"
+	default 256
+	---help---
+		Size of the non-periodic TX FIFO in 32-bit words.
+		SDK HAL uses 0x100 (256 words).
+
+config RK3506_DWC2_PTXFIFO_SIZE
+	int "Periodic TX FIFO Size (32-bit words)"
+	default 224
+	---help---
+		Size of the periodic TX FIFO in 32-bit words.
+		SDK HAL uses 0xE0 (224 words).
+
+config RK3506_DWC2_DESCSIZE
+	int "Maximum Descriptor Size"
+	default 128
+	---help---
+		Maximum size of a USB descriptor buffer. Default 128 bytes.
+
+endif # RK3506_USBHOST
+
+config RK3506_SPI
+	bool "RK3506 DesignWare-compatible SPI controller"
+	default n
+	depends on SPI
+	---help---
+		Enable the RK3506 SPI controller driver (polling mode).
+		Supports SPI0 (0xFF120000, IRQ 75), SPI1 (0xFF130000, IRQ 76),
+		and SPI2 (0xFF140000, IRQ 77).
+		Register layout is DesignWare SSI compatible (used by the RK3506
+		HAL and the Linux spi-dw driver).  Pair with RK3506_SPINAND to
+		attach a GigaDevice GD5F NAND on the SPI bus, or with the
+		framework/system utils' SPI NOR bringup for an SPI flash.
+
+if RK3506_SPI
+
+config RK3506_SPINAND
+	bool "RK3506 SPI NAND (GigaDevice GD5F on SPI1)"
+	default n
+	depends on MTD_GD5F
+	---help---
+		Bind the NuttX gd5f upper-half to RK3506 SPI1 (CS0).  This is
+		the 1-bit SPI fallback path; the SDK's quad-mode FSPI host
+		(0xFF488000) is a separate, faster driver that can be added
+		later without disturbing this one.
+
+endif # RK3506_SPI
+
+config RK3506_FSPI
+	bool "RK3506 FSPI serial-flash controller (SPI NAND host)"
+	default n
+	---help---
+		Enable the RK3506 FSPI controller driver ("rockchip,fspi"
+		@0xFF488000, IRQ85), the dedicated serial-flash host that the
+		on-board GD5F SPI NAND is wired to (U-Boot DTS: &fspi flash@0
+		"spi-nand", 1-bit TX / 4-bit RX).  Initial bring-up is single-bit
+		(1-1-1) command mode used to READ_ID and validate the clocks,
+		pin mux and register sequence against the SDK HAL; quad I/O,
+		DLL/delay-line tuning and the spi-nand MTD bridge follow later.
+
+config RK3506_SPINAND_FSPI
+	bool "SPI NAND MTD on FSPI (Xincun XCSP2AAPK)"
+	default n
+	depends on RK3506_FSPI && MTD
+	---help---
+		SPI NAND MTD upper half running on the FSPI controller via
+		rk3506_fspi_nand_op() (1-1-1 PIO).  Flow ported from the Linux
+		SPI NAND core: reset, READ_ID, on-die ECC enable (CFG bit 4),
+		page read (0x13 + 0x0b), page program (WREN + 0x02 + 0x10),
+		block erase (WREN + 0xd8), lazy BBM scanning (raw OOB reads at
+		column pagesize).  Chip table: Xincun XCSP2AAPK / XCSP1AAPK
+		(SDK kernel-6.1/drivers/mtd/nand/spi/xincun.c).
+		The returned MTD covers the WHOLE chip - wrap it in
+		mtd_partition() (userdata region) before dhara_initialize(),
+		or the Rockchip u-boot/FIT partitions would be clobbered.
+
+config RK3506_GMAC0
+	bool "RK3506 GMAC0 (Synopsys DWMAC 4.20a) Ethernet"
+	default n
+	select ARCH_PHY_INTERRUPT
+	---help---
+		Enable the RK3506 GMAC0 Ethernet netdev ("eth0"; snps,dwmac-4.20a
+		@0xFF4C8000, IRQ66).  All hardware sequences come from the Linux
+		SDK GMAC HAL ported verbatim (rk3506_gmac_hal.c: hal_gmac.c +
+		hal_gmac_rk3506.c) behind a NuttX net_driver_s shell (dm90x0
+		pattern).  Covers CRU clocks, RMII IOMUX, GPIO4_A2 PHY reset
+		(HD-RK3506-EVM board doc), MDIO/PHY autoneg (YT8512B @ addr 0),
+		DMA descriptor rings and the MAC IRQ.  The interface is brought
+		up by NETINIT + DHCPC.
+		ARCH_PHY_INTERRUPT enables the NuttX PHY-event plumbing: the
+		driver implements SIOCMIINOTIFY/SIOCGMIIPHY/SIOCGMIIREG so the
+		netinit link monitor (CONFIG_NETINIT_MONITOR) can track and
+		react to link transitions.
+
+config RK3506_GMAC0_EXTCLK
+	bool "GMAC0: RMII REF_CLK driven by the PHY (SELET_IO)"
+	default n
+	depends on RK3506_GMAC0
+	---help---
+		RMII reference-clock direction for GMAC0.  On (the HD-RK3506-EVM,
+		board doc "clock_in_out = input"): the PHY's crystal-locked 50 MHz
+		drives GPIO2_B2 into the MAC and GRF_SOC_CON8 bit5 = 1
+		(RK3506_MAC_CLK_SELET_IO).  Off (Rockchip in-house EVM dts,
+		"clock_in_out = output"): the CRU's 50 MHz drives GPIO2_B2 out to
+		the PHY and GRF_SOC_CON8 bit5 = 0; the YT8512B PLL-refclk vendor
+		write then runs, exactly like the Linux SDK motorcomm.c
+		yt8512_clk_init() for "output".
+		Wrong direction shows up as every received frame failing the
+		FCS check (MMC RX CRC errors), or no link at all.
+
+endmenu # "Rockchip RK3506 Peripheral Selection"
+
+endif # ARCH_CHIP_RK3506
+
+config RK3506_PWM
+	bool "RK3506 PWM0 channel 2 on RM_IO10 (/dev/pwm0)"
+	default n
+	depends on PWM
+	---help---
+		Register /dev/pwm0 backed by the pwm0_4ch_2 channel block
+		(0xFF932000, 100 MHz time base), with RM_IO10 (GPIO0_B2)
+		routed to PWM0_CH2 (RM_IO function 47).  Register sequence
+		ported from the SDK hal_pwm.c continuous mode.
+
+config RK3506_SARADC
+	bool "RK3506 SARADC (/dev/adc0, IN2/IN3 on header)"
+	default n
+	depends on ADC
+	---help---
+		Register /dev/adc0 backed by the SARADC at 0xFF4E8000
+		(v2 register map, 12-bit, END_INT interrupt driven like the
+		Linux rockchip_saradc.c driver).  Conversions are started by
+		ioctl(ANIOC_TRIGGER) - the software-trigger flow of
+		apps/examples/adc with CONFIG_EXAMPLES_ADC_SWTRIG.
+
+if RK3506_SARADC
+
+config RK3506_SARADC_CHANMASK
+	int "Enabled SARADC channel mask (bit = channel)"
+	default 12
+	range 1 65535
+	---help---
+		Bitmask of SARADC channels scanned per ANIOC_TRIGGER.
+		Default 0x0c = channels 2 and 3, the SARADC_IN2/SARADC_IN3
+		pins on the 40-pin header (1.8 V domain).
+
+endif
+
+config RK3506_CAN
+	bool "RK3506 CANFD controllers (SocketCAN can0/can1)"
+	default n
+	depends on NET && NET_CAN && NETDEVICES
+	select NETDEV_IOCTL
+	select NET_CAN_TXCONFIRM
+	---help---
+		Register the two RK3506 CANFD controllers as SocketCAN
+		network devices can0 (0xFF320000) and can1 (0xFF330000).
+		Classic CAN 2.0 frames, single in-flight TX slot, stream-FIFO
+		RX, loopback selectable for single-node self-test.
+
+if RK3506_CAN
+
+config RK3506_CAN0_BITRATE
+	int "can0 bitrate (bits/s)"
+	default 500000
+
+config RK3506_CAN1_BITRATE
+	int "can1 bitrate (bits/s)"
+	default 500000
+
+config RK3506_CAN_LOOPBACK
+	bool "Loopback mode (single-node self-test)"
+	default y
+	---help---
+		Put the controllers in internal loopback (MODE_LBACK) and
+		mask ACK errors, per the kernel CAN_CTRLMODE_LOOPBACK path:
+		frames sent by the node are received back without any
+		external bus or transceiver.  Combined with the SocketCAN
+		software echo this gives a full cansend/candump self-test.
+		Disable for real two-node bus operation.
+
+endif
+
+config RK3506_WDT
+	bool "RK3506 DesignWare watchdog timers (/dev/watchdog0/1)"
+	default n
+	depends on WATCHDOG
+	---help---
+		Register the two RK3506 Synopsys DesignWare watchdogs
+		(wdt0 @0xFF260000, wdt1 @0xFF268000) as /dev/watchdog0 and
+		/dev/watchdog1.  Supports pre-timeout capture callbacks
+		(two-stage IRQ mode) and live timeout updates.
+
+config RK3506_RPTUN
+	bool "RK3506 bus-M0 rptun / rpmsg master"
+	default n
+	select RPTUN
+	---help---
+		Register the A7-side rptun lower half for the bus Cortex-M0
+		(/dev/rptun/mcu, master role).  Boots the M0 with the embedded
+		rpmsg firmware (u-boot fit_standalone_release sequence: SIP_MCU_CFG
+		SMC + CRU/GRF/PMU writes), then brings up the rpmsg virtio master
+		over mailbox0/mailbox3 and the 2 MiB shared window at 0x03c00000,
+		exposing /dev/rpmsg/mcu.  Selecting this pulls in RPTUN (and with
+		CONFIG_DRIVERS_VIRTIO_RPMSG also the whole rpmsg stack).
+
+if RK3506_RPTUN
+
+config RK3506_RPTUN_BOOT_M0
+	bool "Boot the bus M0 from NuttX"
+	default y
+	---help---
+		Copy the embedded M0 firmware to the M0 SRAM and start it via the
+		ROCKCHIP SIP (SMC 0x82000028) during rptun start.  Disable only if
+		something else (e.g. a U-Boot with CONFIG_ROCKCHIP_AMP) already
+		booted the M0 with a compatible firmware.
+
+endif
+
+config RK3506_OTA
+	bool "RK3506 A/B OTA slot manager (/dev/ota)"
+	default n
+	depends on RK3506_SPINAND_FSPI
+	---help---
+		Register the A/B OTA slot manager on top of the SPI NAND MTD.
+		Implements the Android/Rockchip boot-control protocol consumed by
+		the prebuilt U-Boot (CONFIG_ANDROID_AB): AvbABData metadata at
+		misc offset 2048, slot images in the boot_a/boot_b partitions,
+		streaming slot update with readback verify, boot-try decrement /
+		rollback hook (rcS runs `ota bootcheck`) and activate/confirm.
+		Acceptance: nsh> ota status / ota update /data/nuttx.fit.
