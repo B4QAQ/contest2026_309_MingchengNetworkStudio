@@ -1,0 +1,82 @@
+############################################################################
+# vendor/rockchip/boards/rk3506/hd-rk3506-evm/scripts/Make.defs
+#
+# Board-level Make.defs for HD-RK3506-EVM board.
+# Reference: vendor_allwinnertech/boards/r528/r528s3-gemini-s1/scripts/Make.defs
+############################################################################
+
+include ${TOPDIR}/.config
+include ${TOPDIR}/tools/Config.mk
+
+#---------------------------------------------------------------------------
+# Toolchain
+#---------------------------------------------------------------------------
+include ${TOPDIR}/arch/arm/src/armv7-a/Toolchain.defs
+
+#---------------------------------------------------------------------------
+# Linker Script
+#---------------------------------------------------------------------------
+LDSCRIPT = ld.script
+ARCHSCRIPT += $(BOARD_DIR)/scripts/$(LDSCRIPT)
+
+#---------------------------------------------------------------------------
+# Compiler Flags
+#---------------------------------------------------------------------------
+ARCHPICFLAGS = -fpic -msingle-pic-base -mpic-register=r10
+
+CFLAGS   := $(ARCHCFLAGS) $(ARCHOPTIMIZATION) $(ARCHCPUFLAGS) $(ARCHINCLUDES) $(ARCHDEFINES) $(EXTRAFLAGS) -pipe
+CPICFLAGS = $(ARCHPICFLAGS) $(CFLAGS)
+CXXFLAGS := $(ARCHCXXFLAGS) $(ARCHOPTIMIZATION) $(ARCHCPUFLAGS) $(ARCHXXINCLUDES) $(ARCHDEFINES) $(EXTRAFLAGS) -pipe
+CXXPICFLAGS = $(ARCHPICFLAGS) $(CXXFLAGS)
+CPPFLAGS := $(ARCHINCLUDES) $(ARCHDEFINES) $(EXTRAFLAGS)
+AFLAGS   := $(CFLAGS) -D__ASSEMBLY__
+
+NXFLATLDFLAGS1 = -r -d -warn-common
+NXFLATLDFLAGS2 = $(NXFLATLDFLAGS1) -T$(TOPDIR)/binfmt/libnxflat/gnu-nxflat-pcrel.ld -no-check-sections
+LDNXFLATFLAGS  = -e main -s 2048
+
+#---------------------------------------------------------------------------
+# Board-specific Pre-built Libraries
+#---------------------------------------------------------------------------
+EXTRA_LIBS += $(wildcard $(shell readlink -f $(TOPDIR)/$(CONFIG_ARCH_BOARD_CUSTOM_DIR))/libs/$(CONFIG_ARCH_BOARD_CUSTOM_NAME)/*.a)
+
+#---------------------------------------------------------------------------
+# QuickApp prebuilt libraries (only linked when CONFIG_QUICKAPP=y)
+#---------------------------------------------------------------------------
+ifeq ($(CONFIG_QUICKAPP),y)
+QUICKAPP_PREBUILT_DIR = $(TOPDIR)/../vendor/openvela/boards/vela/libs/armv7a_cmake
+EXTRA_LIBS += -Wl,--whole-archive
+EXTRA_LIBS += $(QUICKAPP_PREBUILT_DIR)/libapps_vapp.a
+EXTRA_LIBS += $(QUICKAPP_PREBUILT_DIR)/libquickapp.a
+EXTRA_LIBS += $(QUICKAPP_PREBUILT_DIR)/libquickappfeatures.a
+EXTRA_LIBS += $(QUICKAPP_PREBUILT_DIR)/libquickapp_inspector.a
+EXTRA_LIBS += $(QUICKAPP_PREBUILT_DIR)/libgui_wrapper.a
+EXTRA_LIBS += $(QUICKAPP_PREBUILT_DIR)/liblibfeature.a
+EXTRA_LIBS += $(QUICKAPP_PREBUILT_DIR)/libuikit.a
+EXTRA_LIBS += $(QUICKAPP_PREBUILT_DIR)/liblibmedia.a
+EXTRA_LIBS += $(QUICKAPP_PREBUILT_DIR)/liblibpfw.a
+EXTRA_LIBS += -Wl,--no-whole-archive
+endif
+
+#---------------------------------------------------------------------------
+# Post-build Actions
+# Reference: Allwinner POSTBUILD pattern
+#---------------------------------------------------------------------------
+define POSTBUILD
+    cp nuttx nuttx.elf
+    $(Q)echo "Generating: nuttx.bin";
+    # Strip all debug sections to reduce binary size
+    $(TOPDIR)/../prebuilts/gcc/linux-x86_64/arm-none-eabi/bin/arm-none-eabi-strip --remove-section=.note.gnu.build-id --remove-section=.debug_abbrev --remove-section=.debug_info --remove-section=.debug_line --remove-section=.debug_aranges --remove-section=.debug_line_str --remove-section=.debug_str --remove-section=.debug_frame --remove-section=.debug_loclists --remove-section=.debug_rnglists --remove-section=.debug_macro --remove-section=.debug_loc --remove-section=.debug_ranges --remove-section=.debug_addr nuttx
+    # Generate binary, only including loadable sections (exclude zero-padding)
+    $(TOPDIR)/../prebuilts/gcc/linux-x86_64/arm-none-eabi/bin/arm-none-eabi-objcopy -O binary --only-section=.text --only-section=.ARM.exidx --only-section=.ARM.extab --only-section=.init_section --only-section=.data nuttx vela.bin
+    $(Q)echo "Firmware: vela.bin -> nand_firmware/nuttx.bin";
+    @mkdir -p $(TOPDIR)/../nand_firmware
+    @cp vela.bin $(TOPDIR)/../nand_firmware/nuttx.bin
+    $(Q)echo "Firmware size: $$(ls -lh vela.bin | awk '{print $$5}')";
+    $(Q)echo "Packaging: update.img (NAND firmware)..."
+    @cd $(TOPDIR)/../nand_firmware && bash pack_nand.sh
+    $(Q)echo "========================================"
+    $(Q)echo "  Build complete!"
+    $(Q)echo "  Output: nand_firmware/update.img"
+    $(Q)echo "========================================"
+endef

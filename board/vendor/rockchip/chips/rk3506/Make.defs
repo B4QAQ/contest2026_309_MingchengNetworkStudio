@@ -1,0 +1,104 @@
+############################################################################
+# vendor/rockchip/chips/rk3506/Make.defs
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+############################################################################
+
+include armv7-a/Make.defs
+
+# RK3506-specific C source files
+
+CHIP_CSRCS  = rk3506_start.c
+CHIP_CSRCS += rk3506_irq.c
+CHIP_CSRCS += rk3506_lowputc.c
+CHIP_CSRCS += rk3506_serial.c
+CHIP_CSRCS += rk3506_timerisr.c
+CHIP_CSRCS += rk3506_allocateheap.c
+
+ifeq ($(CONFIG_RK3506_VOP),y)
+CHIP_CSRCS += rk3506_vop.c
+endif
+
+ifeq ($(CONFIG_RK3506_I2C),y)
+CHIP_CSRCS += rk3506_i2c.c
+endif
+
+ifeq ($(CONFIG_RK3506_USBHOST),y)
+CHIP_CSRCS += rk3506_usbhost.c
+endif
+
+ifeq ($(CONFIG_RK3506_SPI),y)
+CHIP_CSRCS += rk3506_spi.c
+endif
+
+ifneq ($(filter y,$(CONFIG_RK3506_SPINAND) $(CONFIG_RK3506_FSPI) $(CONFIG_RK3506_PWM) $(CONFIG_RK3506_SARADC) $(CONFIG_RK3506_CAN) $(CONFIG_RK3506_WDT)),)
+CHIP_CSRCS += rk3506_cru.c
+CHIP_CSRCS += rk3506_iomux.c
+endif
+
+ifeq ($(CONFIG_RK3506_SPINAND),y)
+CHIP_CSRCS += rk3506_spinand.c
+endif
+
+ifeq ($(CONFIG_RK3506_FSPI),y)
+CHIP_CSRCS += rk3506_fspi.c
+endif
+
+ifeq ($(CONFIG_RK3506_SPINAND_FSPI),y)
+CHIP_CSRCS += rk3506_spinand_fspi.c
+endif
+
+ifeq ($(CONFIG_RK3506_PWM),y)
+CHIP_CSRCS += rk3506_pwm.c
+endif
+
+ifeq ($(CONFIG_RK3506_SARADC),y)
+CHIP_CSRCS += rk3506_saradc.c
+endif
+
+ifeq ($(CONFIG_RK3506_CAN),y)
+CHIP_CSRCS += rk3506_can.c
+endif
+
+ifeq ($(CONFIG_RK3506_WDT),y)
+CHIP_CSRCS += rk3506_wdt.c
+endif
+
+ifeq ($(CONFIG_RK3506_RPTUN),y)
+CHIP_CSRCS += rk3506_rptun.c
+endif
+
+ifeq ($(CONFIG_RK3506_OTA),y)
+CHIP_CSRCS += rk3506_ota.c
+endif
+
+# Identity va<->pa helpers required by the libmetal NuttX io shim
+# (nuttx/openamp/libmetal/lib/system/nuttx/io.c) when the page allocator
+# is not used; see rk3506_addrenv.c for the full rationale.
+
+ifeq ($(CONFIG_OPENAMP),y)
+ifneq ($(CONFIG_MM_PGALLOC),y)
+CHIP_CSRCS += rk3506_addrenv.c
+endif
+endif
+
+ifeq ($(CONFIG_RK3506_GMAC0),y)
+CHIP_CSRCS += rk3506_gmac0.c
+CHIP_CSRCS += rk3506_gmac_hal.c
+endif

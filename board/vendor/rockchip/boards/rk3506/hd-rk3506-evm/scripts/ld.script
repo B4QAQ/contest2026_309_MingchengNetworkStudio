@@ -1,0 +1,122 @@
+/****************************************************************************
+ * vendor/rockchip/boards/rk3506/hd-rk3506-evm/scripts/ld.script
+ *
+ * Linker script for HD-RK3506-EVM board.
+ *
+ * Memory layout:
+ *   CONFIG_RAM_START = 0x02080000 (U-Boot kernel_addr_r)
+ *   CONFIG_RAM_SIZE  = 27.5MiB (0x01B80000 = 28835840 bytes)
+ *
+ * Physical DRAM is 128MiB spanning 0x00000000-0x08000000. NuttX runs
+ * from 0x02080000. RAM must END at 0x03c00000: the A7<->M0 rpmsg
+ * shared window (2MiB at pa 0x03c00000, identity-mapped into the MCU's
+ * LINUX_RPMSG linker region and reserved by rk3506-amp.dtsi) lives in
+ * DRAM, and the mm heap would otherwise allocate over it. The L1 page
+ * table sits at RAM_START+RAM_SIZE-0x4000 (chip.h).
+ *
+ * Reference: vendor_allwinnertech/boards/r528/r528s3-gemini-s1/scripts/sdram.ld.S
+ ****************************************************************************/
+
+MEMORY
+{
+    sdram (W!RX) : ORIGIN = 0x02080000, LENGTH = 0x1B80000
+}
+
+OUTPUT_FORMAT("elf32-littlearm", "elf32-littlearm", "elf32-littlearm")
+OUTPUT_ARCH(arm)
+ENTRY(_stext)
+SECTIONS
+{
+    .text :
+    {
+        _stext = ABSOLUTE(.);
+        __text_start = .;
+        _head_start = ABSOLUTE(.);
+        KEEP(*(.head))
+        _head_end = ABSOLUTE(.);
+        *(.vectors)
+        *(.text .text.*)
+        *(.fixup)
+        *(.gnu.warning)
+        *(.rodata .rodata.*)
+        *(.gnu.linkonce.t.*)
+        *(.glue_7)
+        *(.glue_7t)
+        *(.got)
+        *(.gcc_except_table)
+        *(.gnu.linkonce.r.*)
+        *(.gnu.linkonce.armextab.*)
+        *(.ARM.extab*)
+        _etext = ABSOLUTE(.);
+    } > sdram
+
+    .ARM.exidx : ALIGN(4)
+    {
+        PROVIDE_HIDDEN (__exidx_start = .);
+        *(.ARM.exidx* .gnu.linkonce.armexidx.*)
+        PROVIDE_HIDDEN (__exidx_end = .);
+    } > sdram
+
+    .init_section :
+    {
+        _sinit = ABSOLUTE(.);
+        KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*)))
+        KEEP(*(.init_array EXCLUDE_FILE(*crtbegin.o *crtbegin?.o *crtend.o *crtend?.o) .ctors))
+        . = ALIGN(0x1000);
+        _einit = ABSOLUTE(.);
+    } > sdram
+
+    _eronly = .;
+
+    .data :
+    {
+        _sdata = ABSOLUTE(.);
+        *(.data .data.*)
+        *(.gnu.linkonce.d.*)
+        CONSTRUCTORS
+        . = ALIGN(4);
+        _edata = ABSOLUTE(.);
+    } > sdram
+
+    /* Uninitialized data */
+
+    .noinit :
+    {
+        _snoinit = ABSOLUTE(.);
+        *(.noinit*)
+        _enoinit = ABSOLUTE(.);
+    } > sdram
+
+    .bss :
+    {
+        _sbss = ABSOLUTE(.);
+        *(.bss .bss.*)
+        *(.gnu.linkonce.b.*)
+        *(COMMON)
+        . = ALIGN(16);
+        _ebss = ABSOLUTE(.);
+    } > sdram
+
+    /* g_idle_topstack is NOT defined here. arm_head.S defines it as a data
+     * word holding IDLE_STACK_TOP = _ebss + CONFIG_IDLETHREAD_STACKSIZE.
+     * The boot/idle stack occupies [_ebss, g_idle_topstack) and the heap
+     * starts at g_idle_topstack, so they never overlap. Defining a linker
+     * symbol with the same name collides with the head.S object and makes
+     * the C code read a garbage heap base (it dereferences the variable).
+     */
+
+    /* Stabs debugging sections. */
+
+    .stab 0 : { *(.stab) }
+    .stabstr 0 : { *(.stabstr) }
+    .stab.excl 0 : { *(.stab.excl) }
+    .stab.exclstr 0 : { *(.stab.exclstr) }
+    .stab.index 0 : { *(.stab.index) }
+    .stab.indexstr 0 : { *(.stab.indexstr) }
+    .comment 0 : { *(.comment) }
+    .debug_abbrev 0 : { *(.debug_abbrev) }
+    .debug_info 0 : { *(.debug_info) }
+    .debug_line 0 : { *(.debug_line) }
+    .debug_pubnames 0 : { *(.debug_pubnames) }
+    .debug_aranges 0 : { *(.debug_aranges) }
+}

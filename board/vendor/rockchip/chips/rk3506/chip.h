@@ -1,0 +1,141 @@
+/****************************************************************************
+ * vendor/rockchip/chips/rk3506/chip.h
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.  The
+ * ASF licenses this file to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance with the
+ * License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+ * License for the specific language governing permissions and limitations
+ * under the License.
+ *
+ ****************************************************************************/
+
+#ifndef __VENDOR_ROCKCHIP_CHIPS_RK3506_CHIP_H
+#define __VENDOR_ROCKCHIP_CHIPS_RK3506_CHIP_H
+
+/****************************************************************************
+ * Included Files
+ ****************************************************************************/
+
+#include <nuttx/config.h>
+
+/****************************************************************************
+ * Pre-processor Definitions
+ ****************************************************************************/
+
+/* GIC Configuration (GICv2)
+ *
+ * For Cortex-A7, the MPCORE offsets are:
+ *   MPCORE_ICD_OFFSET = 0x1000 (Distributor)
+ *   MPCORE_ICC_OFFSET = 0x2000 (CPU Interface)
+ *
+ * So CHIP_MPCORE_VBASE = GIC_DIST_BASE - 0x1000 = 0xFF580000
+ */
+
+#define RK3506_GIC_DIST_BASE    0xff581000
+#define RK3506_GIC_CPU_BASE     0xff582000
+
+#define CHIP_MPCORE_VBASE       0xff580000
+#define MPCORE_ICD_OFFSET       0x1000
+#define MPCORE_ICC_OFFSET       0x2000
+
+/* Page Table Configuration */
+
+#define PGTABLE_SIZE            0x00004000
+#define PGTABLE_BASE_PADDR      (CONFIG_RAM_START + CONFIG_RAM_SIZE - PGTABLE_SIZE)
+#define PGTABLE_BASE_VADDR      (CONFIG_RAM_START + CONFIG_RAM_SIZE - PGTABLE_SIZE)
+
+/* Early head.S UART debug: polled write straight to UART0 (0xff0a0000,
+ * DesignWare 8250: LSR @0x14 THRE=bit5, THR @0x00). Works with MMU off
+ * (physical) and after our identity mapping. Consumed by arm_head.S.
+ */
+#define RK3506_HEAD_UART_DEBUG  1
+#define RK3506_DBG_UART_BASE    0xff0a0000
+
+#undef CONFIG_RAM_END
+#define CONFIG_RAM_END          PGTABLE_BASE_PADDR
+
+#define NUTTX_TEXT_VADDR        (CONFIG_FLASH_VSTART & 0xfff00000)
+#define NUTTX_TEXT_PADDR        (CONFIG_FLASH_VSTART & 0xfff00000)
+#define NUTTX_TEXT_PEND         ((CONFIG_FLASH_END + 0x000fffff) & 0xfff00000)
+#define NUTTX_TEXT_SIZE         (NUTTX_TEXT_PEND - NUTTX_TEXT_PADDR)
+
+#define NUTTX_RAM_VADDR         (CONFIG_RAM_VSTART & 0xfff00000)
+#define NUTTX_RAM_PADDR         (CONFIG_RAM_START & 0xfff00000)
+#define NUTTX_RAM_PEND          ((CONFIG_RAM_END + 0x000fffff) & 0xfff00000)
+#define NUTTX_RAM_SIZE          (NUTTX_RAM_PEND - NUTTX_RAM_PADDR)
+
+/****************************************************************************
+ * Macro Definitions
+ ****************************************************************************/
+
+#ifdef __ASSEMBLY__
+
+/****************************************************************************
+ * Name: cpuindex
+ *
+ * Description:
+ *   Return an index identifying the current CPU.
+ *
+ ****************************************************************************/
+
+#if defined(CONFIG_SMP) && CONFIG_ARCH_INTERRUPTSTACK > 7
+  .macro  cpuindex, index
+  mrc  p15, 0, \index, c0, c0, 5  /* Read the MPIDR */
+  and  \index, \index, #3         /* Bits 0-1=CPU ID */
+  .endm
+#endif
+
+/****************************************************************************
+ * Name: setirqstack
+ *
+ * Description:
+ *   Set the current stack pointer to the "top" of the IRQ interrupt
+ *   stack for the current CPU.
+ *
+ ****************************************************************************/
+
+#if defined(CONFIG_SMP) && CONFIG_ARCH_INTERRUPTSTACK > 7
+  .macro  setirqstack, tmp1, tmp2
+  mrc  p15, 0, \tmp1, c0, c0, 5  /* tmp1=MPIDR */
+  and  \tmp1, \tmp1, #3          /* Bits 0-1=CPU ID */
+  ldr  \tmp2, =g_irqstack_top    /* tmp2=Array of IRQ stack pointers */
+  lsls \tmp1, \tmp1, #2          /* tmp1=Array byte offset */
+  add  \tmp2, \tmp2, \tmp1       /* tmp2=Offset address into array */
+  ldr  sp, [\tmp2, #0]           /* sp=Address in stack allocation */
+  .endm
+#endif
+
+/****************************************************************************
+ * Name: setfiqstack
+ *
+ * Description:
+ *   Set the current stack pointer to the "top" of the FIQ interrupt
+ *   stack for the current CPU.
+ *
+ ****************************************************************************/
+
+#if defined(CONFIG_SMP) && CONFIG_ARCH_INTERRUPTSTACK > 7
+  .macro  setfiqstack, tmp1, tmp2
+  mrc  p15, 0, \tmp1, c0, c0, 5  /* tmp1=MPIDR */
+  and  \tmp1, \tmp1, #3          /* Bits 0-1=CPU ID */
+  ldr  \tmp2, =g_fiqstack_top    /* tmp2=Array of FIQ stack pointers */
+  lsls \tmp1, \tmp1, #2          /* tmp1=Array byte offset */
+  add  \tmp2, \tmp2, \tmp1       /* tmp2=Offset address into array */
+  ldr  sp, [\tmp2, #0]           /* sp=Address in stack allocation */
+  .endm
+#endif
+
+#endif /* __ASSEMBLY__ */
+
+#endif /* __VENDOR_ROCKCHIP_CHIPS_RK3506_CHIP_H */

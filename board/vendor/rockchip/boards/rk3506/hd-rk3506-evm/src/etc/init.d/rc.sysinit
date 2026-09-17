@@ -1,0 +1,25 @@
+#!/bin/sh
+# vendor/rockchip/boards/rk3506/hd-rk3506-evm/src/etc/init.d/rc.sysinit
+#
+# One-time system initialization.  NSH runs this script exactly once at
+# boot, before rcS, immediately after the board bring-up code in
+# hd_rk3506_bringup.c has registered the on-chip devices.
+#
+# The base pseudo-filesystems are mounted by the bring-up C code (which
+# also logs the result):
+#
+#     procfs  ->  /proc    ("procfs mounted at /proc")
+#     tmpfs   ->  /tmp     ("tmpfs mounted at /tmp")
+#
+# They are deliberately NOT mounted here again: a second mount of an
+# already-covered mountpoint returns -EEXIST and would just print an
+# error on the console.
+#
+# Persistent-storage mounts (SPI NAND SmartFS, USB vfat) will be added
+# here together with their block devices once those drivers land; there
+# is nothing to mount at the moment.
+#
+# This file is shipped as a RAW NSH script (RCRAWS in CMakeLists.txt),
+# so its '#' lines are real NSH comments and it is NOT run through the
+# C preprocessor.  Do not add C block comments or cpp directives here -
+# NSH would try to execute them as shell commands.

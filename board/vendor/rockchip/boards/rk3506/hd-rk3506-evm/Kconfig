@@ -1,0 +1,65 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+if ARCH_BOARD_CUSTOM
+
+config ARCH_BOARD
+	default "hd-rk3506-evm" if ARCH_BOARD_CUSTOM_NAME="hd-rk3506-evm"
+
+endif # ARCH_BOARD_CUSTOM
+
+config INPUT_GT911
+	bool "GT911 Touchscreen on I2C0"
+	default n
+	depends on I2C && INPUT_TOUCHSCREEN
+	---help---
+		Enable GT911 capacitive touchscreen on I2C0 (addr 0x5D).
+
+config LCD_ST7701S
+	bool "ST7701S LCD Panel Initialization"
+	default n
+	depends on VIDEO_FB
+	---help---
+		Enable ST7701S LCD panel initialization via 3-wire SPI.
+		Sends the initialization sequence to configure the panel for
+		480x854 RGB565 operation.
+
+config HD_RK3506_NETCFG
+	bool "netcfg network configuration daemon"
+	default n
+	depends on NET && FS_ROMFS
+	select NETDEV_IOCTL if NETDEV_PHY_IOCTL
+	---help---
+		Enable the netcfg NSH builtin.  It reads /etc/net.conf
+		(mode=dhcp|static, ip/netmask/gateway/dns, auto_dhcp) at
+		startup, applies the configuration and, with auto_dhcp=1,
+		re-runs DHCP whenever the GMAC0 link transitions to up
+		(via the driver's SIOCMIINOTIFY link-change signal).
+
+config HD_RK3506_RPMSGTEST
+	bool "rpmsgtest NSH command (M0 rpmsg link self-test)"
+	default n
+	depends on RPTUN
+	---help---
+		Enable the rpmsgtest NSH builtin.  It creates an rpmsg endpoint
+		(src 0x30, dst 0x4003 "rpmsg-mcu0-test") on /dev/rpmsg/mcu,
+		sends a payload and waits for the M0's canned reply
+		("Rockchip rpmsg linux test!").  PASS = the reply arrived and
+		matches; FAIL otherwise.  This is the acceptance command for
+		the A7<->M0 rpmsg link.
+
+config HD_RK3506_OTACMD
+	bool "ota NSH command (A/B slot update / activate / confirm)"
+	default n
+	depends on RK3506_OTA
+	---help---
+		Enable the ota NSH builtin.  It talks to /dev/ota and implements
+		the whole A/B update flow: `ota status` inspects the AvbABData
+		slot metadata, `ota update <file>` erases the inactive slot,
+		streams a boot.fit image into it, readback-verifies it and
+		activates it, `ota confirm` makes the running slot permanent
+		after a health check, `ota bootcheck` (called from rcS) burns
+		one boot try and rolls back when the tries are exhausted, and
+		`ota boot-a` / `ota boot-b` switch slots manually.
