@@ -15,3 +15,9 @@ nanopi_m4_rk3399/
 openvela/.repo/
 openvela/cmake_out/
 openvela/nand_firmware/.mcu_build/
+.dsh/
+JsFeatureDocs/
+VelaDocs/
+Vela_Application_Documentation-main/
+luoxe_docs/
+veladocsOffial/
