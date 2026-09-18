@@ -1,7 +1,7 @@
 # HANDOFF — 交接给下一个 AI
 
 > 生成时间：2026-09-17（v8l 之后，curl 挂死根因定位进行中）
-> 配套文件：`AGENTS.md`（项目宪法，必读）、`MORNING_CHECKLIST.md` §14–§16（curl 调查逐日记录）
+> 配套文件：`AGENTS.md`（项目宪法，必读）
 > 读这份文档能让你零上下文接手。看完再动任何代码。
 
 ---
@@ -63,7 +63,7 @@ Ctrl+C 后：全部该有的输出一次性出现、文件完整、`echo DONE=$?
 
 ### 1.3 下一步实验（按顺序，前 3 个零成本）
 
-**A. 小米老师指定，待选手跑（还没回报结果）：**
+**A. 小米老师指定，选手测试正常：**
 ```
 nsh> date
 nsh> sleep 1
@@ -144,10 +144,7 @@ nsh> ls -l /tmp/body /tmp/trace
 
 1. **本机准备**（我能做）：补齐各项目提交（lvgl_homepage 归属先问选手）；如需，把 nuttx 12 提交压成 2 个干净提交（另起分支，不动 detached 现场）；导出 8–9 月 DSH 日志到 `logs/B4QAQ/`；按 README §6 起草作品 README（选手审定）。
 2. **GitHub 侧**（网络不可达，需选手自己在有网环境做，或给可用代理）：
-   - fork：`vendor_rockchip`、`nuttx`、`external`（如保持单提交也可直接 PR）、必要时 `nuttx-apps`；分支推到自己 fork；
-   - 向各公共仓 `dev-ai-contest-2026` 发 PR；
-   - 改本队 manifest（`contest2026_309_...xml` 里 override vendor/rockchip 等项目指向自己 fork 的分支），保证评委 repo sync 可复现构建；
-   - 外层仓：推 135 提交 + 新增日志/README → 发 PR → 签 CLA → `/check-cla` → 自行合入。
+   - 将vender下的适配成果放在/project/board中，再提交，等选手确认
 3. 选手上次说"提交前让我确认一遍"——**任何 push/PR 动作前把清单给他过目**。
 
 ---
@@ -189,6 +186,6 @@ nsh> ls -l /tmp/body /tmp/trace
 ## 5. 选手协作风格（重要）
 
 - 中文、极简、零容忍偷工减料/猜测/擅自删除或替换；curl 绝不能动、绝不能删。
-- 每个假设被推翻要**明确写"自我更正"并记录**（MORNING_CHECKLIST 里有大量范例），他会逐条核对。
+- 每个假设被推翻要**明确写"自我更正"并记录**，他会逐条核对。
 - 方案级决定先给选项+代价+推荐，等他拍板；他会跑板上实验、回贴结果，响应很快。
 - 他现在背后还有小米老师的官方意见，官方建议与本文档结论一致（timer/poll 唤醒方向），按 §1.3 推进即可。
