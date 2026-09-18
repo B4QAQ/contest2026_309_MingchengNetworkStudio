@@ -209,18 +209,31 @@ static int netcfg_apply_static(FAR const struct netcfg_conf_s *conf)
  *
  ****************************************************************************/
 
+#define NETCFG_DHCP_RETRIES     5
+#define NETCFG_DHCP_DELAY_MS    2000
+#define NETCFG_DHCP_RETRY_DELAY 3000
+
 static int netcfg_run_dhcp(void)
 {
   int ret;
+  int i;
 
-  ret = netlib_obtain_ipv4addr(NETCFG_IFNAME);
-  if (ret < 0)
+  for (i = 0; i < NETCFG_DHCP_RETRIES; i++)
     {
+      if (i > 0)
+        {
+          printf("netcfg: dhcp retry %d/%d\n", i + 1, NETCFG_DHCP_RETRIES);
+          usleep(NETCFG_DHCP_RETRY_DELAY * 1000);
+        }
+
+      ret = netlib_obtain_ipv4addr(NETCFG_IFNAME);
+      if (ret >= 0)
+        {
+          printf("netcfg: dhcp on %s ok\n", NETCFG_IFNAME);
+          return OK;
+        }
+
       printf("netcfg: dhcp on %s failed: %d\n", NETCFG_IFNAME, errno);
-    }
-  else
-    {
-      printf("netcfg: dhcp on %s ok\n", NETCFG_IFNAME);
     }
 
   return ret;
@@ -451,7 +464,9 @@ int main(int argc, FAR char *argv[])
     {
       if (netcfg_wait_link_change())
         {
-          printf("netcfg: link up -> dhcp\n");
+          printf("netcfg: link up, waiting %dms for PHY settle...\n",
+                 NETCFG_DHCP_DELAY_MS);
+          usleep(NETCFG_DHCP_DELAY_MS * 1000);
           netcfg_run_dhcp();
         }
       else
