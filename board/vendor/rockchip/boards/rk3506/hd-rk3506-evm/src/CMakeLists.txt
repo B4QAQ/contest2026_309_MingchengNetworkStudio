@@ -93,6 +93,32 @@ if(CONFIG_HD_RK3506_OTACMD)
     hd_rk3506_ota.c)
 endif()
 
+# timetest: diagnostic command testing poll/select/nanosleep timeout paths.
+if(CONFIG_HD_RK3506_TIMETEST)
+  nuttx_add_application(
+    NAME
+    timetest
+    STACKSIZE
+    4096
+    PRIORITY
+    100
+    SRCS
+    hd_rk3506_timetest.c)
+endif()
+
+# bt: diagnostic command to dump a task's call stack via sched_dumpstack.
+if(CONFIG_HD_RK3506_BT)
+  nuttx_add_application(
+    NAME
+    bt
+    STACKSIZE
+    4096
+    PRIORITY
+    100
+    SRCS
+    hd_rk3506_bt.c)
+endif()
+
 # Both init scripts are shipped as RAW NSH scripts (RCRAWS).  They use
 # only '#' comment lines and plain NSH commands - no C preprocessor
 # directives (#include/#ifdef) and no C-style '/* ... */' comments.  They

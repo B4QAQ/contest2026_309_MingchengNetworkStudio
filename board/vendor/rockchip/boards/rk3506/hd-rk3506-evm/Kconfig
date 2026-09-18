@@ -63,3 +63,19 @@ config HD_RK3506_OTACMD
 		after a health check, `ota bootcheck` (called from rcS) burns
 		one boot try and rolls back when the tries are exhausted, and
 		`ota boot-a` / `ota boot-b` switch slots manually.
+
+config HD_RK3506_TIMETEST
+	bool "timetest NSH command (poll/select/nanosleep timeout diagnostics)"
+	default n
+	---help---
+		Enable the timetest NSH builtin.  It tests poll(NULL,0,1000),
+		select(0,...,1s), nanosleep(1s), and sem_timedwait(1s) to
+		diagnose curl hang root cause.
+
+config HD_RK3506_BT
+	bool "bt NSH command (backtrace dump)"
+	default n
+	depends on SCHED_BACKTRACE
+	---help---
+		Enable the bt NSH builtin.  Usage: bt <pid>.
+		Dumps the call stack of the specified task via sched_dumpstack.
