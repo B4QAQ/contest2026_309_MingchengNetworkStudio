@@ -1,7 +1,0 @@
-/dts-v1/;
-/ {
-	model = "HD-RK3506-EVM OpenVela";
-	compatible = "rockchip,rk3506-evb", "rockchip,rk3506";
-	#address-cells = <1>;
-	#size-cells = <1>;
-};
