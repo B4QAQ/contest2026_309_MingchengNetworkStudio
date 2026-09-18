@@ -23,7 +23,7 @@ description: "新芯片移植到 openvela (NuttX) 的完整流程。Use when: �
 | 4 | **开发板原理图** | 引脚分配、外设连接、电源域 |
 
 **RK3506 参考路径**:
-- Linux SDK: `RK3506G2/rk3506_linux6.1_sdk_v1.2.0_iot_evm/`
+- Linux SDK: `rk3506_linux6.1_sdk_v1.2.0_iot_evm/`
   - 寄存器: `hal/lib/CMSIS/Device/RK3506/Include/rk3506.h`
   - HAL 驱动: `hal/lib/hal/src/<periph>.c`
   - 时钟: `kernel-6.1/drivers/clk/rockchip/clk-rk3506.c`
