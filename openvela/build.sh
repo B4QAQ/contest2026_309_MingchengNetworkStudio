@@ -1,1 +1,0 @@
-nuttx/tools/build.sh
