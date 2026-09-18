@@ -5,20 +5,15 @@ description: "新芯片移植到 openvela (NuttX) 的完整流程。Use when: �
 
 # openvela Chip Porting
 
-基于 RK3506G2 完整移植经验总结的芯片移植方法论。涵盖从零到完整 BSP 的全流程。
+基于 RK3506G2 完整移植经验（116 个提交，v8a→v8l）总结的芯片移植方法论。
 
-## 适用场景
-
-- 新芯片首次移植到 openvela
-- 新开发板适配已有芯片
-- 驱动开发与调试
-- 硬件适配赛道参赛
+**核心原则**: 参考 Linux SDK 寄存器定义 + 已有 NuttX 移植骨架，不凭记忆猜测。
 
 ---
 
 ## 1. 移植前准备
 
-### 1.1 收集参考资料（优先级顺序）
+### 1.1 参考资料优先级
 
 | 优先级 | 来源 | 用途 |
 |--------|------|------|
@@ -29,8 +24,11 @@ description: "新芯片移植到 openvela (NuttX) 的完整流程。Use when: �
 
 **RK3506 参考路径**:
 - Linux SDK: `RK3506G2/rk3506_linux6.1_sdk_v1.2.0_iot_evm/`
+  - 寄存器: `hal/lib/CMSIS/Device/RK3506/Include/rk3506.h`
+  - HAL 驱动: `hal/lib/hal/src/<periph>.c`
+  - 时钟: `kernel-6.1/drivers/clk/rockchip/clk-rk3506.c`
+  - Pinctrl: `u-boot/arch/arm/dts/rk3506-pinctrl.dtsi`
 - NuttX 参考: `openvela/vendor/allwinnertech/` (R258 Cortex-A7)
-- 数据手册: `HD-RK3506-EVM/` 目录
 
 ### 1.2 环境搭建
 
@@ -39,12 +37,15 @@ description: "新芯片移植到 openvela (NuttX) 的完整流程。Use when: �
 repo init -u <manifest_url> -b <branch>
 repo sync -c -j8
 
-# 2. 安装工具链
-# ARM GCC: prebuilts/gcc/linux-x86_64/arm-none-eabi/
-# 构建工具: prebuilts/build-tools/linux-x86_64/
-
-# 3. 配置 ccache
+# 2. 配置 ccache
 export CCACHE_DIR=/tmp/ccache_dir
+
+# 3. 构建命令模板
+cd openvela
+rm -rf cmake_out/<board>_nsh
+CCACHE_DIR=/tmp/ccache_dir \
+PATH="$(pwd)/prebuilts/build-tools/linux-x86_64/bin:$(pwd)/prebuilts/gcc/linux-x86_64/arm-none-eabi/bin:$PATH" \
+./build.sh vendor/<vendor>/boards/<chip>/<board>/configs/nsh/ --cmake -j$(nproc)
 ```
 
 ---
@@ -87,73 +88,39 @@ vendor/<vendor>/chips/<chip>/
 
 目标：串口输出 `nsh>` 提示符。
 
-### 3.1 链接脚本
+### 3.1 链接脚本关键配置
 
-关键配置：
 ```ld
 MEMORY
 {
   flash (rx)  : ORIGIN = 0x02080000, LENGTH = 16M
   sram  (rwx) : ORIGIN = 0x02000000, LENGTH = 512K
 }
-
-/* 栈和堆的大小 */
 __stack_size = 8K;
 __heap_size = 1M;
 ```
 
-### 3.2 启动代码
-
-```c
-// <board>_boardinit.c
-void board_late_initialize(void)
-{
-  // 时钟初始化
-  // 内存控制器初始化
-  // 串口初始化（用于 early console）
-}
-
-// <board>_appinit.c
-void board_app_initialize(uintptr_t arg)
-{
-  // 调用 bringup
-  board_bringup();
-}
-```
-
-### 3.3 defconfig 最小集
+### 3.2 defconfig 最小集
 
 ```ini
-# 架构
 CONFIG_ARCH="arm"
 CONFIG_ARCH_ARM=y
 CONFIG_ARCH_CHIP="<chip>"
 CONFIG_ARCH_BOARD="<board>"
-
-# 内存
 CONFIG_RAM_START=0x02080000
 CONFIG_RAM_SIZE=134217728  # 128MB
-
-# 串口
 CONFIG_UART0_SERIAL_CONSOLE=y
 CONFIG_SERIAL_CONSOLE="ttyS0"
-
-# NSH
-CONFIG_NSH_READLINE=y
 CONFIG_INIT_ENTRYPOINT="nsh_main"
 ```
 
-### 3.4 构建与验证
+### 3.3 常见启动问题
 
-```bash
-cd openvela
-rm -rf cmake_out/<board>_nsh
-CCACHE_DIR=/tmp/ccache_dir \
-PATH="$(pwd)/prebuilts/build-tools/linux-x86_64/bin:$(pwd)/prebuilts/gcc/linux-x86_64/arm-none-eabi/bin:$PATH" \
-./build.sh vendor/<vendor>/boards/<chip>/<board>/configs/nsh/ --cmake -j$(nproc)
-```
-
-**成功标志**: 串口输出 `nsh>` 提示符。
+| 现象 | 原因 | 解决方案 |
+|------|------|----------|
+| 无串口输出 | 时钟配置错误 | 检查 UART 时钟源和分频 |
+| HardFault | 内存映射错误 | 检查 MPU 配置和链接脚本 |
+| 卡在启动 | 外设初始化死循环 | 检查时钟门控和复位状态 |
 
 ---
 
@@ -172,27 +139,7 @@ PATH="$(pwd)/prebuilts/build-tools/linux-x86_64/bin:$(pwd)/prebuilts/gcc/linux-x
 7. **显示** - LCD 控制器、帧缓冲
 8. **音频** - I2S、编解码器
 
-### 4.2 驱动开发流程
-
-```
-1. 阅读 Linux SDK 驱动源码
-   ↓
-2. 提取寄存器定义和初始化序列
-   ↓
-3. 创建 NuttX 驱动骨架
-   ↓
-4. 实现 probe/init/remove
-   ↓
-5. 注册到 NuttX 框架
-   ↓
-6. Kconfig 集成
-   ↓
-7. 板级注册
-   ↓
-8. 测试验证
-```
-
-### 4.3 寄存器操作规范
+### 4.2 寄存器操作规范
 
 ```c
 // 使用 NuttX 标准寄存器访问函数
@@ -202,35 +149,35 @@ PATH="$(pwd)/prebuilts/build-tools/linux-x86_64/bin:$(pwd)/prebuilts/gcc/linux-x
 putreg32(value, base + REG_OFFSET);
 value = getreg32(base + REG_OFFSET);
 
-// 位域操作（HIWORD_UPDATE 模式）
+// 位域操作（Rockchip HIWORD_UPDATE 模式）
 #define HIWORD_UPDATE(val, mask, shift) \
   ((val) << (shift) | (mask) << ((shift) + 16))
 
 putreg32(HIWORD_UPDATE(1, 1, BIT_POS), grf_base + GRF_REG);
 ```
 
-### 4.4 时钟和复位
-
+**⚠️ 真实案例 - 时钟门控写反 (v8e)**:
 ```c
-// 使能外设时钟
-modifyreg32(cru_base + CLK_GATE_REG, 0, BIT_CLK_ENABLE);
+// 错误：写 1 实际是关时钟（SET_TO_DISABLE）
+putreg32(BIT_CLK, cru + CLK_REG);  // 实际关了时钟！
 
-// 复位外设
-modifyreg32(cru_base + SOFTRST_REG, 0, BIT_SOFTRST);
-up_udelay(10);  // 保持复位至少 10us
-modifyreg32(cru_base + SOFTRST_REG, BIT_SOFTRST, 0);
+// 正确：写 0 开时钟
+putreg32(BIT_CLK << 16, cru + CLK_REG);  // 高 16 位是写使能
 ```
 
-### 4.5 GPIO/Pinctrl
+### 4.3 日志宏使用规范
 
+**⚠️ 真实案例 - 日志宏误用 (v8c)**:
 ```c
-// 引脚复用配置（GRF 寄存器）
-// 注意：Rockchip 使用 HIWORD_UPDATE 模式
-#define RK3506_GRF_PMU_ADDR  0xff920000
+// 错误：使用 INPUT 子系统专用宏（CONFIG_DEBUG_INPUT_* 门控）
+ierr("error\n");  // 全部静默！
+iwarn("warning\n");
+iinfo("info\n");
 
-// 配置 GPIO1_A0 为 UART TX
-putreg32(HIWORD_UPDATE(2, 0x3, 0),  // 功能选择
-         RK3506_GRF_PMU_ADDR + GPIO1A_IOMUX_OFFSET);
+// 正确：使用通用日志宏
+_err("error\n");  // CONFIG_DEBUG_ERROR
+_warn("warning\n");  // CONFIG_DEBUG_WARN
+_info("info\n");  // CONFIG_DEBUG_INFO
 ```
 
 ---
@@ -253,40 +200,44 @@ DMA 描述符 + MAC 寄存器
 PHY (MII/RMII)
 ```
 
-### 5.2 关键实现点
+### 5.2 网络调试真实案例
 
-```c
-// 1. DMA 描述符初始化
-struct gmac_desc_s {
-  uint32_t status;
-  uint32_t ctrl;
-  uint32_t buf_addr;
-  uint32_t next_desc;
-};
-
-// 2. netdev 回调
-static const struct netdev_ops_s gmac_ops = {
-  .ifup     = gmac_ifup,
-  .ifdown   = gmac_ifdown,
-  .transmit = gmac_transmit,
-  .receive  = gmac_receive,
-  .addmac   = gmac_addmac,
-  .ioctl    = gmac_ioctl,
-};
-
-// 3. PHY 初始化（通过 MDIO）
-int phy_read(struct net_driver_s *dev, uint8_t phyaddr, uint8_t regaddr);
-int phy_write(struct net_driver_s *dev, uint8_t phyaddr, uint8_t regaddr, uint16_t data);
+**案例 1: DHCP 失败 (v8a)**:
+```
+原因: GMAC0 TX 描述符 TDES3[14:0] 帧长未填
+修复: 补充帧长字段
 ```
 
-### 5.3 常见网络问题
+**案例 2: RX 全部 CRC 错 (v8a)**:
+```
+原因: YT8512B PHY 未配置 RMII_EN + PLL refclk
+修复: 补充 PHY vendor 特定配置
+```
 
-| 问题 | 原因 | 解决方案 |
-|------|------|----------|
-| DHCP 超时 | PHY 未就绪 | link-up 后延时 2-3 秒 |
-| CRC 错误 | RMII 时钟配置错误 | 检查 REF_CLK 方向 |
-| 丢包 | DMA 描述符错误 | 检查缓冲区对齐和长度 |
-| 无法连接 | MAC 地址过滤 | 确保 AE 位设置 |
+**案例 3: 无法接收包 (v8a)**:
+```
+原因: MAC 地址过滤未设置 AE 位
+修复: PACKET_FILTER.PM 补 AE 位
+```
+
+**案例 4: DHCP 超时重连 (v8l)**:
+```
+原因: 网线拔插后立即 DHCP，PHY 未就绪
+修复: link-up 后延时 2-3 秒 + 重试 5 次
+```
+
+### 5.3 网络配置最佳实践
+
+```c
+// netcfg 守护进程模式
+// 1. 启动时读取 /etc/net.conf
+// 2. 注册 SIOCMIINOTIFY 信号
+// 3. link-up 时自动重试 DHCP
+
+// 配置示例 (/etc/net.conf)
+mode=dhcp
+auto_dhcp=1
+```
 
 ---
 
@@ -294,15 +245,22 @@ int phy_write(struct net_driver_s *dev, uint8_t phyaddr, uint8_t regaddr, uint16
 
 ### 6.1 DWC2 控制器配置
 
+**⚠️ 真实案例 - FIFO 大小卡死 (v8d)**:
 ```c
-// FIFO 大小配置（关键！）
+// 错误：默认 128 words，HS bulk mps=512B 需要 ~131 words
+#define DWC2_GRXFSIZ   128   // 太小！
+
+// 正确：按 SDK 值配置
 #define DWC2_GRXFSIZ   512   // 接收 FIFO
 #define DWC2_GNPTXFSIZ 256   // 非周期 TX FIFO
 #define DWC2_HPTXFSIZ  224   // 周期 TX FIFO
+```
 
-// 注意：HS bulk 需要足够大的 RX FIFO
-// mps=512B → 128 words + 状态字 ≈ 131 words
-// 默认 128 words 会导致 bulk 传输失败
+**案例: USB 枚举过但 bulk 传输死 (v8d)**:
+```
+现象: U 盘枚举成功，但读写卡死
+根因: RX FIFO 太小，核心静默拒绝发 token
+修复: 提到 SDK 值 512/256/224
 ```
 
 ### 6.2 USB Host 架构
@@ -337,10 +295,6 @@ struct lcd_timing_s {
   uint32_t vbp;       // 垂直后肩
   uint32_t vsync;     // 垂直同步
 };
-
-// 帧缓冲注册
-struct fb_video_s;
-int fb_register(int display, int plane);
 ```
 
 ### 7.2 RGB LCD 初始化
@@ -352,13 +306,6 @@ static void lcd_send_cmd(uint8_t cmd)
   // 片选拉低
   // 发送命令字节
   // 片选拉高
-}
-
-static void lcd_init_sequence(void)
-{
-  lcd_send_cmd(0xFF);  // 命令解锁
-  lcd_send_data(0x77);
-  // ... 完整初始化序列
 }
 ```
 
@@ -380,41 +327,43 @@ _info("info: %d\n", status);  // CONFIG_DEBUG_INFO
 
 **重要**: 不要用 `ierr/iwarn/iinfo`，那是 input 子系统专用宏！
 
-### 8.2 内存转储
+### 8.2 常用调试命令
 
 ```bash
-# 查看内存分布
-nsh> free
-
-# 查看进程
-nsh> ps
-
-# 查看网络
-nsh> ifconfig
-nsh> route
+nsh> free          # 内存分布
+nsh> ps            # 进程列表
+nsh> ifconfig      # 网络接口
+nsh> route         # 路由表
+nsh> ping <ip>     # 网络连通性
+nsh> date          # 系统时间
 ```
 
-### 8.3 GDB 调试
+### 8.3 问题排查流程
 
-```bash
-# 启动 GDB Server
-openocd -f interface/... -f target/...
-
-# 连接 GDB
-arm-none-eabi-gdb cmake_out/<board>_nsh/nuttx
-(gdb) target remote :3333
-(gdb) break board_bringup
-(gdb) continue
 ```
-
-### 8.4 常见启动问题
-
-| 现象 | 可能原因 | 检查点 |
-|------|----------|--------|
-| 无串口输出 | 时钟配置错误 | UART 时钟源和分频 |
-| HardFault | 内存映射错误 | MPU 配置、链接脚本 |
-| 卡在启动 | 外设初始化死循环 | 时钟门控、复位状态 |
-| 堆栈溢出 | 栈大小不足 | 增大 CONFIG_IDLETHREAD_STACKSIZE |
+现象
+  ↓
+1. 确认现象可复现
+  ↓
+2. 检查最简单原因
+   - 电源？时钟？复位？
+  ↓
+3. 添加诊断日志
+   - 寄存器值
+   - 函数调用链
+  ↓
+4. 对比参考代码
+   - Linux SDK 怎么做的？
+   - 其他 NuttX 移植怎么做的？
+  ↓
+5. 二分法定位
+   - 禁用部分功能
+   - 简化测试用例
+  ↓
+6. 硬件验证
+   - 示波器看信号
+   - 逻辑分析仪看协议
+```
 
 ---
 
@@ -423,11 +372,9 @@ arm-none-eabi-gdb cmake_out/<board>_nsh/nuttx
 ### 9.1 芯片级 Kconfig
 
 ```kconfig
-# vendor/<vendor>/chips/<chip>/Kconfig
 config ARCH_CHIP_<CHIP>
     bool "<Chip> series"
     select ARMV7A
-    select ARMV7A_DCACHE_WRITETHROUGH
     ---help---
         <Chip> Cortex-A7 processor.
 
@@ -436,8 +383,6 @@ if ARCH_CHIP_<CHIP>
 config <CHIP>_UART0
     bool "UART0"
     default y
-    ---help---
-        Enable UART0.
 
 endif # ARCH_CHIP_<CHIP>
 ```
@@ -445,7 +390,6 @@ endif # ARCH_CHIP_<CHIP>
 ### 9.2 板级 Kconfig
 
 ```kconfig
-# vendor/<vendor>/boards/<chip>/<board>/Kconfig
 config <BOARD>_NETCFG
     bool "netcfg network configuration daemon"
     default n
@@ -458,13 +402,8 @@ config <BOARD>_NETCFG
 
 ```ini
 # 每个配置项加注释说明用途
-# 网络配置
 CONFIG_<BOARD>_NETCFG=y
 CONFIG_NETUTILS_DHCPC_RETRIES=10  # STP 等待时间
-
-# 外设
-CONFIG_<CHIP>_GMAC0=y
-CONFIG_<CHIP>_USBHOST=y
 ```
 
 ---
@@ -477,7 +416,6 @@ CONFIG_<CHIP>_USBHOST=y
 #!/bin/bash
 # nand_firmware/pack_nand.sh
 
-# 设置环境变量
 export PARAM_FILE="parameter.txt"
 export NUTTX_BIN="../cmake_out/<board>_nsh/nuttx.bin"
 
@@ -496,11 +434,7 @@ export NUTTX_BIN="../cmake_out/<board>_nsh/nuttx.bin"
 sudo upgrade_tool lf  # 检查 Loader
 sudo upgrade_tool uf update.img
 
-# 2. ADB 模式
-adb push update.img /data/
-adb shell "ota update /data/update.img"
-
-# 3. OTA 模式（板上）
+# 2. OTA 模式（板上）
 nsh> ota update /data/boot.fit
 nsh> reboot
 nsh> ota confirm  # 确认启动成功
@@ -540,13 +474,14 @@ nsh> ota confirm  # 确认启动成功
 
 ---
 
-## 12. 常见陷阱
+## 12. 常见陷阱（基于真实案例）
 
-### 12.1 时钟配置
+### 12.1 时钟门控
 
 **问题**: 外设不工作，但寄存器写入正常。
 
 **原因**: 时钟门控未使能。Rockchip 等 SoC 使用 SET_TO_DISABLE 模式：
+
 ```c
 // 错误：写 1 开时钟
 putreg32(BIT_CLK, cru + CLK_REG);  // 实际是关时钟！
@@ -555,55 +490,116 @@ putreg32(BIT_CLK, cru + CLK_REG);  // 实际是关时钟！
 putreg32(BIT_CLK << 16, cru + CLK_REG);  // 高 16 位是写使能，低 16 位是值
 ```
 
-### 12.2 内存对齐
+**真实案例 (v8e)**: `rk3506_rptun mbox 时钟门控写反, PCLK_MAILBOX 被关死致 rpmsg 全链路失效`
 
-**问题**: HardFault 在访问外设寄存器。
+### 12.2 日志宏误用
 
-**原因**: 未对齐访问。Cortex-A7 要求：
+**问题**: 驱动日志全部静默。
+
+**原因**: 使用了 INPUT 子系统专用宏 `ierr/iwarn/iinfo`（CONFIG_DEBUG_INPUT_* 门控，本工程未开）。
+
 ```c
-// 错误：可能未对齐
-*(uint32_t *)addr = value;
+// 错误：使用 INPUT 子系统宏
+ierr("error\n");  // 全部静默！
 
-// 正确：使用 NuttX 宏
-putreg32(value, addr);
+// 正确：使用通用日志宏
+_err("error\n");
 ```
 
-### 12.3 DMA 缓冲区
+**真实案例 (v8c)**: `驱动日志宏误用 INPUT 子系统 ierr/iwarn/iinfo, 全部静默`
 
-**问题**: DMA 传输数据错误。
+### 12.3 USB FIFO 大小
 
-**原因**: 缓冲区未对齐或在 cache 中。
+**问题**: USB 枚举成功，但 bulk 传输卡死。
+
+**原因**: DWC2 RX FIFO 太小。HS bulk mps=512B 需要 ~131 words，但默认 128 words。
+
 ```c
-// 分配对齐缓冲区
-buf = kmm_memalign(32, size);
+// 错误：默认值
+#define DWC2_GRXFSIZ   128   // 太小！
 
-// 或使用 uncached 映射
-buf = kmm_zalloc(size);  // 确保在 uncached 区域
+// 正确：按 SDK 值
+#define DWC2_GRXFSIZ   512
+#define DWC2_GNPTXFSIZ 256
+#define DWC2_HPTXFSIZ  224
 ```
 
-### 12.4 中断优先级
+**真实案例 (v8d)**: `DWC2 RX FIFO 默认 128 words 卡死 HS bulk, 提到 SDK 值 512/256/224`
 
-**问题**: 中断不触发或嵌套异常。
+### 12.4 共享内存映射
 
-**原因**: NVIC 优先级配置错误。
+**问题**: rpmsg 通信失败。
+
+**原因**: 共享内存窗口使用 cached 映射，导致数据不一致。
+
 ```c
-// 设置优先级（数值越小优先级越高）
-irq_set_priority(IRQ_NUM, 128);  // 中等优先级
+// 错误：cached 映射
+mmap(..., PROT_READ | PROT_WRITE, MAP_SHARED, fd, offset);
 
-// 使能中断
-up_enable_irq(IRQ_NUM);
+// 正确：uncached 映射
+mmap(..., PROT_READ | PROT_WRITE, MAP_SHARED | MAP_UNCACHED, fd, offset);
 ```
 
-### 12.5 GPIO 复用
+**真实案例 (v8b)**: `rpmsg 共享窗改 uncached 映射 (根因)`
 
-**问题**: 外设引脚无信号输出。
+### 12.5 网络 DHCP 超时
 
-**原因**: 引脚复用未配置或配置错误。
+**问题**: 网线拔插后 DHCP 失败。
+
+**原因**: link-up 后立即 DHCP，但 PHY 未就绪。
+
 ```c
-// 检查原理图确认引脚功能
-// 配置 IOMUX 寄存器
-// 配置驱动强度和上下拉
+// 错误：立即 DHCP
+if (netcfg_wait_link_change()) {
+  netcfg_run_dhcp();  // PHY 可能未就绪
+}
+
+// 正确：延时 + 重试
+if (netcfg_wait_link_change()) {
+  usleep(2000 * 1000);  // 等 2 秒
+  for (i = 0; i < 5; i++) {
+    if (netcfg_run_dhcp() >= 0) break;
+    usleep(3000 * 1000);  // 重试间隔 3 秒
+  }
+}
 ```
+
+**真实案例 (v8l)**: `netcfg add 2s link-settle delay + 5x DHCP retry for cable replug`
+
+### 12.6 curl 挂死
+
+**问题**: curl 任何命令都卡死，需 Ctrl+C。
+
+**原因**: curl 的 TCP socketpair 在 loopback 未配置时 accept 永久阻塞。
+
+```c
+// curl socketpair.c 的 TCP 回退实现
+// 1. 创建 listener 绑定 127.0.0.1:随机端口
+// 2. connect 连到自己
+// 3. accept 等待连接
+// 如果 loopback 未配置，connect 失败，accept 永久阻塞
+
+// 修复：禁用 socketpair
+#define CURL_DISABLE_SOCKETPAIR 1
+```
+
+**真实案例 (v8l)**: `curl hang root cause: TCP socketpair accept blocks forever when loopback not configured`
+
+### 12.7 文件系统选择
+
+**问题**: SmartFS 挂载失败 (mount failed: 25)。
+
+**原因**: SmartFS 需要 SMART 层 BIOC_GETFORMAT ioctl，但 dhara 块设备不支持。
+
+```c
+// 错误：dhara + SmartFS
+mount -t smartfs /dev/mtdblock0 /data  // ENOTTY
+
+// 正确：dhara + littlefs
+mount -t littlefs -o autoformat /dev/mtdblock0 /data
+```
+
+**真实案例 (v8)**: `/data 切换 dhara+littlefs, 修复 mount failed:25`
 
 ---
 
@@ -665,40 +661,7 @@ up_enable_irq(IRQ_NUM);
 
 ---
 
-## 16. 问题排查流程
-
-```
-现象
-  ↓
-1. 确认现象可复现
-  ↓
-2. 检查最简单原因
-   - 电源？时钟？复位？
-  ↓
-3. 添加诊断日志
-   - 寄存器值
-   - 函数调用链
-  ↓
-4. 对比参考代码
-   - Linux SDK 怎么做的？
-   - 其他 NuttX 移植怎么做的？
-  ↓
-5. 二分法定位
-   - 禁用部分功能
-   - 简化测试用例
-  ↓
-6. 硬件验证
-   - 示波器看信号
-   - 逻辑分析仪看协议
-  ↓
-7. 求助社区
-   - NuttX 邮件列表
-   - openvela 论坛
-```
-
----
-
-## 17. 总结
+## 16. 总结
 
 芯片移植的关键成功因素：
 
@@ -719,4 +682,4 @@ up_enable_irq(IRQ_NUM);
 
 ---
 
-*基于 RK3506G2 移植经验总结，适用于 Cortex-A7/A53/RISC-V 等架构的 openvela 移植。*
+*基于 RK3506G2 移植经验（116 个提交，v8a→v8l）总结，适用于 Cortex-A7/A53/RISC-V 等架构的 openvela 移植。*
