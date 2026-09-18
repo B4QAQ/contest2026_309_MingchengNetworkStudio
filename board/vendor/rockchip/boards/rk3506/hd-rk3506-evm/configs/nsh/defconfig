@@ -506,6 +506,9 @@ CONFIG_MTD_DHARA=y
 # rcS runs `ota bootcheck` every boot (try decrement / rollback).
 CONFIG_RK3506_OTA=y
 CONFIG_HD_RK3506_OTACMD=y
+# Diagnostic commands for curl hang investigation
+CONFIG_HD_RK3506_TIMETEST=y
+CONFIG_HD_RK3506_BT=y
 # KVDB on /data: direct access (no server/rpmsg) + file backend.
 # setprop/getprop persist to /data/kvdb.db (SmartFS, survives reboot).
 CONFIG_KVDB=y
