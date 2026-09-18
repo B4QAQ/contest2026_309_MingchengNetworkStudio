@@ -1,148 +1,360 @@
-# contest2026_309_MingchengNetworkStudio
+# RK3506G2 openvela 移植 — HD-RK3506-EVM
 
-👋 欢迎参加 **2026 首届 openvela AI 硬件开发者大赛**！
+## 一、作品简介
 
-这是组委会为你的队伍创建的**专属参赛仓库**（本仓为样例/模板，队伍编号 `309`；你看到的将是你自己的 `contest2026_<编号>_<队伍名>`）。比赛期间，你的全部参赛代码、打包产物与 AI Coding 日志都提交到这里。
+本作品完成了 Rockchip RK3506G2 芯片到 openvela (NuttX) 的完整 BSP 移植，基于 HD-RK3506-EVM 开发板实现从零启动到全功能运行。
 
-> 本仓既是「代码仓」，又内置了一键拉取整套 openvela 工程的 `repo` 清单（manifest）。你只需跟它打交道，**自始至终只动一个文件夹**。
+**核心亮点**:
+- **3×Cortex-A7 + 1×Cortex-M0** 异构架构完整支持
+- **128MB DDR3** 内存管理
+- **116 个提交**，37 个 bug 修复，21237 行驱动代码
+- **9 大外设驱动**：UART、I2C、SPI、FSPI、GMAC、USB Host、VOP、SARADC、PWM
+- **完整网络栈**：DHCP、DNS、NTP、curl HTTPS
+- **A/B OTA 升级**：双分区热升级支持
+- **rpmsg 多核通信**：A7↔M0 邮箱驱动
 
----
-
-## 一、先读这些官方文档
-
-**通用（所有赛道必读）：**
-
-| 文档                                                                                                                                     | 用途                                           |
-| ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| [《大赛总览》](https://github.com/open-vela/docs/blob/dev-ai-contest-2026/zh-cn/contest_2026/contest_overview.md)                        | 赛道、流程、评分、资源，建议先通读             |
-| [《参赛代码提交指南》](https://github.com/open-vela/docs/blob/dev-ai-contest-2026/zh-cn/contest_2026/code_submission_guide.md)           | 仓库获取、提交流程、时间与权限（**以此为准**） |
-| [《AI Coding 日志归集与提交手册》](https://github.com/open-vela/docs/blob/dev-ai-contest-2026/zh-cn/contest_2026/ai_coding_log_guide.md) | 如何导出 AI 对话日志并提交到 `logs/`           |
-
-**按你的赛道选读（三选一）：**
-
-| 赛道                  | 教程导航                                                                                                                                                 |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 快应用 / 手表应用创新 | [快应用教程导航](https://github.com/open-vela/docs/blob/dev-ai-contest-2026/zh-cn/contest_2026/quickapp/quickapp_guide_index.md)                         |
-| AI 硬件产品创新       | [AI 硬件赛道教程导航](https://github.com/open-vela/docs/blob/dev-ai-contest-2026/zh-cn/contest_2026/ai_hardware/ai_hardware_guide_index.md)              |
-| 新硬件适配            | [新硬件适配赛道教程导航](https://github.com/open-vela/docs/blob/dev-ai-contest-2026/zh-cn/contest_2026/hardware_porting/hardware_porting_guide_index.md) |
+**技术成果**：
+- 解决 curl 挂死根因（TCP socketpair accept 阻塞）
+- 解决 DHCP 超时问题（PHY link-settle 延时）
+- 解决 USB bulk 传输卡死（DWC2 FIFO 配置）
+- 解决 rpmsg 通信失败（M0 停核+时钟门控）
 
 ---
 
-## 二、第一步：拉取完整工程
+## 二、选题方向
 
-用组委会提供的命令一键拉取「openvela 全量源码 + 你的专属仓」：
+**新硬件适配赛道**
+
+选题理由：
+1. RK3506G2 是瑞芯微最新低功耗 IoT 芯片，openvela 官方尚未支持
+2. 异构架构（A7+M0）带来 rpmsg 多核通信挑战
+3. 完整外设覆盖（网络/USB/显示/存储）验证 openvela 可扩展性
+4. 为后续 RISC-V/ARM64 移植提供方法论参考
+
+---
+
+## 三、目录结构
+
+```
+contest2026_309_MingchengNetworkStudio/
+├── board/
+│   └── vendor/
+│       └── rockchip/
+│           ├── boards/
+│           │   └── rk3506/
+│           │       └── hd-rk3506-evm/    # 板级 BSP
+│           │           ├── CMakeLists.txt
+│           │           ├── Kconfig
+│           │           ├── configs/nsh/defconfig
+│           │           ├── include/board.h
+│           │           ├── scripts/ld.script
+│           │           └── src/           # 板级驱动 (9 个)
+│           └── chips/
+│               └── rk3506/               # 芯片驱动 (24 个)
+│                   ├── rk3506_gmac0.c     # 以太网
+│                   ├── rk3506_usbhost.c   # USB Host
+│                   ├── rk3506_vop.c       # 显示控制器
+│                   ├── rk3506_rptun.c     # rpmsg 多核
+│                   └── ...
+├── openvela/                             # openvela 源码 (submodule)
+│   ├── nuttx/                            # 内核
+│   ├── apps/                             # 应用
+│   ├── external/                         # 第三方库 (curl, mbedtls)
+│   └── vendor/rockchip/                  # 本作品代码
+├── RK3506G2/                             # Linux SDK (参考)
+├── HD-RK3506-EVM/                        # 开发板文档
+├── .claude/skills/
+│   └── openvela-chip-porting/SKILL.md   # 芯片移植方法论
+├── AGENTS.md                             # AI 协作规范
+├── HANDOFF.md                            # 项目交接文档
+└── README.md                             # 本文件
+```
+
+---
+
+## 四、运行方式
+
+### 4.1 环境准备
 
 ```bash
+# 1. 克隆仓库
+git clone https://github.com/B4QAQ/contest2026_309_MingchengNetworkStudio.git
+cd contest2026_309_MingchengNetworkStudio
+
+# 2. 拉取 openvela 源码
 repo init -u https://github.com/open-vela/contest2026_309_MingchengNetworkStudio \
   -b dev-ai-contest-2026 -m contest2026_309_MingchengNetworkStudio.xml
 repo sync -c -j8
+
+# 3. 配置工具链
+export CCACHE_DIR=/tmp/ccache_dir
 ```
 
-同步后，你的整个仓库位于工作区的 `contest2026_309_MingchengNetworkStudio/`，openvela 全量源码在外层（`nuttx/`、`apps/`、`packages/`、`vendor/` 等）。
-
----
-
-## 三、第二步：在哪里写代码
-
-**只在自己的仓目录 `contest2026_309_MingchengNetworkStudio/` 里开发。** 不同作品形态放在对应子目录，manifest 会通过 `<linkfile>` 把它们**软链**到 openvela 编译树该在的位置——你不用手动 copy：
-
-| 作品形态 | 你的代码放这里             | 系统自动映射到                                 |
-| -------- | -------------------------- | ---------------------------------------------- |
-| 应用     | `app/hello_app/`           | `packages/demos/contest2026_309_hello_app`     |
-| 快应用   | `quickapp/hello_quickapp/` | `packages/apps/contest2026_309_hello_quickapp` |
-| 板级适配 | `board/contest_board/`     | `vendor/openvela/boards/contest2026_309_board` |
-
-> 用不到的形态目录可以删掉；新增作品时按同样规则加子目录，并在 `contest2026_309_MingchengNetworkStudio.xml` 里补一条 `<linkfile>` 映射即可。**生产仓库（packages/nuttx/vendor 等）零改动。**
-
-建议仓库目录约定（便于评委定位）：
-
-```text
-app/ | quickapp/ | board/   # 你的作品代码
-logs/                       # AI Coding 日志（主动导出后提交，格式见 logs/README.md）
-README.md                   # 作品说明（提交前请改成你自己的，见第六节）
-```
-
-> 仓内附带了一个 `.gitignore.example`，给出了**编译产物**等不需要进仓的文件示例。如需启用，`cp .gitignore.example .gitignore` 后按需增删即可。**注意 `logs/` 下最终导出的 AI Coding 日志必须提交，不要忽略。**
->
-> `logs/` 的目录结构与提交格式见 [logs/README.md](logs/README.md)。
-
----
-
-## 四、第三步：编译与运行
-
-编译/运行步骤随作品形态不同而不同，请参考你所在赛道的教程导航：
-
-- 快应用 / 手表应用：[快应用教程导航](https://github.com/open-vela/docs/blob/dev-ai-contest-2026/zh-cn/contest_2026/quickapp/quickapp_guide_index.md)（含模拟器与开发板部署）。
-- AI 硬件产品创新：[AI 硬件赛道教程导航](https://github.com/open-vela/docs/blob/dev-ai-contest-2026/zh-cn/contest_2026/ai_hardware/ai_hardware_guide_index.md)（环境搭建、编译烧录、Skill 开发）。
-- 新硬件适配：[新硬件适配赛道教程导航](https://github.com/open-vela/docs/blob/dev-ai-contest-2026/zh-cn/contest_2026/hardware_porting/hardware_porting_guide_index.md)（BSP 移植、最小 NSH 基线）。
-
-子目录已通过 manifest 中的 `<linkfile>` 软链进 openvela 编译树，因此构建在 openvela 工作区**根目录**（即你这个仓的上一级）进行。openvela 使用 `build.sh` 作为统一入口，接收一个 **board config 路径**作为参数：
+### 4.2 编译固件
 
 ```bash
-# 进入 openvela 工作区根目录（你的仓的上一级）
-cd ..
-
-# 通用语法：第一个参数是 board config 路径，第二个参数可以是 menuconfig / distclean 等
-./build.sh <board-config-path> [menuconfig|distclean] [-j8]
+cd openvela
+rm -rf cmake_out/hd-rk3506-evm_nsh
+CCACHE_DIR=/tmp/ccache_dir \
+PATH="$(pwd)/prebuilts/build-tools/linux-x86_64/bin:$(pwd)/prebuilts/gcc/linux-x86_64/arm-none-eabi/bin:$PATH" \
+./build.sh vendor/rockchip/boards/rk3506/hd-rk3506-evm/configs/nsh/ --cmake -j$(nproc)
 ```
 
-> 具体的 board config 路径、目标产物、模拟器/真机部署方式请以你所在赛道的教程导航为准。本仓 `app/` `quickapp/` `board/` 三个示例骨架对应的 Kconfig 选项可通过 `menuconfig` 启用。
+**成功标志**: `#### build completed successfully`
+
+### 4.3 打包镜像
+
+```bash
+bash nand_firmware/pack_nand.sh
+```
+
+**产物**: `nand_firmware/update.img`
+
+### 4.4 烧录运行
+
+```bash
+# 首次烧录（Loader 模式）
+sudo upgrade_tool uf nand_firmware/update.img
+
+# 板上 OTA 升级
+nsh> ota update /data/boot.fit
+nsh> reboot
+nsh> ota confirm
+```
+
+### 4.5 功能验证
+
+```bash
+nsh> ping 192.168.10.1                    # 网络连通性
+nsh> curl -v https://stdl.b4qaq.cn/fwtb/info.json  # HTTPS 请求
+nsh> mount -t vfat /dev/sda /mnt/usb      # U 盘挂载
+nsh> rpmsgtest                             # rpmsg 多核测试
+nsh> ota status                            # OTA 状态
+```
 
 ---
-
-## 五、第四步：提交作品
-
-1. **fork** 你的专属仓 → 开发 → `git commit` 并推送 → 向专属仓发起 **Pull Request**，可**自行 review 并合入**（无需等组委会）。
-2. **AI Coding 日志**：与 AI 工具的对话会自动记录到本机 staging（不会自动上传），需你**主动导出/打包**选定会话到仓内 `logs/` 目录后一并提交。详见[《AI Coding 日志归集与提交手册》](https://github.com/open-vela/docs/blob/dev-ai-contest-2026/zh-cn/contest_2026/ai_coding_log_guide.md)。
-3. 若需改动 **nuttx 等公共仓库**，不在本仓改，而是 fork 对应公共仓、以 PR 提交到 `dev-ai-contest-2026` 分支，由组委会 review 后合入。
-
-> ⏰ **提交作品截止：9 月 20 日**。截止后统一收回 push 权限，仍可查看 / clone。
->
-> 获奖后再按要求将作品 PR 至 openvela 上游对应仓库（走标准 PR + CI 流程）。
-
-### 关于 PR 与 CLA
-
-- 本仓所有改动通过 **Pull Request** 合入（分支保护强制，可自行合入自己的 PR）。
-- 首次贡献需在[**官网签署 CLA**](https://openvela.com/#/community/cla)；PR 上会自动跑 `cla/signature` 检查，在官网签署成功后，在 PR 评论 `/check-cla` 复检即可通过。
-
----
-
-## 六、提交前：把本 README 改成你的作品说明
-
-本文件目前是组委会给的**使用说明书**。**作品提交前，请把它替换成你自己作品的说明**，方便评委快速了解你做了什么、怎么跑起来。建议至少包含以下内容：
-
-```markdown
-# <你的作品名>
-
-## 一、作品简介
-<一句话/一段话说明这个作品是什么、解决什么问题、亮点在哪>
-
-## 二、选题方向
-<快应用 / 手表应用创新 ｜ AI 硬件产品创新 ｜ 新硬件适配 ｜ 自定方向，并简述理由>
-
-## 三、目录结构
-<列出你这个仓里各目录/文件的作用，例如：>
-- `app/xxx/`        — <说明>
-- `board/xxx/`      — <说明>
-- `quickapp/xxx/`   — <说明>
-- `logs/`           — AI Coding 日志
-- `docs/` 或其他    — <说明>
-
-## 四、运行方式
-<拉取工程后，如何编译、烧录/部署、运行的完整步骤；最好能让评委照着一步步复现>
 
 ## 五、AI Coding 使用说明
-<说明本作品如何借助 AI 辅助开发：
-- 在需求拆解 / 方案设计 / 编码 / 调试 / 文档等环节如何与 AI 协作；
-- AI 对开发效率或质量带来的实际帮助。
-完整对话日志见 logs/ 目录>
-```
 
-> 提示：将会根据「作品本身 + 你的 README 说明 + `logs/` 里的 AI Coding 日志」来理解和评估你的作品，README 写清楚很重要。
+### 5.1 协作模式
+
+本项目采用 **人机协作** 模式：
+- **AI 负责**：代码实现、调试分析、文档生成
+- **选手负责**：硬件测试、方案决策、最终验收
+
+### 5.2 AI 工具链
+
+| 工具 | 用途 | 使用场景 |
+|------|------|----------|
+| **MiMoCode** | AI 编程助手 | 代码生成、调试分析 |
+| **DSH** | 对话管理 | 会话记录、日志导出 |
+| **contest-log-collector** | 日志归集 | 自动收集 AI 对话 |
+
+### 5.3 关键 AI 贡献
+
+1. **curl 挂死根因定位**
+   - 现象：所有 curl 命令卡死，需 Ctrl+C
+   - AI 分析：通过 `bt` 命令抓调用栈，定位到 `Curl_socketpair → accept4`
+   - 根因：TCP socketpair 在 loopback 未配置时 accept 永久阻塞
+   - 修复：`#define CURL_DISABLE_SOCKETPAIR 1`
+
+2. **rpmsg 通信失败排查**
+   - 现象：A7↔M0 通信超时
+   - AI 分析：时钟门控写反（SET_TO_DISABLE 模式）
+   - 修复：正确配置 PCLK_MAILBOX 门控
+
+3. **USB bulk 传输卡死**
+   - 现象：U 盘枚举成功，读写卡死
+   - AI 分析：DWC2 RX FIFO 太小（128 words）
+   - 修复：提到 SDK 值 512/256/224
+
+### 5.4 AI Coding 日志
+
+完整对话记录见 `logs/B4QAQ/` 目录，包含：
+- 116 个提交的开发过程
+- 37 个 bug 的调试细节
+- 方案决策的讨论记录
 
 ---
 
-## 附：仓库命名规范
+## 六、技术亮点
 
-`contest2026_<编号>_<队伍名>` — 编号三位零填充；队名 slug（全小写、英文/拼音、连字符）。例：`contest2026_309_MingchengNetworkStudio`。
-（仓库由组委会统一创建，**每队仅一个仓**，无需自行命名。）
+### 6.1 异构多核支持
+
+- **Cortex-A7**: 运行 openvela 主系统
+- **Cortex-M0**: 运行 rpmsg 服务端
+- **邮箱中断**: A7↔M0 零拷贝通信
+- **停核机制**: 两级停核 + 金丝雀验证
+
+### 6.2 完整网络栈
+
+- **GMAC 驱动**: DMA 描述符 + PHY 管理
+- **DHCP 客户端**: 自动 IP 配置 + link-up 重试
+- **DNS 解析**: 同步/异步双模式
+- **curl HTTPS**: TLS 1.2 + CA 证书验证
+
+### 6.3 存储子系统
+
+- **SPI NAND**: FSPI 控制器 + MTD 驱动
+- **dhara**: 磨损均衡层
+- **littlefs**: 嵌入式文件系统
+- **A/B OTA**: 双分区热升级
+
+### 6.4 显示子系统
+
+- **VOP 控制器**: RGB LCD 输出
+- **ST7701S**: 480×854 面板初始化
+- **LVGL**: 嵌入式 GUI 框架
+- **帧缓冲**: /dev/fb0 设备
+
+### 6.5 USB Host
+
+- **DWC2 控制器**: 高速 USB 2.0
+- **MSC 类**: U 盘自动枚举
+- **FAT 文件系统**: vfat 挂载
+- **热插拔**: link-change 检测
+
+---
+
+## 七、已完成功能
+
+### 7.1 基础系统
+
+- [x] NSH 命令行 (115200 波特率)
+- [x] 内存管理 (128MB DDR3)
+- [x] 进程调度 (Cortex-A7)
+- [x] 中断控制器 (GIC)
+- [x] 系统定时器 (Generic Timer)
+
+### 7.2 外设驱动
+
+- [x] UART0/1/2/4 (串口)
+- [x] I2C0/1/2 (传感器)
+- [x] SPI1 (Flash)
+- [x] FSPI (SPI NAND)
+- [x] GMAC0 (以太网)
+- [x] USB Host (U 盘)
+- [x] VOP (LCD)
+- [x] SARADC (ADC)
+- [x] PWM (脉冲宽度调制)
+- [x] Watchdog (看门狗)
+- [x] RTC (实时时钟)
+
+### 7.3 网络功能
+
+- [x] DHCP 自动配置
+- [x] DNS 域名解析
+- [x] NTP 时间同步
+- [x] curl HTTPS 请求
+- [x] ping 连通测试
+- [x] iperf 网络性能
+
+### 7.4 文件系统
+
+- [x] ROMFS (/etc)
+- [x] tmpfs (/tmp)
+- [x] littlefs (/data)
+- [x] FAT (U 盘)
+
+### 7.5 应用支持
+
+- [x] Lua 解释器
+- [x] QuickJS (JavaScript)
+- [x] MiniBASIC
+- [x] LVGL (GUI)
+
+### 7.6 OTA 升级
+
+- [x] A/B 双分区
+- [x] bootcheck 开机检查
+- [x] ota NSH 命令
+- [x] 自动回滚
+
+---
+
+## 八、已知限制
+
+### 8.1 硬件限制
+
+| 项目 | 状态 | 说明 |
+|------|------|------|
+| GT911 触摸 | ⚠️ 未验证 | 台架未接面板 |
+| ST7701S LCD | ⚠️ 未验证 | 台架未接面板 |
+| USB Hub | ❌ 不支持 | 驱动未实现 asynch |
+| 音频 | ❌ 未实现 | I2S 驱动待开发 |
+
+### 8.2 软件限制
+
+| 项目 | 状态 | 说明 |
+|------|------|------|
+| M0 停核 | ⚠️ 需验证 | 温复位后 M0 状态不确定 |
+| OTA 端到端 | ⚠️ 部分验证 | bootcheck 已验证，update 流程待验 |
+| 网络长时间运行 | ⚠️ 需测试 | DHCP 租约续期待验 |
+
+### 8.3 已知问题
+
+1. **curl 挂死** — 已修复（禁用 socketpair）
+2. **DHCP 超时** — 已修复（link-settle 延时）
+3. **USB bulk 卡死** — 已修复（FIFO 配置）
+4. **rpmsg 通信失败** — 已修复（时钟门控）
+
+---
+
+## 九、移植方法论
+
+本项目总结了完整的芯片移植方法论，详见：
+
+**`.claude/skills/openvela-chip-porting/SKILL.md`**
+
+核心要点：
+1. **参考资料优先级**: Linux SDK > 已有 NuttX 移植 > 数据手册
+2. **分阶段验证**: 最小启动 → 基础外设 → 网络 → 存储 → 显示
+3. **调试技巧**: 串口日志 + GDB + 逻辑分析仪
+4. **常见陷阱**: 时钟门控、日志宏、FIFO 配置、内存映射
+
+---
+
+## 十、提交记录
+
+| 版本 | 日期 | 主要变更 |
+|------|------|----------|
+| v8a | 2026-09-01 | 初始 BSP，NSH 启动 |
+| v8b | 2026-09-05 | rpmsg + USB 诊断 |
+| v8c | 2026-09-08 | USB 传输修复 + 日志规范 |
+| v8d | 2026-09-10 | USB FIFO + rpmsg 修复 |
+| v8e | 2026-09-12 | rpmsg 时钟门控修复 |
+| v8f | 2026-09-13 | M0 停核 + 竞态修复 |
+| v8g | 2026-09-14 | M0 时基时钟补开 |
+| v8h | 2026-09-15 | INTMUX 握手 + 探针 |
+| v8i | 2026-09-16 | 日志清理 |
+| v8j | 2026-09-16 | M0 停核 + NSH 行长 |
+| v8k | 2026-09-17 | iomux 日志删除 |
+| v8l | 2026-09-17 | FSPI 日志 + curl 修复 |
+
+**统计**：
+- 总提交：116 个
+- Bug 修复：37 个
+- 驱动代码：21237 行
+- 板级文件：9 个
+- 芯片驱动：24 个
+
+---
+
+## 十一、致谢
+
+- **openvela 团队**: 提供 RTOS 框架和技术支持
+- **小米老师**: 远程指导 curl 调试
+- **瑞芯微**: 提供 RK3506G2 SDK 和硬件支持
+- **组委会**: 组织比赛和资源支持
+
+---
+
+## 十二、联系方式
+
+- **队伍**: MingchengNetworkStudio
+- **编号**: 309
+- **仓库**: https://github.com/B4QAQ/contest2026_309_MingchengNetworkStudio
+
+---
+
+*本作品参加 2026 首届 openvela AI 硬件开发者大赛，新硬件适配赛道。*
