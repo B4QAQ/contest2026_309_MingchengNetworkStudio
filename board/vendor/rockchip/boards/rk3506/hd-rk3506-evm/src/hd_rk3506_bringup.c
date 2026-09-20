@@ -59,14 +59,15 @@
 
 FAR struct mtd_dev_s *rk3506_spinand_fspi_initialize(void);
 
-/* Start of the "userdata" region in nand_firmware/parameter.txt (v5, A/B
- * layout: mtdparts sector 0x10800, 512-byte units) = 34,603,008 bytes
- * (33 MiB, immediately after boot_b ends at 0x10800).
- * Everything below this offset belongs to the boot chain (vnvm/uboot/
- * misc/boot_a/boot_b) and is only touched via the OTA manager.
+/* Start of the "userdata" region in nand_firmware/parameter.txt (v6, A/B
+ * layout + amp partition: mtdparts sector 0x11000, 512-byte units) =
+ * 35,651,584 bytes (34 MiB, immediately after the amp partition which
+ * follows boot_b).  Everything below this offset belongs to the boot
+ * chain (vnvm/uboot/misc/boot_a/boot_b/amp) and is only touched via the
+ * OTA manager / U-Boot.
  */
 
-#  define SPINAND_USERDATA_START_BYTES 0x10800ULL * 512ULL
+#  define SPINAND_USERDATA_START_BYTES 0x11000ULL * 512ULL
 #endif
 
 #ifdef CONFIG_RK3506_OTA
@@ -431,13 +432,13 @@ int hd_rk3506_bringup(void)
         }
 
       /* Hand the "userdata" region of the Rockchip partition layout
-       * (nand_firmware/parameter.txt v5, A/B) to dhara/littlefs.  The
-       * boot-chain partitions (vnvm/uboot/misc/boot_a/boot_b)
-       * are only touched through the OTA manager below.
+       * (nand_firmware/parameter.txt v6, A/B + amp) to dhara/littlefs.
+       * The boot-chain partitions (vnvm/uboot/misc/boot_a/boot_b/amp)
+       * are only touched through the OTA manager / U-Boot below.
        *
-       * userdata starts at sector 0x10800 (512-byte units) =
-       * 34,603,008 B = erase block 264 on the XCSP2AAPK (1728 blocks,
-       * ~183 MiB remain).
+       * userdata starts at sector 0x11000 (512-byte units) =
+       * 35,651,584 B = erase block 272 on the XCSP2AAPK (1728 blocks,
+       * ~182 MiB remain).
        *
        * dhara provides the wear-leveling / bad-block / logical-sector
        * mapping between littlefs (mounted -o autoformat by rcS on this

@@ -30,6 +30,7 @@
  * Slot / partition mapping (nand_firmware/parameter.txt, 512B sectors):
  *   boot_a: 0x6800 .. 0xb800   (13 MB .. 23 MB)
  *   boot_b: 0xb800 .. 0x10800  (23 MB .. 33 MB)
+ *   amp   : 0x10800 .. 0x11000 (33 MB .. 34 MB, M0 firmware FIT)
  *   misc  : 0x5800 .. 0x6800   (11 MB .. 13 MB)
  ****************************************************************************/
 
