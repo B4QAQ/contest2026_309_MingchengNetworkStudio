@@ -1,1 +1,0 @@
-prebuilts/emulator/tools/emulator.sh
