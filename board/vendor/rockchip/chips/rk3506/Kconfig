@@ -304,25 +304,14 @@ config RK3506_RPTUN
 	select RPTUN
 	---help---
 		Register the A7-side rptun lower half for the bus Cortex-M0
-		(/dev/rptun/mcu, master role).  Boots the M0 with the embedded
-		rpmsg firmware (u-boot fit_standalone_release sequence: SIP_MCU_CFG
-		SMC + CRU/GRF/PMU writes), then brings up the rpmsg virtio master
-		over mailbox0/mailbox3 and the 2 MiB shared window at 0x03c00000,
-		exposing /dev/rpmsg/mcu.  Selecting this pulls in RPTUN (and with
+		(/dev/rptun/mcu, master role).  The M0 firmware is loaded and
+		released by U-Boot from the "amp" GPT partition (CONFIG_AMP /
+		CONFIG_ROCKCHIP_AMP, standalone FIT amp.img); NuttX ensures the
+		A-side clocks and runs the mailbox kick/rx path, then brings up
+		the rpmsg virtio master over mailbox0/mailbox3 and the 2 MiB
+		shared window at 0x03c00000, exposing /dev/rpmsg/mcu.
+		Selecting this pulls in RPTUN (and with
 		CONFIG_DRIVERS_VIRTIO_RPMSG also the whole rpmsg stack).
-
-if RK3506_RPTUN
-
-config RK3506_RPTUN_BOOT_M0
-	bool "Boot the bus M0 from NuttX"
-	default y
-	---help---
-		Copy the embedded M0 firmware to the M0 SRAM and start it via the
-		ROCKCHIP SIP (SMC 0x82000028) during rptun start.  Disable only if
-		something else (e.g. a U-Boot with CONFIG_ROCKCHIP_AMP) already
-		booted the M0 with a compatible firmware.
-
-endif
 
 config RK3506_OTA
 	bool "RK3506 A/B OTA slot manager (/dev/ota)"
