@@ -1,0 +1,4 @@
+[path-bases]
+runtime = "/home/b4qaq/project/openvela/apps/frameworks/runtimes/rust"
+external = "/home/b4qaq/project/openvela/apps/external/rust"
+android = "/home/b4qaq/project/openvela/apps/external/android"

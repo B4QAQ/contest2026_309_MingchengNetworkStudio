@@ -5,19 +5,13 @@
 本作品完成了 Rockchip RK3506G2 芯片到 openvela (NuttX) 的完整 BSP 移植，基于 HD-RK3506-EVM 开发板实现从零启动到全功能运行。
 
 **核心亮点**:
+
 - **3×Cortex-A7 + 1×Cortex-M0** 异构架构完整支持
 - **128MB DDR3** 内存管理
-- **116 个提交**，37 个 bug 修复，21237 行驱动代码
 - **9 大外设驱动**：UART、I2C、SPI、FSPI、GMAC、USB Host、VOP、SARADC、PWM
 - **完整网络栈**：DHCP、DNS、NTP、curl HTTPS
 - **A/B OTA 升级**：双分区热升级支持
 - **rpmsg 多核通信**：A7↔M0 邮箱驱动
-
-**技术成果**：
-- 解决 curl 挂死根因（TCP socketpair accept 阻塞）
-- 解决 DHCP 超时问题（PHY link-settle 延时）
-- 解决 USB bulk 传输卡死（DWC2 FIFO 配置）
-- 解决 rpmsg 通信失败（M0 停核+时钟门控）
 
 ---
 
@@ -26,6 +20,7 @@
 **新硬件适配赛道**
 
 选题理由：
+
 1. RK3506G2 是瑞芯微最新低功耗 IoT 芯片，openvela 官方尚未支持
 2. 异构架构（A7+M0）带来 rpmsg 多核通信挑战
 3. 完整外设覆盖（网络/USB/显示/存储）验证 openvela 可扩展性
@@ -139,31 +134,33 @@ nsh> ota status                            # OTA 状态
 ### 5.1 协作模式
 
 本项目采用 **人机协作** 模式：
+
 - **AI 负责**：代码实现、调试分析、文档生成
 - **选手负责**：硬件测试、方案决策、最终验收
 
 ### 5.2 AI 工具链
 
-| 工具 | 用途 | 使用场景 |
-|------|------|----------|
-| **MiMoCode** | AI 编程助手 | 代码生成、调试分析 |
-| **DSH** | 对话管理 | 会话记录、日志导出 |
-| **contest-log-collector** | 日志归集 | 自动收集 AI 对话 |
+| 工具                            | 用途        | 使用场景           |
+| ------------------------------- | ----------- | ------------------ |
+| **MiMoCode**              | AI 编程助手 | 代码生成、调试分析 |
+| **DSH**                   | 对话管理    | 会话记录、日志导出 |
+| **contest-log-collector** | 日志归集    | 自动收集 AI 对话   |
 
 ### 5.3 关键 AI 贡献
 
 1. **curl 挂死根因定位**
+
    - 现象：所有 curl 命令卡死，需 Ctrl+C
    - AI 分析：通过 `bt` 命令抓调用栈，定位到 `Curl_socketpair → accept4`
    - 根因：TCP socketpair 在 loopback 未配置时 accept 永久阻塞
    - 修复：`#define CURL_DISABLE_SOCKETPAIR 1`
-
 2. **rpmsg 通信失败排查**
+
    - 现象：A7↔M0 通信超时
    - AI 分析：时钟门控写反（SET_TO_DISABLE 模式）
    - 修复：正确配置 PCLK_MAILBOX 门控
-
 3. **USB bulk 传输卡死**
+
    - 现象：U 盘枚举成功，读写卡死
    - AI 分析：DWC2 RX FIFO 太小（128 words）
    - 修复：提到 SDK 值 512/256/224
@@ -171,6 +168,7 @@ nsh> ota status                            # OTA 状态
 ### 5.4 AI Coding 日志
 
 完整对话记录见 `logs/B4QAQ/` 目录，包含：
+
 - 116 个提交的开发过程
 - 37 个 bug 的调试细节
 - 方案决策的讨论记录
@@ -220,55 +218,55 @@ nsh> ota status                            # OTA 状态
 
 ### 7.1 基础系统
 
-- [x] NSH 命令行 (115200 波特率)
-- [x] 内存管理 (128MB DDR3)
-- [x] 进程调度 (Cortex-A7)
-- [x] 中断控制器 (GIC)
-- [x] 系统定时器 (Generic Timer)
+- [X] NSH 命令行 (115200 波特率)
+- [X] 内存管理 (128MB DDR3)
+- [X] 进程调度 (Cortex-A7)
+- [X] 中断控制器 (GIC)
+- [X] 系统定时器 (Generic Timer)
 
 ### 7.2 外设驱动
 
-- [x] UART0/1/2/4 (串口)
-- [x] I2C0/1/2 (传感器)
-- [x] SPI1 (Flash)
-- [x] FSPI (SPI NAND)
-- [x] GMAC0 (以太网)
-- [x] USB Host (U 盘)
-- [x] VOP (LCD)
-- [x] SARADC (ADC)
-- [x] PWM (脉冲宽度调制)
-- [x] Watchdog (看门狗)
-- [x] RTC (实时时钟)
+- [X] UART0/1/2/4 (串口)
+- [X] I2C0/1/2 (传感器)
+- [X] SPI1 (Flash)
+- [X] FSPI (SPI NAND)
+- [X] GMAC0 (以太网)
+- [X] USB Host (U 盘)
+- [X] VOP (LCD)
+- [X] SARADC (ADC)
+- [X] PWM (脉冲宽度调制)
+- [X] Watchdog (看门狗)
+- [X] RTC (实时时钟)
 
 ### 7.3 网络功能
 
-- [x] DHCP 自动配置
-- [x] DNS 域名解析
-- [x] NTP 时间同步
-- [x] curl HTTPS 请求
-- [x] ping 连通测试
-- [x] iperf 网络性能
+- [X] DHCP 自动配置
+- [X] DNS 域名解析
+- [X] NTP 时间同步
+- [X] curl HTTPS 请求
+- [X] ping 连通测试
+- [X] iperf 网络性能
 
 ### 7.4 文件系统
 
-- [x] ROMFS (/etc)
-- [x] tmpfs (/tmp)
-- [x] littlefs (/data)
-- [x] FAT (U 盘)
+- [X] ROMFS (/etc)
+- [X] tmpfs (/tmp)
+- [X] littlefs (/data)
+- [X] FAT (U 盘)
 
 ### 7.5 应用支持
 
-- [x] Lua 解释器
-- [x] QuickJS (JavaScript)
-- [x] MiniBASIC
-- [x] LVGL (GUI)
+- [X] Lua 解释器
+- [X] QuickJS (JavaScript)
+- [X] MiniBASIC
+- [X] LVGL (GUI)
 
 ### 7.6 OTA 升级
 
-- [x] A/B 双分区
-- [x] bootcheck 开机检查
-- [x] ota NSH 命令
-- [x] 自动回滚
+- [X] A/B 双分区
+- [X] bootcheck 开机检查
+- [X] ota NSH 命令
+- [X] 自动回滚
 
 ---
 
@@ -276,29 +274,20 @@ nsh> ota status                            # OTA 状态
 
 ### 8.1 硬件限制
 
-| 项目 | 状态 | 说明 |
-|------|------|------|
-| GT911 触摸 | ⚠️ 未验证 | 台架未接面板 |
-| ST7701S LCD | ⚠️ 未验证 | 台架未接面板 |
-| USB Hub | ❌ 不支持 | 驱动未实现 asynch |
-| 音频 | ❌ 未实现 | I2S 驱动待开发 |
+| 项目        | 状态        | 说明              |
+| ----------- | ----------- | ----------------- |
+| GT911 触摸  | ⚠️ 未验证 | 台架未接面板      |
+| ST7701S LCD | ⚠️ 未验证 | 台架未接面板      |
+| USB Hub     | ❌ 不支持   | 驱动未实现 asynch |
+| 音频        | ❌ 未实现   | I2S 驱动待开发    |
 
 ### 8.2 软件限制
 
-| 项目 | 状态 | 说明 |
-|------|------|------|
-| M0 停核 | ⚠️ 需验证 | 温复位后 M0 状态不确定 |
-| OTA 端到端 | ⚠️ 部分验证 | bootcheck 已验证，update 流程待验 |
-| 网络长时间运行 | ⚠️ 需测试 | DHCP 租约续期待验 |
-
-### 8.3 已知问题
-
-1. **curl 挂死** — 已修复（禁用 socketpair）
-2. **DHCP 超时** — 已修复（link-settle 延时）
-3. **USB bulk 卡死** — 已修复（FIFO 配置）
-4. **rpmsg 通信失败** — 已修复（时钟门控）
-
----
+| 项目           | 状态          | 说明                              |
+| -------------- | ------------- | --------------------------------- |
+| M0 停核        | ⚠️ 需验证   | 温复位后 M0 状态不确定            |
+| OTA 端到端     | ⚠️ 部分验证 | bootcheck 已验证，update 流程待验 |
+| 网络长时间运行 | ⚠️ 需测试   | DHCP 租约续期待验                 |
 
 ## 九、移植方法论
 
@@ -307,6 +296,7 @@ nsh> ota status                            # OTA 状态
 **`.claude/skills/openvela-chip-porting/SKILL.md`**
 
 核心要点：
+
 1. **参考资料优先级**: Linux SDK > 已有 NuttX 移植 > 数据手册
 2. **分阶段验证**: 最小启动 → 基础外设 → 网络 → 存储 → 显示
 3. **调试技巧**: 串口日志 + GDB + 逻辑分析仪
@@ -316,22 +306,23 @@ nsh> ota status                            # OTA 状态
 
 ## 十、提交记录
 
-| 版本 | 日期 | 主要变更 |
-|------|------|----------|
-| v8a | 2026-09-01 | 初始 BSP，NSH 启动 |
-| v8b | 2026-09-05 | rpmsg + USB 诊断 |
-| v8c | 2026-09-08 | USB 传输修复 + 日志规范 |
-| v8d | 2026-09-10 | USB FIFO + rpmsg 修复 |
-| v8e | 2026-09-12 | rpmsg 时钟门控修复 |
-| v8f | 2026-09-13 | M0 停核 + 竞态修复 |
-| v8g | 2026-09-14 | M0 时基时钟补开 |
-| v8h | 2026-09-15 | INTMUX 握手 + 探针 |
-| v8i | 2026-09-16 | 日志清理 |
-| v8j | 2026-09-16 | M0 停核 + NSH 行长 |
-| v8k | 2026-09-17 | iomux 日志删除 |
-| v8l | 2026-09-17 | FSPI 日志 + curl 修复 |
+| 版本 | 日期       | 主要变更                |
+| ---- | ---------- | ----------------------- |
+| v8a  | 2026-09-01 | 初始 BSP，NSH 启动      |
+| v8b  | 2026-09-05 | rpmsg + USB 诊断        |
+| v8c  | 2026-09-08 | USB 传输修复 + 日志规范 |
+| v8d  | 2026-09-10 | USB FIFO + rpmsg 修复   |
+| v8e  | 2026-09-12 | rpmsg 时钟门控修复      |
+| v8f  | 2026-09-13 | M0 停核 + 竞态修复      |
+| v8g  | 2026-09-14 | M0 时基时钟补开         |
+| v8h  | 2026-09-15 | INTMUX 握手 + 探针      |
+| v8i  | 2026-09-16 | 日志清理                |
+| v8j  | 2026-09-16 | M0 停核 + NSH 行长      |
+| v8k  | 2026-09-17 | iomux 日志删除          |
+| v8l  | 2026-09-17 | FSPI 日志 + curl 修复   |
 
 **统计**：
+
 - 总提交：116 个
 - Bug 修复：37 个
 - 驱动代码：21237 行
@@ -344,7 +335,6 @@ nsh> ota status                            # OTA 状态
 
 - **openvela 团队**: 提供 RTOS 框架和技术支持
 - **小米老师**: 远程指导 curl 调试
-- **瑞芯微**: 提供 RK3506G2 SDK 和硬件支持
 - **组委会**: 组织比赛和资源支持
 
 ---
