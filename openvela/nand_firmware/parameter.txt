@@ -1,8 +1,9 @@
-# Rockchip RK3506 NAND 分区表 (openvela, v6 — A/B 双分区 OTA + amp 分区 (M0 由 U-Boot 加载放行))
+# Rockchip RK3506 NAND 分区表 (openvela, v8 — A/B 双分区 OTA + amp 分区 (M0 由 U-Boot 加载放行))
 #
 # 单位: 块 (1 block = 1 sector = 512 bytes)
 # Flash layout: 从 0x800 (sector 4) 开始, 所有分区 128KB 对齐
-# v6: 增加 amp 分区 (M0 固件交由 U-Boot 加载放行, 见 AGENTS.md rpmsg 行)
+# v8: 重新加入 amp 分区 (方案A: M0 固件 amp.img 由 U-Boot amp_cpus_on 加载放行,
+#     NuttX 只负责 rpmsg 通信), userdata 后移到 amp 之后 (0x11000)
 #
 # 分区       起始        大小          用途
 # vnvm      0x00000800  0x00001000  2MB    NV 存储 (MAC 地址等)
