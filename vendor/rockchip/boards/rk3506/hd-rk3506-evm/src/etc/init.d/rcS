@@ -1,0 +1,74 @@
+#!/bin/sh
+# vendor/rockchip/boards/rk3506/hd-rk3506-evm/src/etc/init.d/rcS
+#
+# NSH startup script - runs once at the end of board_app_initialize(),
+# immediately after the rc.sysinit mount lines.
+#
+# This is the right place for things that must happen after all the
+# filesystems are mounted but before NSH drops to interactive mode:
+#   - run the loopback network up so the user can `ping 127.0.0.1`
+#   - any other one-shot housekeeping that depends on /tmp
+#
+# Note: do NOT mount things here; that's what rc.sysinit is for.
+# This file is NSH line-by-line, one command per line.
+#
+# This file is built as RCRAWS (raw binary) so `#` lines are real NSH
+# comments.  If you ever flip it to RCSRCS, delete the `#` lines first
+# (cpp would reject them as invalid preprocessing directives).
+
+# U 盘 mount target is /mnt/usb (NOT /tmp/usb).  NuttX mount() cannot
+# place a mountpoint under another mountpoint: /tmp is the tmpfs
+# mountpoint, the raw inode search in fs_mount() stops there (a
+# MOUNTPT inode is not a PSEUDODIR) and rejects /tmp/usb with
+# -ENOTDIR (20) - the v8d "mount failed: 20".  `mount -t vfat
+# /dev/sda /mnt/usb` needs no mkdir: mount creates the pseudo-root
+# mountpoint itself (inode_reserve_path).
+
+# Persistent /data partition: dhara FTL + littlefs on the SPI NAND's
+# userdata region (bringup registered /dev/mtdblock0).  littlefs mounts
+# on dhara's plain block device and -o autoformat formats it on the very
+# first boot (later boots find the existing filesystem, so /data
+# survives restarts - KVDB settings, user files).
+# NOTE: SmartFS would NOT work here: it needs the SMART BIOC_* ioctls
+# that only drivers/mtd/smart.c implements; dhara passes ioctls through
+# to the NAND MTD which answers -ENOTTY (the v7 "mount failed: 25").
+mkdir -p /data
+if mount -t littlefs -o autoformat /dev/mtdblock0 /data
+then
+  echo "rcS: /data mounted (littlefs)"
+else
+  echo "rcS: /data mount failed (dhara/littlefs)"
+fi
+
+# A/B OTA boot accounting: the prebuilt U-Boot's boot_fit path picks the
+# bootable slot with the highest priority but never decrements
+# tries_remaining, so this userspace hook does the bookkeeping: if the
+# slot we just booted is not yet `ota confirm`ed, burn one try; when the
+# last try is spent, mark the slot unbootable so the next reboot rolls
+# back to the other slot.  The currently running image cannot be damaged
+# here (the metadata write only touches the misc partition).
+if ota bootcheck
+then
+  echo "rcS: ota bootcheck ok"
+else
+  echo "rcS: ota bootcheck failed (no /dev/ota or misc error)"
+fi
+
+# Bring the loopback interface up.  This is harmless when the kernel
+# is not configured with NET_LOOPBACK, and it gives the user a
+# `ping 127.0.0.1` smoke test right away.
+ifconfig lo 127.0.0.1
+
+# Start the NTP time-sync daemon early.  Without an RTC the boot clock
+# is 1970, which makes every TLS certificate look "not yet valid"
+# (curl: BADCERT_FUTURE).  The daemon retries in the background with
+# exponential backoff until the network (DHCP) is up, then sets the
+# clock.  If netinit's DHCP already started it, ntpcstart is a no-op
+# (state-locked in ntpclient.c).
+ntpcstart
+
+# Start the netcfg daemon: applies /etc/net.conf (mode=dhcp|static)
+# and, with auto_dhcp=1, re-runs DHCP on every eth0 link-up event
+# (cable replug, switch STP expiry) via the GMAC0 SIOCMIINOTIFY
+# signal.  Priority 90: below NSH so it never starves the console.
+netcfg &

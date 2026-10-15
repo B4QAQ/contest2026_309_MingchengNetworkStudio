@@ -270,7 +270,8 @@ mkdir -p "$WORK_DIR/Image"
 # A/B 双槽 package-file (内置, 不用 SDK 的 rk3506-package-file — 那份列的
 # boot/rootfs/recovery/oem 在 v5 布局里已不存在).  boot_a/boot_b 写同一个
 # FIT 镜像; misc 写 8KB 零占位, U-Boot 首次启动发现元数据非法后自动重置
-# 默认值并引导 boot_a.  userdata 不列 (全量刷不清用户 /data).
+# 默认值并引导 boot_a; amp 写 M0 固件 FIT (amp.img), U-Boot amp_cpus_on()
+# 从 amp 分区读出并加载放行 M0.  userdata 不列 (全量刷不清用户 /data).
 cat > "$WORK_DIR/package-file" << EOF
 # NAME		Relative path
 package-file	package-file
@@ -279,16 +280,28 @@ parameter	Image/parameter.txt
 uboot       Image/uboot.img
 boot_a      Image/boot_a.img
 boot_b      Image/boot_b.img
-amp         Image/amp.img
 misc		Image/misc.img
+amp         Image/amp.img
 backup		RESERVED
 EOF
-echo "  使用内置 A/B package-file (boot_a/boot_b/amp/misc, 无 rootfs/recovery/oem)"
+echo "  使用内置 A/B package-file (boot_a/boot_b/misc/amp, 无 rootfs/recovery/oem)"
 
 # 拷贝所有镜像
 cp -f "$OUTPUT_DIR/MiniLoaderAll.bin" "$WORK_DIR/Image/"
 cp -f "$PARAM_FILE" "$WORK_DIR/Image/parameter.txt"
 cp -f "$OUTPUT_DIR/uboot.img" "$WORK_DIR/Image/"
+
+# amp.img: M0 固件 standalone FIT (nand_firmware/amp/amp.img,
+# 由 build_mcu_fw.sh 用 RK3506_SDK_DIR 生成).  U-Boot 在 board_late_init
+# 的 amp_cpus_on() 从 "amp" GPT 分区读出它并 fit_standalone_release() 放行 M0.
+AMP_IMG="${AMP_IMG:-$NUTTX_DIR/nand_firmware/amp/amp.img}"
+if [ -f "$AMP_IMG" ]; then
+    cp -f "$AMP_IMG" "$WORK_DIR/Image/amp.img"
+    echo "  -> amp.img $(stat -c %s "$AMP_IMG") bytes (M0 standalone FIT)"
+else
+    echo "  警告: 未找到 amp.img ($AMP_IMG), amp 分区将为空, U-Boot 不加载 M0!"
+    echo "        先运行: RK3506_SDK_DIR=<sdk> bash nand_firmware/build_mcu_fw.sh"
+fi
 
 # boot_a/boot_b 内容: 优先用 boot.fit (FIT external-data 镜像)
 #   -> U-Boot 默认 bootcmd 的 boot_fit 能直接识别并自动引导 NuttX
@@ -315,25 +328,6 @@ for img in misc; do
         dd if=/dev/zero of="$WORK_DIR/Image/${img}.img" bs=1K count=8 2>/dev/null
     fi
 done
-
-#--------------------------------------------------------------------
-# 6b. 准备 M0 (bus MCU) 固件 amp.img
-#
-# SDK 流程 (u-boot/drivers/cpu/rockchip_amp.c amp_cpus_on): U-Boot 在
-# board_late_init 阶段从名为 "amp" 的 GPT 分区读出该 FIT, 经
-# boot_get_loadable 把 standalone 镜像 (load=0xfff84000) 在 M0 复位态
-# 拷入 M0 SRAM, 再调 fit_standalone_release() 放行 (SMC TCM 映射 ->
-# CRU_GATE_CON5 -> GRF_SOC_CON36 -> PMU_INT_MASK_CON). NuttX 不再拷贝/
-# 放行 M0, 只开时钟+邮箱. amp.img 由 build_mcu_fw.sh 用 TestDemo.bin 生成
-# 并随仓提交 (与 uboot.itb 同策略), 这里只做存在性检查 + 拷贝.
-#--------------------------------------------------------------------
-if [ ! -f "$SCRIPT_DIR/amp/amp.img" ]; then
-    echo "错误: 找不到 amp/amp.img (M0 固件 FIT)"
-    echo "请先运行: RK3506_SDK_DIR=$SDK_DIR bash nand_firmware/build_mcu_fw.sh"
-    exit 1
-fi
-cp -f "$SCRIPT_DIR/amp/amp.img" "$WORK_DIR/Image/amp.img"
-echo "  -> amp.img $(stat -c %s "$WORK_DIR/Image/amp.img") bytes (M0 standalone FIT, 进 amp 分区)"
 
 echo "  rockdev/Image/ 准备完成:"
 ls -la "$WORK_DIR/Image/"
