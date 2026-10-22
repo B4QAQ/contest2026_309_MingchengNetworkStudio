@@ -42,5 +42,9 @@ int hd_rk3506_bringup(void);
 int hd_rk3506_lv_port_disp_init(void);
 #endif
 
+#ifdef CONFIG_IOEXPANDER
+int hd_rk3506_gpio_initialize(void);
+#endif
+
 #endif /* __ASSEMBLY__ */
 #endif /* __VENDOR_ROCKCHIP_BOARDS_RK3506_HD_RK3506_EVM_SRC_HD_RK3506_H */

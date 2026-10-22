@@ -72,14 +72,9 @@
 
 #include "hardware/rk3506_memorymap.h"
 
-#ifndef putreg32
-#  define putreg32(v, a) (*(FAR volatile uint32_t *)(a) = (v))
-#endif
-#ifndef getreg32
-#  define getreg32(a)    (*(FAR volatile uint32_t *)(a))
-#endif
 #include "rk3506_cru.h"
 #include "rk3506_iomux.h"
+#include "rk3506_gpio.h"
 #include "rk3506_gmac_hal.h"
 
 /****************************************************************************
@@ -107,19 +102,21 @@
 
 #define PKTBUF_SIZE (MAX_NETDEV_PKTSIZE + CONFIG_NET_GUARDSIZE)
 
-/* PHY hardware reset: GPIO4_A2, active low (HD-RK3506-EVM GMAC.md:
+/* PHY hardware reset, active low (HD-RK3506-EVM GMAC.md:
  * snps,reset-gpio = <&gpio4 RK_PA2 GPIO_ACTIVE_LOW>,
- * reset-delays-us = <0 20000 100000>).  GPIO4 v2 controller base
- * 0xFF1E0000 (rk3506.h GPIO4_BASE); A2 = pin 2 lives in the _L register
- * pair (pins 0..15): SWPORT_DR_L = +0x00, SWPORT_DDR_L = +0x08, bit 2.
+ * reset-delays-us = <0 20000 100000>).  The pad is a board choice:
+ * it comes from CONFIG_RK3506_GMAC0_PHY_RESET_BANK/PIN (default
+ * bank 4 / pin 2 = GPIO4_A2 for this board; override in the board
+ * defconfig).  The pin is driven through the shared GPIO back-end
+ * (rk3506_gpio_config/write) instead of poking the v2 controller
+ * registers directly.
  * NOTE: GPIO0_C2 was the Rockchip in-house EVM value and is NOT the
- * pin wired to the PHY reset on this board.
+ * pin wired to the PHY reset on the HD-RK3506-EVM.
  */
 
-#define RK3506_GPIO4_BASE              0xFF1E0000u
-#define GPIO_SWPORT_DR_L               0x00u
-#define GPIO_SWPORT_DDR_L              0x08u
-#define PHY_RESET_PIN_BIT              (1u << 2)
+#define RK3506_PHY_RESET_GPIN  \
+  RK3506_GPIO_PIN(CONFIG_RK3506_GMAC0_PHY_RESET_BANK, \
+                  CONFIG_RK3506_GMAC0_PHY_RESET_PIN)
 
 /* MDIO clock source frequency fed to HAL_GMAC_Init() for the CSR
  * selection.  hclk_lsperi_root: CLKSEL_CON(29) mux[6:5]=0 (clk_gpll_div)
@@ -390,22 +387,24 @@ static int rk3506_gmac0_yt8512b_init(FAR struct GMAC_HANDLE *gmac)
 
 static void rk3506_gmac0_phy_reset(void)
 {
-  uint32_t dr = RK3506_GPIO4_BASE + GPIO_SWPORT_DR_L;
-  uint32_t ddr = RK3506_GPIO4_BASE + GPIO_SWPORT_DDR_L;
+  /* Configure GPIO4_A2 as an output driving high (deasserted), then
+   * pulse it low for the vendor-specified 20 ms and release.
+   * rk3506_gpio_config() muxes the pin to GPIO and ungates the GPIO4
+   * clocks; rk3506_gpio_write() does the HIWORD single-bit drive.
+   */
 
-  /* Set the pin direction to OUTPUT first. */
-
-  putreg32((PHY_RESET_PIN_BIT << 16) | PHY_RESET_PIN_BIT, ddr);
+  rk3506_gpio_config(RK3506_PHY_RESET_GPIN, RK3506_GPIO_OUTPUT |
+                     RK3506_GPIO_VALUE_HIGH);
 
   /* Drive low: PHY held in reset. */
 
-  putreg32((PHY_RESET_PIN_BIT << 16) | 0u, dr);
+  rk3506_gpio_write(RK3506_PHY_RESET_GPIN, false);
 
   up_udelay(20 * 1000u);
 
   /* Release reset: drive high. */
 
-  putreg32((PHY_RESET_PIN_BIT << 16) | PHY_RESET_PIN_BIT, dr);
+  rk3506_gpio_write(RK3506_PHY_RESET_GPIN, true);
 
   up_udelay(100 * 1000u);
 }

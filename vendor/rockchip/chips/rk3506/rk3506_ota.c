@@ -283,6 +283,18 @@ static void ota_meta_defaults(FAR struct avb_ab_data_s *meta)
  *
  ****************************************************************************/
 
+/* On the raw SPI NAND, bread() returns -EUCLEAN when the ECC engine had to
+ * correct bitflips; the destination buffer still holds the valid page data
+ * (see rk3506_spinand_fspi.c and drivers/mtd/dhara.c).  Such a read must be
+ * treated as success -- an erased/blank page reads back as 0xFF anyway.
+ * Only -EBADMSG (uncorrectable) and bus errors are real failures.
+ */
+
+static inline bool ota_bread_ok(ssize_t n)
+{
+  return n >= 0 || n == -EUCLEAN;
+}
+
 static int ota_meta_read(FAR struct rk3506_ota_dev_s *priv,
                          FAR struct avb_ab_data_s *meta)
 {
@@ -301,7 +313,7 @@ static int ota_meta_read(FAR struct rk3506_ota_dev_s *priv,
     }
 
   n = priv->misc->bread(priv->misc, page, 1, scratch);
-  if (n < 0)
+  if (!ota_bread_ok(n))
     {
       return (int)n;
     }
@@ -335,7 +347,7 @@ static int ota_meta_write(FAR struct rk3506_ota_dev_s *priv,
   /* Preserve the rest of the pages (BCB at offset 0 lives in page 0) */
 
   n = priv->misc->bread(priv->misc, firstpage, npages, pages);
-  if (n < 0)
+  if (!ota_bread_ok(n))
     {
       kmm_free(pages);
       return (int)n;
@@ -415,10 +427,14 @@ static bool ota_slot_fit_ok(FAR struct rk3506_ota_dev_s *priv, int slot)
   ssize_t n;
 
   n = priv->slot[slot]->bread(priv->slot[slot], 0, 1, priv->rdbuf);
-  if (n < 0)
+  if (!ota_bread_ok(n))
     {
       return false;
     }
+
+  /* -EUCLEAN leaves valid data in rdbuf; an erased slot reads 0xFF and so
+   * simply fails the FIT-magic test below.
+   */
 
   memcpy(hdr, priv->rdbuf, 4);
   magic = ((uint32_t)hdr[0] << 24) | ((uint32_t)hdr[1] << 16) |
@@ -600,10 +616,12 @@ static ssize_t ota_read(FAR struct file *filep, FAR char *buffer,
 
       n = priv->slot[priv->target]->bread(priv->slot[priv->target],
                                           page, 1, priv->rdbuf);
-      if (n < 0)
+      if (n < 0 && n != -EUCLEAN)
         {
           return done > 0 ? (ssize_t)done : (ssize_t)n;
         }
+
+      /* -EUCLEAN: corrected bitflips, rdbuf holds the valid page. */
 
       memcpy(buffer + done, priv->rdbuf + inpage, chunk);
       done += chunk;

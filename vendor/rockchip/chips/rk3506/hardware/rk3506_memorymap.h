@@ -95,6 +95,7 @@
 /* System Registers */
 
 #define RK3506_CRU_ADDR          0xff9a0000  /* Clock Reset Unit */
+#define RK3506_PMU_CRU_ADDR      0xff9b0000  /* PMU Clock Reset Unit */
 #define RK3506_GRF_ADDR          0xff288000  /* General Register Files */
 #define RK3506_GRF_PMU_ADDR      0xff910000  /* PMU GRF */
 #define RK3506_IOC_GRF_ADDR      0xff4d8000  /* IOC GRF (Pin Control) */
@@ -128,6 +129,10 @@
 #define RK3506_FLEXBUS_ADDR      0xff880000  /* IRQ 127 */
 #define RK3506_DSMC_ADDR         0xff8b0000  /* IRQ 126 */
 #define RK3506_MAILBOX0_ADDR     0xff290000  /* IRQ 138 */
+#define RK3506_MAILBOX1_ADDR     0xff291000
+#define RK3506_MAILBOX2_ADDR     0xff292000
+#define RK3506_MAILBOX3_ADDR     0xff293000
+#define RK3506_INTMUX_ADDR       0xff2a0000  /* M0 interrupt mux */
 #define RK3506_HWSPINLOCK0_ADDR  0xff240000
 
 /* DDR Memory */

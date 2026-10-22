@@ -22,16 +22,16 @@
 
 set(SRCS hd_rk3506_boardinit.c hd_rk3506_appinit.c hd_rk3506_bringup.c)
 
-if(CONFIG_INPUT_GT911)
-  list(APPEND SRCS hd_rk3506_gt911.c)
-endif()
-
-if(CONFIG_LCD_ST7701S)
-  list(APPEND SRCS hd_rk3506_st7701s.c)
+if(CONFIG_LCD_NV3007)
+  list(APPEND SRCS hd_rk3506_nv3007.c)
 endif()
 
 if(CONFIG_GRAPHICS_LVGL)
   list(APPEND SRCS hd_rk3506_lv_port_disp.c)
+endif()
+
+if(CONFIG_IOEXPANDER)
+  list(APPEND SRCS hd_rk3506_gpio.c)
 endif()
 
 # netcfg: network configuration daemon.  Parses /etc/net.conf and

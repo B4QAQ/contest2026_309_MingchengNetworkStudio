@@ -38,14 +38,7 @@
 
 #include "hardware/rk3506_memorymap.h"
 #include "rk3506_gmac_hal.h"
-
-#ifndef putreg32
-#  define putreg32(v, a) (*(FAR volatile uint32_t *)(a) = (v))
-#endif
-#ifndef getreg32
-#  define getreg32(a)    (*(FAR volatile uint32_t *)(a))
-#endif
-
+#include "rk3506_register.h"
 
 /****************************************************************************
  * Pre-processor Definitions

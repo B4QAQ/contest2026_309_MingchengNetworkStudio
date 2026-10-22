@@ -65,6 +65,7 @@
 
 #include "arm_internal.h"
 #include "rk3506_usbhost.h"
+#include "rk3506_cru.h"
 #include "hardware/rk3506_dwc2.h"
 #include "hardware/rk3506_memorymap.h"
 
@@ -109,7 +110,11 @@
 #define RK3506_USBPHY_OTG1_TUNE    0x0430  /* OTG1 (host) port tuning */
 #define RK3506_USBPHY_OTG1_LSSEL   0x0494  /* OTG1 linestate select */
 
-#define RK3506_CRU_CLKGATE_CON(n)  (RK3506_CRU_ADDR + (n) * 4 + 0x800u)
+/* CRU gate bits for the USB clocks (clk-rk3506.c); the CLKGATE_CON
+ * layout and the HIWORD_UPDATE store live in rk3506_cru.h /
+ * rk3506_cru_gate().
+ */
+
 #define RK3506_CON1_REF_USBPHY     (1u << 4)   /* CLK_REF_USBPHY_TOP (24M) */
 #define RK3506_CON7_OTG0_BITS      (7u << 5)   /* hclk_otg0 + pmu + adp */
 #define RK3506_CON7_OTG1_BITS      (0xfu << 8) /* hclk_otg1 + pmu + adp + pclk_usbphy */
@@ -3430,14 +3435,14 @@ static void rk3506_usbphy_init(struct rk3506_usbhost_s *priv)
 
   /* 1. Ungate the PHY reference clock (24M) and this controller's bus
    *    clocks.  Reset default is ungated; this is belt-and-suspenders in
-   *    case the previous boot stage closed them.  Rockchip gate bits are
-   *    active-high "clock stopped", written with write-enable in the
-   *    high half-word: writing value 0 with WE keeps the clock running.
+   *    case the previous boot stage closed them.  The shared
+   *    rk3506_cru_gate() primitive does the HIWORD_UPDATE store
+   *    (CLK_GATE_SET_TO_DISABLE, data bit 0 = keep the clock running).
    */
 
-  putreg32(RK3506_CON1_REF_USBPHY << 16, RK3506_CRU_CLKGATE_CON(1));
-  regval = (otg1 ? RK3506_CON7_OTG1_BITS : RK3506_CON7_OTG0_BITS) << 16;
-  putreg32(regval, RK3506_CRU_CLKGATE_CON(7));
+  rk3506_cru_gate(1, RK3506_CON1_REF_USBPHY, true);
+  rk3506_cru_gate(7, otg1 ? RK3506_CON7_OTG1_BITS : RK3506_CON7_OTG0_BITS,
+                  true);
 
   /* 2. Turn on the PHY 480MHz clock output (clkout_ctl_phy, bits [7:2] =
    *    0x27) and wait for it to stabilize.

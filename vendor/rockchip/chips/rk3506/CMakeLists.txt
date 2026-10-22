@@ -28,9 +28,17 @@ set(SRCS
     rk3506_timerisr.c
     rk3506_allocateheap.c)
 
-if(CONFIG_RK3506_VOP)
-  list(APPEND SRCS rk3506_vop.c)
-endif()
+# Infrastructure, always built: pin control, GPIO back-end and the
+# clock/reset unit are used by essentially every peripheral (and cru
+# was previously gated behind an incomplete peripheral list that
+# missed GMAC0).  The ioexpander lower-half inside rk3506_gpio.c is
+# compiled out unless CONFIG_IOEXPANDER, but the chip-level
+# rk3506_gpio_config/write/read helpers are always available so that
+# on-board drivers (LCD, GMAC, ...) share one GPIO back-end.
+
+list(APPEND SRCS rk3506_pinctrl.c)
+list(APPEND SRCS rk3506_cru.c)
+list(APPEND SRCS rk3506_gpio.c)
 
 if(CONFIG_RK3506_I2C)
   list(APPEND SRCS rk3506_i2c.c)
@@ -44,8 +52,7 @@ if(CONFIG_RK3506_SPI)
   list(APPEND SRCS rk3506_spi.c)
 endif()
 
-if(CONFIG_RK3506_SPINAND OR CONFIG_RK3506_FSPI OR CONFIG_RK3506_PWM OR CONFIG_RK3506_SARADC OR CONFIG_RK3506_CAN OR CONFIG_RK3506_WDT)
-  list(APPEND SRCS rk3506_cru.c)
+if(CONFIG_RK3506_SPINAND OR CONFIG_RK3506_FSPI OR CONFIG_RK3506_PWM OR CONFIG_RK3506_SARADC OR CONFIG_RK3506_CAN OR CONFIG_RK3506_WDT OR CONFIG_RK3506_GMAC0)
   list(APPEND SRCS rk3506_iomux.c)
 endif()
 

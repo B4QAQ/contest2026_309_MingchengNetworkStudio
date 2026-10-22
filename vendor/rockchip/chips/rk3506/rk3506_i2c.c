@@ -60,18 +60,12 @@
 
 #include "hardware/rk3506_memorymap.h"
 #include "rk3506_i2c.h"
+#include "rk3506_cru.h"
+#include "rk3506_register.h"
 
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
-
-#ifndef putreg32
-#  define putreg32(v, x) (*(FAR volatile uint32_t *)(x) = (v))
-#endif
-
-#ifndef getreg32
-#  define getreg32(x) (*(FAR volatile uint32_t *)(x))
-#endif
 
 /* I2C bus configuration */
 
@@ -1198,6 +1192,14 @@ FAR struct i2c_master_s *rk3506_i2cbus_initialize(int bus)
       };
 
       priv->dev.ops = &rk3506_i2c_ops;
+
+      /* Ungate this controller's PCLK + CLK_I2Cx before touching its
+       * registers (the driver owns its clocks; it no longer relies on
+       * U-Boot having ungated them).
+       */
+
+      rk3506_i2c_clock_init((uint8_t)bus);
+
       rk3506_i2c_initialize(priv);
     }
 

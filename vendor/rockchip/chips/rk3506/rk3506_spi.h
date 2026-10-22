@@ -10,9 +10,13 @@
 #include <nuttx/config.h>
 #include <nuttx/spi/spi.h>
 
+/* The RK3506 has exactly two SPI controllers (SPI0 @0xFF120000,
+ * SPI1 @0xFF130000, per the SDK CMSIS rk3506.h -- there is no SPI2),
+ * matching RK3506_SPI_NUM_BUS == 2 in rk3506_spi.c.
+ */
+
 #define RK3506_SPI0_BUS           0
 #define RK3506_SPI1_BUS           1
-#define RK3506_SPI2_BUS           2
 
 #if defined(__cplusplus)
 extern "C" {

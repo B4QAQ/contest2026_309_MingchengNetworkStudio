@@ -66,22 +66,22 @@
 #include <nuttx/can.h>
 
 #include "rk3506_cru.h"
+#include "rk3506_pinctrl.h"
+#include "rk3506_register.h"
+#include "hardware/rk3506_memorymap.h"
 
 #ifdef CONFIG_RK3506_CAN
-
-#ifndef putreg32
-#  define putreg32(v, a) (*(FAR volatile uint32_t *)(a) = (v))
-#endif
-#ifndef getreg32
-#  define getreg32(a)    (*(FAR volatile uint32_t *)(a))
-#endif
 
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
 
-#define CAN0_BASE               0xFF320000u
-#define CAN1_BASE               0xFF330000u
+/* Controller bases: RK3506_CAN0_ADDR / RK3506_CAN1_ADDR from
+ * hardware/rk3506_memorymap.h (single shared address table).
+ */
+
+#define CAN0_BASE               RK3506_CAN0_ADDR
+#define CAN1_BASE               RK3506_CAN1_ADDR
 
 #define CAN_IRQ0                RK3506_IRQ_CAN0
 #define CAN_IRQ1                RK3506_IRQ_CAN1
@@ -280,28 +280,17 @@ static const struct rk3506_can_bittime_s g_can_bittime[] =
  * Function IDs (rk3506-pinctrl-rmio.dtsi):
  *   can1 tx/rx = 41/42, can0 tx/rx = 43/44.
  *
- * TODO(boards): route CANx TX/RX RM_IO pins from schematic.  The
- * functions are fixed, but the two physical pads per controller are a
- * board choice (any gpio0 pad 0..23 supported by the RM_IO matrix; the
- * SDK ships no can0/can1 pinctrl for the EVM).  Until the board file
- * fills in tx_pad/rx_pad, no pad register is written, so normal mode
- * stays off the physical pins instead of corrupting a pad with the
- * old "two functions into one register" sequence.  Loopback mode needs
- * no pad at all and keeps working on the bench.
+ * The two physical pads per controller are a board choice, taken from
+ * CONFIG_RK3506_CANx_TX_PAD/RX_PAD (any bank0 pin 0..23 supported by
+ * the RM_IO matrix; the SDK ships no can0/can1 pinctrl for the EVM, so
+ * the default 255 = CAN_PAD_UNUSED keeps normal mode off the physical
+ * pins instead of corrupting a pad with the old "two functions into
+ * one register" sequence).  Loopback mode needs no pad at all and
+ * keeps working on the bench.
+ *
+ * Routing is done through the unified rk3506_pinctrl_set_mux() (the
+ * RM_IO matrix + IOMUX nibble); no local RM_IO/IOMUX register pokes.
  */
-
-#define CAN_RMIO_BASE           0xFF910000u
-#define RMIO_REG(pin)           (CAN_RMIO_BASE + 0x80u + 0x4u * (pin))
-#define RMIO_DATA(fn)           (0x7f0000u | ((fn) & 0x7fu))
-#define RMIO_FN_OFFSET          15u        /* dtsi func 16+ -> reg value */
-
-/* GPIO0 bank IOMUX (PMU IOC block): 8 pins per group, two 32-bit
- * registers per group (low nibbles, high nibbles), mux value 7 picks
- * the RM_IO matrix (pinctrl-rk3506.c rk3506_set_mux).
- */
-
-#define CAN_GPIO0_IOC_BASE      0xFF950000u
-#define CAN_IOMUX_FUNC          7u
 
 #define CAN0_TX_FN              43u
 #define CAN0_RX_FN              44u
@@ -310,6 +299,24 @@ static const struct rk3506_can_bittime_s g_can_bittime[] =
 #define CAN1_RX_FN              42u
 
 #define CAN_PAD_UNUSED          0xffu
+
+/* The pad Kconfig options are hidden under !RK3506_CAN_LOOPBACK, so
+ * in a loopback build the CONFIG_RK3506_CANx_*_PAD symbols do not
+ * exist; fall back to "not routed" there.
+ */
+
+#ifndef CONFIG_RK3506_CAN0_TX_PAD
+#  define CONFIG_RK3506_CAN0_TX_PAD  CAN_PAD_UNUSED
+#endif
+#ifndef CONFIG_RK3506_CAN0_RX_PAD
+#  define CONFIG_RK3506_CAN0_RX_PAD  CAN_PAD_UNUSED
+#endif
+#ifndef CONFIG_RK3506_CAN1_TX_PAD
+#  define CONFIG_RK3506_CAN1_TX_PAD  CAN_PAD_UNUSED
+#endif
+#ifndef CONFIG_RK3506_CAN1_RX_PAD
+#  define CONFIG_RK3506_CAN1_RX_PAD  CAN_PAD_UNUSED
+#endif
 
 /* Deferred work flags (ISR only sets these, receive() work context
  * consumes them: no allocation / sleep in the ISR).
@@ -459,16 +466,25 @@ static int can_nbtp(FAR struct rk3506_can_s *priv, FAR uint32_t *nbtp)
 
 static void can_rmio_route(uint8_t pad, uint8_t func)
 {
-  uint32_t ioc_reg = CAN_GPIO0_IOC_BASE + 8u * (pad / 8u);
-  unsigned int bit = (unsigned int)(pad % 4u) * 4u;
+  /* The RM_IO matrix only reaches bank0 pins 0..23 (RM_IO0..23 =
+   * GPIO0_A0..C7); a pad value outside that range is a misconfigured
+   * CONFIG_RK3506_CANx_*_PAD and must not touch any register.
+   */
 
-  if ((pad % 8u) >= 4u)
+  if (pad > 23u)
     {
-      ioc_reg += 4u;
+      canerr("ERROR: CAN RM_IO pad %u out of range (0..23), not routed\n",
+             pad);
+      return;
     }
 
-  putreg32(RMIO_DATA((uint32_t)func - RMIO_FN_OFFSET), RMIO_REG(pad));
-  putreg32((0xfu << (bit + 16)) | (CAN_IOMUX_FUNC << bit), ioc_reg);
+  /* bank0 pad (GPIO0 pin 0..23) routed through the RM_IO matrix:
+   * rk3506_pinctrl_set_mux() sees func > 15 (CAN function ids 41-44),
+   * programs the RM_IO channel with (func - 15) and then forces the
+   * local IOMUX nibble to the matrix path (7).
+   */
+
+  rk3506_pinctrl_set_mux(0, pad, func);
 }
 
 /****************************************************************************
@@ -476,8 +492,8 @@ static void can_rmio_route(uint8_t pad, uint8_t func)
  *
  * Description:
  *   Route the controller TX/RX pads.  Both pads default to
- *   CAN_PAD_UNUSED, so this does nothing until a board (with schematic
- *   in hand) assigns them.  See the TODO(boards) block above.
+ *   CAN_PAD_UNUSED (CONFIG_RK3506_CANx_TX_PAD/RX_PAD = 255), so this
+ *   does nothing until a board defconfig assigns them.
  *
  ****************************************************************************/
 
@@ -1354,6 +1370,8 @@ int rk3506_can_initialize(void)
           priv->bitrate = CONFIG_RK3506_CAN0_BITRATE;
           priv->tx_fn   = CAN0_TX_FN;
           priv->rx_fn   = CAN0_RX_FN;
+          priv->tx_pad  = (uint8_t)CONFIG_RK3506_CAN0_TX_PAD;
+          priv->rx_pad  = (uint8_t)CONFIG_RK3506_CAN0_RX_PAD;
         }
       else
         {
@@ -1362,16 +1380,15 @@ int rk3506_can_initialize(void)
           priv->bitrate = CONFIG_RK3506_CAN1_BITRATE;
           priv->tx_fn   = CAN1_TX_FN;
           priv->rx_fn   = CAN1_RX_FN;
+          priv->tx_pad  = (uint8_t)CONFIG_RK3506_CAN1_TX_PAD;
+          priv->rx_pad  = (uint8_t)CONFIG_RK3506_CAN1_RX_PAD;
         }
 
-      /* TX/RX pads are board-specific and unknown without a schematic
-       * - stay off the pads until can_pinmux() gets both from the
-       * board (TODO(boards)).  memset already set these to zero, so
-       * mark them unused explicitly.
+      /* TX/RX pads come from CONFIG_RK3506_CANx_TX_PAD/RX_PAD (board
+       * choice, default 255 = CAN_PAD_UNUSED = stay off the physical
+       * pins until a board defconfig assigns them).  can_pinmux()
+       * skips any pad still marked CAN_PAD_UNUSED.
        */
-
-      priv->tx_pad = CAN_PAD_UNUSED;
-      priv->rx_pad = CAN_PAD_UNUSED;
 
       ret = netdev_lower_register(&priv->dev, NET_LL_CAN);
       if (ret < 0)

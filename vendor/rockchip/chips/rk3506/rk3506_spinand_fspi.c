@@ -49,6 +49,7 @@
 
 #include <nuttx/kmalloc.h>
 #include <nuttx/mtd/mtd.h>
+#include <nuttx/arch.h>
 
 #include "rk3506_fspi.h"
 
