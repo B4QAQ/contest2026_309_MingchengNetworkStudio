@@ -7,6 +7,34 @@ if ARCH_CHIP_RK3506
 
 menu "Rockchip RK3506 Peripheral Selection"
 
+config RK3506_PINCTRL
+	bool "RK3506 pin control (IOMUX / RM_IO / pull / drive)"
+	default y
+	---help---
+		Unified pin-control for the RK3506G2.  Provides
+		rk3506_pinctrl_set_mux() / RM_IO routing (GRF_PMU matrix) /
+		rk3506_pinctrl_set_pull() / rk3506_pinctrl_set_drive() /
+		rk3506_pinctrl_set_schmitt(), with register values taken
+		verbatim from the SDK pinctrl driver.  This is the single
+		entry point every peripheral uses to configure its pins;
+		it replaces the scattered hard-coded pokes in
+		rk3506_iomux.c and friends.  Always enabled.
+
+config RK3506_GPIO
+	bool "RK3506 GPIO controller (ioexpander lower-half)"
+	default n
+	depends on IOEXPANDER
+	select IOEXPANDER_INT_ENABLE
+	---help---
+		GPIO v2.2 controller driver for the RK3506G2.  Registers
+		one ioexpander lower-half device per GPIO bank (5 banks x
+		32 pins) so board code can create /dev/gpioN nodes via
+		gpio_lower_half() (the R528-style model), and provides
+		the chip-level rk3506_gpio_config/write/read helpers used
+		by on-board drivers (LCD reset/DC, PHY reset, ...).
+		Interrupt support (per-pin trigger + dispatch through the
+		bank's combined GIC line) is included.
+
 config RK3506_UART0
 	bool "UART 0"
 	default y
@@ -23,45 +51,9 @@ config RK3506_UART1
 	---help---
 		Enable UART1 (base 0xFF0B0000, IRQ 67).
 
-config RK3506_UART2
-	bool "UART 2"
-	default n
-	select UART2_SERIALDRIVER
-	select ARCH_HAVE_SERIAL_TERMIOS
-	---help---
-		Enable UART2 (base 0xFF0C0000, IRQ 68).
+comment "UART2-UART5 exist in hardware but are not yet implemented in rk3506_serial.c"
 
-config RK3506_UART3
-	bool "UART 3"
-	default n
-	select UART3_SERIALDRIVER
-	select ARCH_HAVE_SERIAL_TERMIOS
-	---help---
-		Enable UART3 (base 0xFF0D0000, IRQ 69).
-
-config RK3506_UART4
-	bool "UART 4"
-	default n
-	select UART4_SERIALDRIVER
-	select ARCH_HAVE_SERIAL_TERMIOS
-	---help---
-		Enable UART4 (base 0xFF0E0000, IRQ 70).
-
-config RK3506_UART5
-	bool "UART 5"
-	default n
-	select UART5_SERIALDRIVER
-	select ARCH_HAVE_SERIAL_TERMIOS
-	---help---
-		Enable UART5 (base 0xFF4E0000, IRQ 71).
-
-config RK3506_VOP
-	bool "RK3506 VOP Framebuffer"
-	default n
-	depends on VIDEO_FB
-	---help---
-		Enable the RK3506 VOP (Video Output Processor) framebuffer driver.
-		Provides /dev/fb0 with 480x854 RGB565 output via the RGB interface.
+comment "Do not add RK3506_UART2..5 until the driver grows per-port instances for them"
 
 config RK3506_I2C
 	bool "RK3506 I2C Bus Controller"
@@ -190,14 +182,35 @@ config RK3506_GMAC0
 		@0xFF4C8000, IRQ66).  All hardware sequences come from the Linux
 		SDK GMAC HAL ported verbatim (rk3506_gmac_hal.c: hal_gmac.c +
 		hal_gmac_rk3506.c) behind a NuttX net_driver_s shell (dm90x0
-		pattern).  Covers CRU clocks, RMII IOMUX, GPIO4_A2 PHY reset
-		(HD-RK3506-EVM board doc), MDIO/PHY autoneg (YT8512B @ addr 0),
-		DMA descriptor rings and the MAC IRQ.  The interface is brought
-		up by NETINIT + DHCPC.
+		pattern).  Covers CRU clocks, RMII IOMUX, the PHY reset GPIO
+		(configured below, default GPIO4_A2 per the HD-RK3506-EVM board
+		doc), MDIO/PHY autoneg (YT8512B @ addr 0), DMA descriptor rings
+		and the MAC IRQ.  The interface is brought up by NETINIT + DHCPC.
 		ARCH_PHY_INTERRUPT enables the NuttX PHY-event plumbing: the
 		driver implements SIOCMIINOTIFY/SIOCGMIIPHY/SIOCGMIIREG so the
 		netinit link monitor (CONFIG_NETINIT_MONITOR) can track and
 		react to link transitions.
+
+config RK3506_GMAC0_PHY_RESET_BANK
+	int "PHY reset GPIO bank (0..4)"
+	default 4
+	range 0 4
+	depends on RK3506_GMAC0
+	---help---
+		GPIO bank of the PHY hardware-reset pin (active low).  Board
+		setting: HD-RK3506-EVM wires the YT8512B reset to GPIO4_A2
+		(snps,reset-gpio = <&gpio4 RK_PA2 GPIO_ACTIVE_LOW>), so the
+		default is bank 4 / pin 2.  Override in the board defconfig
+		when a different pad drives the PHY reset.
+
+config RK3506_GMAC0_PHY_RESET_PIN
+	int "PHY reset GPIO pin within the bank (0..31)"
+	default 2
+	range 0 31
+	depends on RK3506_GMAC0
+	---help---
+		Pin number of the PHY hardware-reset pin inside
+		RK3506_GMAC0_PHY_RESET_BANK (see that option).
 
 config RK3506_GMAC0_EXTCLK
 	bool "GMAC0: RMII REF_CLK driven by the PHY (SELET_IO)"
@@ -215,19 +228,49 @@ config RK3506_GMAC0_EXTCLK
 		Wrong direction shows up as every received frame failing the
 		FCS check (MMC RX CRC errors), or no link at all.
 
-endmenu # "Rockchip RK3506 Peripheral Selection"
-
-endif # ARCH_CHIP_RK3506
-
 config RK3506_PWM
-	bool "RK3506 PWM0 channel 2 on RM_IO10 (/dev/pwm0)"
+	bool "RK3506 PWM0 channel 2 (/dev/pwm0)"
 	default n
 	depends on PWM
 	---help---
 		Register /dev/pwm0 backed by the pwm0_4ch_2 channel block
-		(0xFF932000, 100 MHz time base), with RM_IO10 (GPIO0_B2)
-		routed to PWM0_CH2 (RM_IO function 47).  Register sequence
-		ported from the SDK hal_pwm.c continuous mode.
+		(0xFF932000, 100 MHz time base).  The output pad is routed
+		through the RM_IO matrix (see the RK3506_PWM_* options below;
+		the HD-RK3506-EVM default is RM_IO12 = GPIO0_B4, J9-29,
+		DTS function 47).  Register sequence ported from the SDK
+		hal_pwm.c continuous mode.
+
+config RK3506_PWM_BANK
+	int "PWM output GPIO bank"
+	default 0
+	range 0 4
+	depends on RK3506_PWM
+	---help---
+		GPIO bank of the pad routed to the PWM channel.  The RK3506
+		PWM0_CH2 signal only reaches the outside through the RM_IO
+		matrix, which on this chip serves bank 0 pads (RM_IO0..23 =
+		GPIO0_A0..C7); the default bank 0 / pin 4 (GPIO0_B4 =
+		RM_IO12) matches the HD-RK3506-EVM backlight header J9-29.
+
+config RK3506_PWM_PIN
+	int "PWM output GPIO pin within the bank (0..31)"
+	default 4
+	range 0 31
+	depends on RK3506_PWM
+	---help---
+		Pin number of the PWM output pad inside RK3506_PWM_BANK.
+
+config RK3506_PWM_FUNC
+	int "PWM output RM_IO function number (DTS mux value)"
+	default 47
+	range 16 127
+	depends on RK3506_PWM
+	---help---
+		DTS "mux" number for the RM_IO route, from
+		rk3506-pinctrl-rmio.dtsi (rm_io12_pwm0_ch2 = <0 RK_PB4 47>).
+		Values exceed the 4-bit IOMUX field, so the pinctrl back-end
+		programs the RM_IO channel with (value - 15) and forces the
+		local IOMUX nibble to the matrix path (7).
 
 config RK3506_SARADC
 	bool "RK3506 SARADC (/dev/adc0, IN2/IN3 on header)"
@@ -288,6 +331,47 @@ config RK3506_CAN_LOOPBACK
 		self-test option, so it defaults to off like upstream
 		network drivers.
 
+comment "CAN pad routing (RM_IO bank0 pin 0..23, 255 = not routed)"
+
+config RK3506_CAN0_TX_PAD
+	int "can0 TX pad (bank0 pin, 255 = not routed)"
+	default 255
+	range 0 255
+	depends on !RK3506_CAN_LOOPBACK
+	---help---
+		GPIO0 pad (pin 0..23, reachable through the RM_IO matrix)
+		routed to can0 TX (DTS function 43).  255 leaves the pad
+		unrouted.  Board setting: no can0/can1 pinctrl ships in the
+		EVM SDK dts, so the default stays unrouted until the board
+		schematic assigns the pads.
+
+config RK3506_CAN0_RX_PAD
+	int "can0 RX pad (bank0 pin, 255 = not routed)"
+	default 255
+	range 0 255
+	depends on !RK3506_CAN_LOOPBACK
+	---help---
+		GPIO0 pad routed to can0 RX (DTS function 44); see
+		RK3506_CAN0_TX_PAD.
+
+config RK3506_CAN1_TX_PAD
+	int "can1 TX pad (bank0 pin, 255 = not routed)"
+	default 255
+	range 0 255
+	depends on !RK3506_CAN_LOOPBACK
+	---help---
+		GPIO0 pad routed to can1 TX (DTS function 41); see
+		RK3506_CAN0_TX_PAD.
+
+config RK3506_CAN1_RX_PAD
+	int "can1 RX pad (bank0 pin, 255 = not routed)"
+	default 255
+	range 0 255
+	depends on !RK3506_CAN_LOOPBACK
+	---help---
+		GPIO0 pad routed to can1 RX (DTS function 42); see
+		RK3506_CAN0_TX_PAD.
+
 endif
 
 config RK3506_WDT
@@ -330,3 +414,7 @@ config RK3506_RPTUN
 		reloads or re-releases the M0.  The 2 MiB window
 		0x03c00000..0x03e00000 must stay outside the NuttX RAM;
 		enable RPMSG_CHAR for /dev/rpmsg/mcu.
+
+endmenu # "Rockchip RK3506 Peripheral Selection"
+
+endif # ARCH_CHIP_RK3506

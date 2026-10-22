@@ -26,16 +26,16 @@ CSRCS = hd_rk3506_boardinit.c
 CSRCS += hd_rk3506_appinit.c
 CSRCS += hd_rk3506_bringup.c
 
-ifeq ($(CONFIG_INPUT_GT911),y)
-  CSRCS += hd_rk3506_gt911.c
-endif
-
-ifeq ($(CONFIG_LCD_ST7701S),y)
-  CSRCS += hd_rk3506_st7701s.c
+ifeq ($(CONFIG_LCD_NV3007),y)
+  CSRCS += hd_rk3506_nv3007.c
 endif
 
 ifeq ($(CONFIG_GRAPHICS_LVGL),y)
   CSRCS += hd_rk3506_lv_port_disp.c
+endif
+
+ifeq ($(CONFIG_IOEXPANDER),y)
+  CSRCS += hd_rk3506_gpio.c
 endif
 
 ifeq ($(CONFIG_ETC_ROMFS),y)

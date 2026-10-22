@@ -10,21 +10,17 @@ config ARCH_BOARD
 
 endif # ARCH_BOARD_CUSTOM
 
-config INPUT_GT911
-	bool "GT911 Touchscreen on I2C0"
+config LCD_NV3007
+	bool "NV3007 SPI TFT panel (2.79in T279VJ-C10)"
 	default n
-	depends on I2C && INPUT_TOUCHSCREEN
+	depends on LCD
+	select SPI
 	---help---
-		Enable GT911 capacitive touchscreen on I2C0 (addr 0x5D).
-
-config LCD_ST7701S
-	bool "ST7701S LCD Panel Initialization"
-	default n
-	depends on VIDEO_FB
-	---help---
-		Enable ST7701S LCD panel initialization via 3-wire SPI.
-		Sends the initialization sequence to configure the panel for
-		480x854 RGB565 operation.
+		Enable the NV3007 2.79in SPI TFT panel.  The panel is driven by
+		the DesignWare SPI0 controller (DC/RST on RM_IO GPIO, backlight
+		on PWM0 ch2/RM_IO10) and exposed as /dev/fb0 through the NuttX
+		lcd_framebuffer bridge.  Visible window 142x428 RGB565 with a
+		12-column GRAM x-offset (per the vendor demo).
 
 config HD_RK3506_NETCFG
 	bool "netcfg network configuration daemon"

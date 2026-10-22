@@ -38,8 +38,8 @@
 
 #include <nuttx/board.h>
 #include <nuttx/i2c/i2c_master.h>
+#include <nuttx/video/fb.h>
 
-#include "rk3506_vop.h"
 #include "rk3506_usbhost.h"
 #include "rk3506_i2c.h"
 #include "rk3506_spi.h"
@@ -49,8 +49,6 @@
 #include "rk3506_fspi.h"
 #include "rk3506_gmac0.h"
 #include "hd_rk3506.h"
-#include "hd_rk3506_gt911.h"
-#include "hd_rk3506_st7701s.h"
 
 #ifdef CONFIG_RK3506_SPINAND_FSPI
 #  include <nuttx/mtd/mtd.h>
@@ -166,19 +164,12 @@ static int hd_rk3506_i2c_init(void)
       syslog(LOG_INFO, "I2C0 controller initialized (used by GT911)\n");
     }
 
-#ifdef CONFIG_RK3506_I2C1
-  if (rk3506_i2cbus_initialize(1) == NULL)
-    {
-      syslog(LOG_WARNING, "WARNING: rk3506_i2cbus_initialize(1) failed\n");
-    }
-#endif
-
-#ifdef CONFIG_RK3506_I2C2
-  if (rk3506_i2cbus_initialize(2) == NULL)
-    {
-      syslog(LOG_WARNING, "WARNING: rk3506_i2cbus_initialize(2) failed\n");
-    }
-#endif
+  /* NOTE: only I2C0 is brought up.  The chip driver supports 3 buses
+   * (RK3506_I2C_NUM_BUS), but I2C1/I2C2 have no pads or devices wired
+   * on this board, so they are intentionally not initialized here (the
+   * earlier CONFIG_RK3506_I2C1/2 blocks were dead code: those symbols
+   * were never defined in Kconfig).
+   */
 
   /* Optionally register I2C character device for userspace testing.
    * When CONFIG_I2C_DRIVER is enabled, we need to also expose the I2C
@@ -253,12 +244,22 @@ int hd_rk3506_bringup(void)
                   "hd_rk3506_i2c_init() failed");
 #endif
 
+#ifdef CONFIG_IOEXPANDER
+  /* Register the board's exported GPIO pins as /dev/gpioN nodes on top
+   * of the per-bank ioexpander devices (rk3506_gpio.c).  Pads owned by
+   * on-board drivers stay private; only the table in hd_rk3506_gpio.c
+   * is exported.
+   */
+
+  BRINGUP_LOG_ERR(hd_rk3506_gpio_initialize(),
+                  "hd_rk3506_gpio_initialize() failed");
+#endif
+
 #ifdef CONFIG_FS_DEVFS
-  /* Mount devfs at /dev so character devices registered by
-   * rk3506_vop_register() (e.g. /dev/fb0) and the I2C/GPIO/etc. drivers
-   * become accessible by path. (Currently a no-op: NuttX has no
-   * CONFIG_FS_DEVFS; paths are created by register_driver itself via
-   * inode_reserve_path.)
+  /* Mount devfs at /dev so character devices (e.g. /dev/fb0) and the
+   * I2C/GPIO/etc. drivers become accessible by path. (Currently a no-op:
+   * NuttX has no CONFIG_FS_DEVFS; paths are created by register_driver
+   * itself via inode_reserve_path.)
    */
 #endif
 
@@ -283,42 +284,32 @@ int hd_rk3506_bringup(void)
     }
 #endif
 
-#ifdef CONFIG_LCD_ST7701S
-  /* Initialize the ST7701S LCD panel (must be before VOP) */
+#ifdef CONFIG_LCD_NV3007
+  /* Register the NV3007 SPI panel as /dev/fb0.  fb_register() drives the
+   * lcd_framebuffer bridge: up_fbinitialize() runs board_lcd_initialize()
+   * (SPI0 + RM_IO pads + vendor init table + PWM backlight), allocates the
+   * RAM framebuffer and creates /dev/fb0.
+   */
 
-  BRINGUP_LOG_ERR(hd_rk3506_st7701s_initialize(),
-                  "hd_rk3506_st7701s_initialize() failed");
-#endif
-
-#ifdef CONFIG_RK3506_VOP
-  /* Initialize the VOP framebuffer */
-
-  ret = rk3506_vop_register();
+  ret = fb_register(0, 0);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: rk3506_vop_register() failed: %d\n", ret);
+      syslog(LOG_ERR, "ERROR: fb_register(NV3007) failed: %d\n", ret);
     }
   else
     {
-      syslog(LOG_INFO, "rk3506_vop_register() ok (/dev/fb0 created)\n");
+      syslog(LOG_INFO, "NV3007 /dev/fb0 registered\n");
     }
 #endif
 
 #ifdef CONFIG_GRAPHICS_LVGL
   /* Initialise the LVGL display port: mmap /dev/fb0, register the LVGL
    * display driver, and start the LVGL timer/tick threads. Must run
-   * after rk3506_vop_register().
+   * after fb_register().
    */
 
   BRINGUP_LOG_ERR(hd_rk3506_lv_port_disp_init(),
                   "hd_rk3506_lv_port_disp_init() failed");
-#endif
-
-#ifdef CONFIG_INPUT_GT911
-  /* Initialize the GT911 touchscreen (depends on I2C) */
-
-  BRINGUP_LOG_ERR(hd_rk3506_gt911_initialize(),
-                  "hd_rk3506_gt911_initialize() failed");
 #endif
 
 #ifdef CONFIG_RK3506_USBHOST
@@ -369,48 +360,14 @@ int hd_rk3506_bringup(void)
   while (0);
 #endif
 
-#if 0 /*  SPI NAND is NOT on SPI1.  The on-board GD5F SPI NAND is wired to
-        *  the dedicated FSPI controller at 0xFF488000 (IRQ85), flash@0,
-        *  1-bit command / 4-bit read (verified in the U-Boot DTS:
-        *  rk3506-u-boot.dtsi &fspi -> spi_nand: flash@0 "spi-nand").
-        *  The spi1 rk_spi path below therefore probes an empty bus,
-        *  waits out the per-byte timeouts and logs a false failure.
-        *  Disable it until the FSPI (rockchip,fspi, spi-mem) controller
-        *  driver lands; the rk_spi controller itself stays built.
-        */
-#ifdef CONFIG_RK3506_SPINAND
-  /* Bind GD5F upper-half to the RK3506 SPI1 controller so the on-board
-   * 128 MByte SPI NAND shows up as an MTD device.  The init sequence
-   * (clock ungating, pin mux, controller register, GD5F probe) is done
-   * inside rk3506_spinand_initialize(); here we only log whether a
-   * device was detected.  A failed probe returns NULL and is logged but
-   * does not stop the rest of bring-up.
-   */
-
-  do
-    {
-      FAR struct mtd_dev_s *mtd;
-      mtd = rk3506_spinand_initialize();
-      if (mtd == NULL)
-        {
-          syslog(LOG_ERR, "ERROR: rk3506_spinand_initialize failed "
-                          "(no GD5F device on SPI1 CS0?)\n");
-        }
-      else
-        {
-          syslog(LOG_INFO, "SPI NAND (GD5F on SPI1) initialized\n");
-        }
-    }
-  while (0);
-#endif
-#endif /* end #if 0 - NAND on FSPI, not SPI1 */
-
 #ifdef CONFIG_RK3506_FSPI
   /* The on-board GD5F SPI NAND is on the dedicated FSPI controller
-   * (0xFF488000, CS0).  First milestone: bring up clock + pinmux,
-   * reset/init the controller and run a single-bit READ_ID to validate
-   * the register sequence.  This never blocks the boot - every poll in
-   * the FSPI driver has a bounded timeout.
+   * (0xFF488000, IRQ85, CS0), NOT on the SPI1 rk_spi controller -- a
+   * previous SPI1-based probe path lived here behind #if 0 and has been
+   * removed (the FSPI controller driver below is the live path).  Bring
+   * up clock + pinmux, reset/init the controller and run a single-bit
+   * READ_ID to validate the register sequence.  This never blocks the
+   * boot - every poll in the FSPI driver has a bounded timeout.
    */
 
   do
@@ -523,7 +480,7 @@ int hd_rk3506_bringup(void)
 
 #ifdef CONFIG_RK3506_PWM
   /* M2b.6: /dev/pwm0 on the PWM0 channel-2 block (0xFF932000),
-   * output pin RM_IO10 (GPIO0_B2, RM_IO function 47 = PWM0_CH2).
+   * output pin RM_IO12 (GPIO0_B4 = J9-29, RM_IO function 47 = PWM0_CH2).
    * The SDK iot dts uses this same channel for the LCD backlight,
    * period 25000 ns (40 kHz) - a good first multimeter target:
    *   pwm -f 40000 -d 50
@@ -565,7 +522,7 @@ int hd_rk3506_bringup(void)
    *   cansend can0 123#DEADBEEF
    *   candump can0 -n 1   (must echo the frame)
    * Pin routing: CAN0 -> RM_IO11, CAN1 -> RM_IO12 (kept clear of
-   * RM_IO10 = PWM0_CH2).
+   * RM_IO12 (J9-29) = PWM0_CH2, NV3007 backlight).
    */
 
   do

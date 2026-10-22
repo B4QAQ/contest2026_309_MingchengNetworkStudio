@@ -49,13 +49,13 @@ CONFIG_FLASH_START=0x02080000
 CONFIG_FLASH_VSTART=0x02080000
 CONFIG_FLASH_SIZE=0x00800000
 # Physical DRAM is 0x00000000-0x08000000 (128MB total); NuttX runs from
-# 0x02080000. RAM must now END at 0x03c00000: the MCU's rpmsg shared
-# window (2 MiB at pa 0x03c00000, identity to the MCU's LINUX_RPMSG
-# linker region) lives inside DRAM and the mm heap would otherwise
-# allocate over it. Usable length = 0x03c00000 - 0x02080000 = 0x01B80000
-# (27.5 MiB). The L1 page table sits at RAM_START+RAM_SIZE-0x4000
-# (chip.h); keep RAM_SIZE below the DRAM top with margin.
-CONFIG_RAM_SIZE=28835840
+# 0x02080000. The AMP/rpmsg shared window was removed, so RAM now extends
+# up to the OP-TEE secure region base 0x07c00000 (rk35-family TEE occupies
+# the top 4 MiB 0x07c00000-0x08000000; the OP-TEE core constants cluster
+# at 0x07f00000/0x07ff0000). Usable length = 0x07c00000-0x02080000 =
+# 0x05B80000 (~91.5 MiB). The L1 page table is placed at
+# RAM_START+RAM_SIZE-0x4000 = 0x07bfc000, still below the TEE region.
+CONFIG_RAM_SIZE=95944704
 CONFIG_SPINLOCK=y
 CONFIG_SYSTEM_TIME64=y
 
@@ -101,6 +101,8 @@ CONFIG_DEBUG_FEATURES=y
 CONFIG_DEBUG_FULLOPT=y
 CONFIG_DEBUG_SYMBOLS=y
 CONFIG_DEBUG_SCHED_ERROR=y
+CONFIG_DEBUG_FS=y
+CONFIG_DEBUG_FS_ERROR=y
 CONFIG_DEBUG_USB=y
 CONFIG_DEBUG_USB_ERROR=y
 
@@ -135,23 +137,23 @@ CONFIG_ETC_ROMFS=y
 CONFIG_DISABLE_ENVIRON=n
 
 #---------------------------------------------------------------------------
-# Display: VOP Framebuffer (480x854 RGB565 for ST7701S)
+# Display: NV3007 2.79" SPI TFT (142x428 RGB565) -> /dev/fb0
+# LCD lower-half + lcd_framebuffer bridge + FB char device (/dev/fb0).
 #---------------------------------------------------------------------------
-CONFIG_VIDEO_FB=y
 CONFIG_DRIVERS_VIDEO=y
+CONFIG_VIDEO_FB=y
+CONFIG_LCD=y
+CONFIG_LCD_MAXPOWER=255
 CONFIG_LCD_FRAMEBUFFER=y
-CONFIG_RK3506_VOP=y
-# CONFIG_LCD_ST7701S is not set
+CONFIG_LCD_NV3007=y
 
 #---------------------------------------------------------------------------
-# Input: GT911 Touchscreen (I2C0, addr 0x5D)
+# Input (USB HID kbd/mouse; no touchscreen on this panel)
 #---------------------------------------------------------------------------
 CONFIG_INPUT=y
-CONFIG_INPUT_TOUCHSCREEN=y
-CONFIG_INPUT_GT911=y
 
 #---------------------------------------------------------------------------
-# I2C (for GT911 touch)
+# I2C (available for peripherals; GT911 touch removed)
 #---------------------------------------------------------------------------
 CONFIG_I2C=y
 CONFIG_RK3506_I2C=y
@@ -162,7 +164,6 @@ CONFIG_RK3506_I2C=y
 CONFIG_GRAPHICS_LVGL=y
 CONFIG_LV_USE_NUTTX=y
 CONFIG_LV_USE_NUTTX_LCD=y
-CONFIG_LV_USE_NUTTX_TOUCHSCREEN=y
 CONFIG_LV_USE_CLIB_MALLOC=y
 CONFIG_LV_USE_CLIB_STRING=y
 CONFIG_LV_USE_CLIB_SPRINTF=y
@@ -211,6 +212,10 @@ CONFIG_SPI=y
 # GPIO
 #---------------------------------------------------------------------------
 CONFIG_DEV_GPIO=y
+CONFIG_GPIO_LOWER_HALF=y
+CONFIG_IOEXPANDER=y
+CONFIG_IOEXPANDER_NPINS=32
+CONFIG_RK3506_GPIO=y
 
 #---------------------------------------------------------------------------
 # PWM (for backlight)
@@ -498,7 +503,7 @@ CONFIG_KVDB=y
 CONFIG_KVDB_DIRECT=y
 CONFIG_KVDB_FILE=y
 CONFIG_KVDB_PERSIST_PATH="/data/kvdb.db"
-# PWM0 channel 2 on RM_IO10 (GPIO0_B2), 100 MHz time base, /dev/pwm0
+# PWM0 ch2 on RM_IO12 (GPIO0_B4 = J9-29), 100MHz time base, /dev/pwm0 (NV3007 BL)
 CONFIG_RK3506_PWM=y
 CONFIG_EXAMPLES_PWM=y
 CONFIG_EXAMPLES_PWM_DEVPATH="/dev/pwm0"

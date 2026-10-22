@@ -81,64 +81,55 @@
 #include <arch/irq.h>
 
 #include "rk3506_rptun.h"
+#include "rk3506_cru.h"
+#include "rk3506_register.h"
+#include "hardware/rk3506_memorymap.h"
 
 #ifdef CONFIG_RK3506_RPTUN
-
-#ifndef putreg32
-#  define putreg32(v, a) (*(FAR volatile uint32_t *)(a) = (v))
-#endif
-
-#ifndef getreg32
-#  define getreg32(a)    (*(FAR volatile uint32_t *)(a))
-#endif
 
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
 
-/* CRU gate registers (rk3506.h CLKGATE_CON(x) = 0x800 + 4*x, CRU_BASE =
- * 0xff9a0000).  Rockchip gates are HIWORD_UPDATE with CLK_GATE_SET_TO_DISABLE:
- * the high half-word carries write enables, a data bit of 0 ENABLES the
- * clock.  All four values below were verified against clk-rk3506.c.
+/* M0-cluster clock gate bits (main CRU CLKGATE_CON, clk-rk3506.c).
+ * These are plain bit masks; the HIWORD_UPDATE store is done by the
+ * shared rk3506_cru_gate() primitive (data bit 0 = enable), so this
+ * driver no longer carries a private copy of the CRU register layout.
+ * All values were verified against clk-rk3506.c.
  */
 
-#define RK3506_CRU_BASE             0xff9a0000u
-#define RK3506_CLKGATE_CON5         (RK3506_CRU_BASE + 0x814u)
-#define RK3506_CLKGATE_CON6         (RK3506_CRU_BASE + 0x818u)
-#define RK3506_CLKGATE_CON8         (RK3506_CRU_BASE + 0x820u)
-#define RK3506_CLKGATE_CON11        (RK3506_CRU_BASE + 0x82cu)
-
-/* CON5:  HCLK_M0 bit10, SWCLKTCK_M0 bit11 (exact u-boot value 0x0c000000;
+/* CON5:  HCLK_M0 bit10, SWCLKTCK_M0 bit11 (exact u-boot value 0x0c00;
  * u-boot already opens these, re-opening is idempotent). */
 
-#define RK3506_GATE_CON5_M0         0x0c000000u
+#define RK3506_GATE_CON5_M0         ((1u << 10) | (1u << 11))
 
 /* CON6:  PCLK_TIMER b2, CLK_TIMER0_CH5 b8, PCLK_MAILBOX b13,
- *        PCLK_INTMUX b14 -> (0x4|0x100|0x2000|0x4000)<<16 = 0x61040000.
+ *        PCLK_INTMUX b14.
  * The time-base clocks (PCLK_TIMER/CLK_TIMER0_CH5) keep the M0's
  * HAL_DelayMs() alive; PCLK_MAILBOX/INTMUX are needed on the A7 side.
  */
 
-#define RK3506_GATE_CON6_M0         (((1u << 2) | (1u << 8) | \
-                                     (1u << 13) | (1u << 14)) << 16)
+#define RK3506_GATE_CON6_M0         ((1u << 2) | (1u << 8) | \
+                                     (1u << 13) | (1u << 14))
 
-/* CON8:  STCLK_M0 bit2 (M0 SysTick source) -> (1u<<2)<<16 = 0x00040000. */
+/* CON8:  STCLK_M0 bit2 (M0 SysTick source). */
 
-#define RK3506_GATE_CON8_STCLK_M0   ((1u << 2) << 16)
+#define RK3506_GATE_CON8_STCLK_M0   (1u << 2)
 
 /* CON11: the M0 debug UART clock.  The M0 firmware was switched from UART4
  * (PCLK_UART4 bit8 / SCLK_UART4 bit13) to UART2 (PCLK_UART2 bit6 /
  * SCLK_UART2 bit11, clk-rk3506.c GATE/COMPOSITE) because UART2 is brought
- * out on J9 pin26 TX / pin25 RX while UART4 is not.  SET_TO_DISABLE: write
- * WE in the high half-word with the data bit clear to OPEN the gate ->
- * (0x40|0x800)<<16 = 0x08400000. */
+ * out on J9 pin26 TX / pin25 RX while UART4 is not.
+ */
 
-#define RK3506_GATE_CON11_UART4     (((1u << 6) | (1u << 11)) << 16)
+#define RK3506_GATE_CON11_UART2     ((1u << 6) | (1u << 11))
 
-/* Mailbox v2 registers (rockchip-mailbox.c reg_a2b table). */
+/* Mailbox v2 registers (rockchip-mailbox.c reg_a2b table).  Controller
+ * bases come from hardware/rk3506_memorymap.h (RK3506_MAILBOX0/3_ADDR).
+ */
 
-#define RK3506_MBOX0_BASE           0xff290000u
-#define RK3506_MBOX3_BASE           0xff293000u
+#define RK3506_MBOX0_BASE           RK3506_MAILBOX0_ADDR
+#define RK3506_MBOX3_BASE           RK3506_MAILBOX3_ADDR
 
 #define MBOX_A2B_INTEN              0x00u
 #define MBOX_A2B_STATUS             0x04u
@@ -160,7 +151,7 @@
  * TEE never touch INTMUX).  Read-only readiness probe input.
  */
 
-#define RK3506_INTMUX_BASE          0xff2a0000u
+#define RK3506_INTMUX_BASE          RK3506_INTMUX_ADDR
 #define RK3506_INTMUX_EN_GRP3       (RK3506_INTMUX_BASE + 0x0cu)
 #define RK3506_INTMUX_FLAG_GRP3     (RK3506_INTMUX_BASE + 0x8cu)
 #define RK3506_INTMUX_MBOX3_BIT     (1u << 21)
@@ -366,10 +357,10 @@ static struct rk3506_rptun_priv_s g_rk3506_rptun;
 
 static void rk3506_mcu_clock_enable(void)
 {
-  putreg32(RK3506_GATE_CON5_M0, RK3506_CLKGATE_CON5);
-  putreg32(RK3506_GATE_CON6_M0, RK3506_CLKGATE_CON6);
-  putreg32(RK3506_GATE_CON8_STCLK_M0, RK3506_CLKGATE_CON8);
-  putreg32(RK3506_GATE_CON11_UART4, RK3506_CLKGATE_CON11);
+  rk3506_cru_gate(5,  RK3506_GATE_CON5_M0,        true);
+  rk3506_cru_gate(6,  RK3506_GATE_CON6_M0,        true);
+  rk3506_cru_gate(8,  RK3506_GATE_CON8_STCLK_M0,  true);
+  rk3506_cru_gate(11, RK3506_GATE_CON11_UART2,    true);
 }
 
 /****************************************************************************
@@ -430,10 +421,10 @@ static void rk3506_rptun_dump(FAR const char *tag)
          "  INTMUX en3=%08lx flag3=%08lx (bit21 = mbox3 into M0)"
          " ready_seen=%d\n",
          tag,
-         (unsigned long)getreg32(RK3506_CLKGATE_CON5),
-         (unsigned long)getreg32(RK3506_CLKGATE_CON6),
-         (unsigned long)getreg32(RK3506_CLKGATE_CON8),
-         (unsigned long)getreg32(RK3506_CLKGATE_CON11),
+         (unsigned long)getreg32(RK3506_CRU_CLKGATE_CON(5)),
+         (unsigned long)getreg32(RK3506_CRU_CLKGATE_CON(6)),
+         (unsigned long)getreg32(RK3506_CRU_CLKGATE_CON(8)),
+         (unsigned long)getreg32(RK3506_CRU_CLKGATE_CON(11)),
          (unsigned long)getreg32(RK3506_INTMUX_EN_GRP3),
          (unsigned long)getreg32(RK3506_INTMUX_FLAG_GRP3),
          (int)priv->ready_seen);
@@ -563,12 +554,11 @@ static int rk3506_mbox_isr(int irq, FAR void *context, FAR void *arg)
   vqid = (base == RK3506_MBOX3_BASE) ? 1u : 0u;
   priv->n_irq[vqid]++;
 
-  syslog(LOG_INFO,
-         "rptun: B2A IRQ mbox%lu vq%lu cmd=0x%02lx dat=0x%08lx (#%lu)\n",
-         (unsigned long)(vqid ? 3 : 0), (unsigned long)vqid,
-         (unsigned long)getreg32(base + MBOX_B2A_CMD),
-         (unsigned long)getreg32(base + MBOX_B2A_DAT),
-         (unsigned long)priv->n_irq[vqid]);
+  /* No logging here: this runs in interrupt context on every M0->A7
+   * mailbox message, so a syslog() call would both violate the
+   * keep-ISRs-short rule and flood the console at rpmsg traffic rate.
+   * The n_irq[] counter stays for the rpmsgtest diagnostic to read.
+   */
 
   putreg32(MBOX_CHAN0, base + MBOX_B2A_STATUS);
 

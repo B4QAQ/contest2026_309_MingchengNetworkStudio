@@ -5,12 +5,11 @@
  *
  * LVGL v9 display port for the HD-RK3506-EVM board.
  *
- * - Opens /dev/fb0 (registered by rk3506_vop_register in the bringup) and
- *   mmaps the framebuffer into a contiguous buffer that LVGL renders into.
- * - The flush callback copies LVGL's rendered chunk into the framebuffer.
- *   Without a connected LCD, FBIO_UPDATE is a no-op, but the pixel data
- *   is still in the framebuffer memory and would be scanned out if a panel
- *   were attached.
+ * - Opens /dev/fb0 (the NV3007 SPI panel exposed through the NuttX
+ *   lcd_framebuffer bridge) and mmaps its RAM framebuffer.
+ * - The flush callback copies LVGL's rendered chunk into the framebuffer
+ *   and issues FBIO_UPDATE, which the bridge turns into an lcd putarea
+ *   SPI transfer to the panel.
  * - A dedicated NuttX task pumps lv_timer_handler() in a sleep loop so LVGL
  *   animations/timers run. A 1 ms tick increment is provided by
  *   CONFIG_USEC_PER_TICK (1 ms) inside the system tick ISR -- LVGL v9 can
