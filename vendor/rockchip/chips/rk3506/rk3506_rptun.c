@@ -622,7 +622,11 @@ static int rp_start(FAR struct rptun_dev_s *dev)
 
   rk3506_m0_wait_ready(priv);
 
-  rk3506_rptun_dump("boot");
+  /* No automatic register dump here: this runs on every boot and would
+   * print ~10 lines of mailbox/INTMUX/CRU state each time.  The dump
+   * stays available on demand via the public rk3506_rptun_diag() hook.
+   */
+
   return OK;
 }
 

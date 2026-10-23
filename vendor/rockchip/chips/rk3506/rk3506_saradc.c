@@ -94,19 +94,17 @@
 
 #define SARADC_DATA_MASK        0x00000fffu
 
-/* CRU soft-reset bits used by saradc_pclk_reset() (clk-rk3506.c:
- * SOFTRST_CON(19) SRST_P_SARADC = bit 0).  The base MUST be
- * RK3506_CRU_ADDR (0xFF9A0000) from hardware/rk3506_memorymap.h -- the
- * previous local definition used 0xFF480000, which is the SDMMC base,
- * so the soft-reset pulse landed in SDMMC register space and never
- * actually fired.
+/* Soft-reset bit used by saradc_pclk_reset() (clk-rk3506.c:
+ * SOFTRST_CON(19) SRST_P_SARADC = bit 0).  The reset itself is pulsed
+ * through the shared rk3506_cru_reset() primitive, which uses the
+ * correct RK3506_CRU_ADDR (0xFF9A0000) base -- the previous local
+ * CRU_SOFTRST_CON used 0xFF480000 (the SDMMC base), so the pulse
+ * landed in SDMMC register space and never actually fired.
  *
  * The one-time clock gate / divider setup is NOT done here: it lives
  * in rk3506_cru.c (rk3506_saradc_clock_init(), called by
- * rk3506_saradc_initialize() below), which uses the correct CRU base.
+ * rk3506_saradc_initialize() below).
  */
-
-#define CRU_SOFTRST_CON(n)      (RK3506_CRU_ADDR + (n) * 4u + 0xa00u)
 
 #define SOFTRST19_SRST_P_SARADC (1u << 0)
 
@@ -190,12 +188,13 @@ static struct adc_dev_s *g_saradc_dev;
 
 static void saradc_pclk_reset(void)
 {
-  /* Assert (set bit) then deassert (clear bit), HIWORD style */
+  /* Assert (set bit) then deassert (clear bit), via the shared CRU
+   * soft-reset primitive (SOFTRST_CON(19) SRST_P_SARADC = bit 0).
+   */
 
-  putreg32(SOFTRST19_SRST_P_SARADC << 16 | SOFTRST19_SRST_P_SARADC,
-           CRU_SOFTRST_CON(19));
+  rk3506_cru_reset(19, SOFTRST19_SRST_P_SARADC, true);
   up_udelay(10);
-  putreg32(SOFTRST19_SRST_P_SARADC << 16, CRU_SOFTRST_CON(19));
+  rk3506_cru_reset(19, SOFTRST19_SRST_P_SARADC, false);
 }
 
 /****************************************************************************
@@ -477,7 +476,6 @@ static int saradc_ioctl(FAR struct adc_dev_s *dev, int cmd,
 int rk3506_saradc_initialize(void)
 {
   FAR struct rk3506_saradc_s *priv = &g_saradc;
-  uint32_t clksel;
   int ret;
 
   /* Clocks + resets (clk-rk3506.c): ungate PCLK_SARADC/CLK_SARADC,

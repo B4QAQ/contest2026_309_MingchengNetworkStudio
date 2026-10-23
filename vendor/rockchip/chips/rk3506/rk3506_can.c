@@ -401,11 +401,16 @@ static void can_set_reset_mode(FAR struct rk3506_can_s *priv)
 {
   uint32_t bit = (priv->base == CAN0_BASE) ? (1u << 5) : (1u << 7);
 
-  /* SRST_CAN0 = CON(13) bit 5, SRST_CAN1 = CON(13) bit 7 */
+  /* SRST_CAN0 = SOFTRST_CON(13) bit 5, SRST_CAN1 = bit 7.  Pulse it
+   * through the shared CRU soft-reset primitive (which uses the
+   * correct RK3506_CRU_ADDR base) -- the previous code poked
+   * 0xff480000 + ..., which is the SDMMC base, so the CAN reset never
+   * actually fired.
+   */
 
-  putreg32(bit << 16 | bit, 0xff480000u + 13u * 4u + 0xa00u);
+  rk3506_cru_reset(13, bit, true);
   up_udelay(2);
-  putreg32(bit << 16, 0xff480000u + 13u * 4u + 0xa00u);
+  rk3506_cru_reset(13, bit, false);
 
   putreg32(0, priv->base + CAN_MODE);
 }

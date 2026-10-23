@@ -78,6 +78,51 @@
 #define I2C_SPEED_FAST           400000
 #define I2C_SPEED_FAST_PLUS      1000000
 
+/* I2C_CLKDIV register fields (rk3506.h:3342-3345): the divider is split
+ * into CLKDIVL[15:0] (SCL low period) and CLKDIVH[31:16] (SCL high
+ * period), SCL = pclk / (8 * (CLKDIVL+1 + CLKDIVH+1)).
+ */
+
+#define I2C_CLKDIV_CLKDIVL_SHIFT 0u
+#define I2C_CLKDIV_CLKDIVH_SHIFT 16u
+
+/* I2C timing spec per bus speed (hal_i2c.c struct I2C_SPEC_VALUES,
+ * I2C_GetSpec): used to split the divider so both the SCL low and high
+ * periods meet the I2C tLOW/tHIGH (+tRise/tFall) minimums.
+ */
+
+struct rk3506_i2c_spec_s
+{
+  uint32_t min_low_ns;
+  uint32_t min_high_ns;
+  uint32_t max_rise_ns;
+  uint32_t max_fall_ns;
+};
+
+static const struct rk3506_i2c_spec_s g_i2c_standard_spec =
+{
+  .min_low_ns  = 4700,
+  .min_high_ns = 4000,
+  .max_rise_ns = 1000,
+  .max_fall_ns = 300,
+};
+
+static const struct rk3506_i2c_spec_s g_i2c_fast_spec =
+{
+  .min_low_ns  = 1300,
+  .min_high_ns = 600,
+  .max_rise_ns = 300,
+  .max_fall_ns = 300,
+};
+
+static const struct rk3506_i2c_spec_s g_i2c_fast_plus_spec =
+{
+  .min_low_ns  = 500,
+  .min_high_ns = 260,
+  .max_rise_ns = 120,
+  .max_fall_ns = 120,
+};
+
 /* Per-transfer timeout (ms) */
 
 #define RK3506_I2C_TIMEOUT_MS    200
@@ -236,7 +281,18 @@ static inline void rk3506_i2c_putreg(struct rk3506_i2c_dev_s *priv,
 static void rk3506_i2c_set_clk(struct rk3506_i2c_dev_s *priv,
                                uint32_t clkrate)
 {
-  uint32_t pclk = 24000000;  /* PCLK_APB, typical 24 MHz */
+  uint32_t pclk = 24000000;  /* CLK_I2Cx functional clock (see rk3506_cru.c:
+                              * the mux/divider is left at the reset parent
+                              * xin24m), NOT PCLK_APB. */
+  const struct rk3506_i2c_spec_s *spec;
+  uint32_t rate_khz;
+  uint32_t speed_khz;
+  uint32_t min_total_div;
+  uint32_t min_high_div;
+  uint32_t min_low_div;
+  uint32_t min_hold_div;
+  uint32_t high_div;
+  uint32_t low_div;
   uint32_t clkdiv;
 
   if (clkrate == 0)
@@ -249,19 +305,89 @@ static void rk3506_i2c_set_clk(struct rk3506_i2c_dev_s *priv,
       clkrate = I2C_SPEED_FAST_PLUS;
     }
 
-  /* Per Linux/U-Boot: div = DIV_ROUND_UP(pclk, 8 * scl) - 2 */
+  /* Pick the timing spec matching the bus speed (hal_i2c.c I2C_GetSpec). */
 
-  clkdiv = (pclk + (8 * clkrate) - 1) / (8 * clkrate) - 2;
-  if (clkdiv > 0xffff)
+  if (clkrate >= I2C_SPEED_FAST_PLUS)
     {
-      clkdiv = 0xffff;
+      spec = &g_i2c_fast_plus_spec;
     }
+  else if (clkrate >= I2C_SPEED_FAST)
+    {
+      spec = &g_i2c_fast_spec;
+    }
+  else
+    {
+      spec = &g_i2c_standard_spec;
+    }
+
+  /* Divider split per hal_i2c.c HAL_I2C_AdaptDIV.  The single-value
+   * formula DIV_ROUND_UP(pclk, 8*scl) - 2 only ever set CLKDIVL and left
+   * CLKDIVH = 0, giving a ~333 ns SCL high period that violates the I2C
+   * tHIGH minimum in every mode; the high and low periods must be
+   * divided separately.
+   */
+
+  rate_khz  = (pclk + 999u) / 1000u;              /* HAL_DIV_ROUND_UP */
+  speed_khz = (clkrate + 999u) / 1000u;
+
+  min_total_div = (rate_khz + speed_khz * 8u - 1u) / (speed_khz * 8u);
+
+  min_high_div = (rate_khz * (spec->max_rise_ns + spec->min_high_ns) +
+                  8u * 1000000u - 1u) / (8u * 1000000u);
+  min_low_div  = (rate_khz * (spec->max_fall_ns + spec->min_low_ns) +
+                  8u * 1000000u - 1u) / (8u * 1000000u);
+
+  if (min_high_div < 1u)
+    {
+      min_high_div = 2u;
+    }
+
+  if (min_low_div < 1u)
+    {
+      min_low_div = 2u;
+    }
+
+  min_hold_div = min_high_div + min_low_div;
+
+  if (min_hold_div >= min_total_div)
+    {
+      high_div = min_high_div;
+      low_div  = min_low_div;
+    }
+  else
+    {
+      uint32_t extra_div     = min_total_div - min_hold_div;
+      uint32_t extra_low_div = (min_low_div * extra_div +
+                                min_hold_div - 1u) / min_hold_div;
+
+      low_div  = min_low_div + extra_low_div;
+      high_div = min_high_div + (extra_div - extra_low_div);
+    }
+
+  /* The register stores div-1 in each field. */
+
+  high_div--;
+  low_div--;
+
+  if (high_div > 0xffffu)
+    {
+      high_div = 0xffffu;
+    }
+
+  if (low_div > 0xffffu)
+    {
+      low_div = 0xffffu;
+    }
+
+  clkdiv = (high_div << I2C_CLKDIV_CLKDIVH_SHIFT) |
+           (low_div  << I2C_CLKDIV_CLKDIVL_SHIFT);
 
   rk3506_i2c_putreg(priv, RK3506_I2C_REG_CLKDIV, clkdiv);
   priv->clkrate = clkrate;
 
-  i2cinfo("I2C%d: clkrate=%u Hz, clkdiv=%u (pclk=24MHz)\n",
-          priv->bus, (unsigned int)clkrate, (unsigned int)clkdiv);
+  i2cinfo("I2C%d: clkrate=%u Hz, clkdiv=0x%08lx (H=%lu L=%lu, pclk=24MHz)\n",
+          priv->bus, (unsigned int)clkrate, (unsigned long)clkdiv,
+          (unsigned long)high_div, (unsigned long)low_div);
 }
 
 /****************************************************************************
