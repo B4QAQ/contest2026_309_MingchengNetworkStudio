@@ -145,7 +145,9 @@ void rk3506_gpio0_clock_init(void);
 
 int rk3506_gpio_clock_enable(uint8_t bank);
 
-/* Debug aid: ungate every clock in main CRU + PMU CRU. */
+/* Debug aid: ungate every clock in main CRU + PMU CRU.  DEBUG-ONLY,
+ * no production caller (LTO-GC'd); do not use in production paths.
+ */
 
 void rk3506_all_clocks_enable(void);
 

@@ -157,11 +157,10 @@ static const uint32_t g_spi_base[RK3506_SPI_NUM_BUS] =
   RK3506_SPI1_ADDR
 };
 
-static const int g_spi_irq[RK3506_SPI_NUM_BUS] =
-{
-  RK3506_IRQ_SPI0,
-  RK3506_IRQ_SPI1
-};
+/* NOTE: this driver is purely polled (rk3506_spi_poll_transfer), no SPI
+ * IRQ is ever attached, so the former g_spi_irq[] table (RK3506_IRQ_SPI0/1)
+ * had no consumer and was removed (-Wunused-const-variable).
+ */
 
 /****************************************************************************
  * Private Function Prototypes

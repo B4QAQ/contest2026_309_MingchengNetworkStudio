@@ -31,7 +31,6 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include <inttypes.h>
 #include <string.h>
 #include <unistd.h>
 #include <debug.h>
@@ -43,15 +42,12 @@
 #include <nuttx/timers/pwm.h>
 #include <nuttx/signal.h>
 
-#include "hardware/rk3506_memorymap.h"
 #include "rk3506_spi.h"
-#include "rk3506_cru.h"
 #include "rk3506_pwm.h"
 #include "rk3506_gpio.h"
 #include "rk3506_pinctrl.h"
 
 #include "hd_rk3506_nv3007.h"
-#include "rk3506_register.h"
 
 #ifdef CONFIG_LCD_NV3007
 
@@ -550,65 +546,6 @@ static const struct lcd_dev_s g_nv_ops =
 };
 
 /****************************************************************************
- * Bring-up diagnostic (temporary)
- *
- * Push a full-screen solid color straight through SPI (bypassing the
- * framebuffer/LVGL) and dump controller/RMIO register readbacks.  A
- * visible flash proves panel init + SPI + wiring end to end.
- ****************************************************************************/
-
-static void nv_dump_regs(const char *tag)
-{
-  uint32_t base = RK3506_SPI0_ADDR;
-
-  /* Diagnostic read-back of the pin-routing and GPIO state.  Register
-   * addresses are derived from the standard memorymap.h bases:
-   *   RM_IO channel n  : GRF_PMU + 0x80 + 4*n
-   *   GPIO0A IOMUX     : IOC_PMU + 0x00 / +0x04, GPIO0B at +0x08
-   *   GPIO0 DR/DDR low : GPIO0    + 0x00 / +0x08
-   */
-
-  _info("NV3007 DIAG %s: CTRLR0=%08" PRIx32 " BAUDR=%08" PRIx32
-        " SER=%08" PRIx32 " SR=%08" PRIx32 "\n",
-        tag, getreg32(base + 0x00), getreg32(base + 0x10),
-        getreg32(base + 0x0c), getreg32(base + 0x24));
-  _info("NV3007 DIAG %s: RMIO route clk@7=%08" PRIx32 " mosi@1=%08" PRIx32
-        " cs@3=%08" PRIx32 "\n",
-        tag, getreg32(RK3506_GRF_PMU_ADDR + 0x80 + 4 * 7),
-        getreg32(RK3506_GRF_PMU_ADDR + 0x80 + 4 * 1),
-        getreg32(RK3506_GRF_PMU_ADDR + 0x80 + 4 * 3));
-  _info("NV3007 DIAG %s: IOC A0=%08" PRIx32 " A1=%08" PRIx32
-        " B0=%08" PRIx32 " GPIO0 DR=%08" PRIx32 " DDR=%08" PRIx32 "\n",
-        tag, getreg32(RK3506_IOC_PMU_ADDR + 0x00),
-        getreg32(RK3506_IOC_PMU_ADDR + 0x04),
-        getreg32(RK3506_IOC_PMU_ADDR + 0x08),
-        getreg32(RK3506_GPIO0_ADDR + 0x00),
-        getreg32(RK3506_GPIO0_ADDR + 0x08));
-}
-
-static void nv_diag_solid(uint16_t color, uint32_t hold_ms)
-{
-  uint16_t line[NV3007_XRES];
-  unsigned int i;
-
-  for (i = 0; i < NV3007_XRES; i++)
-    {
-      line[i] = color;
-    }
-
-  nv_dump_regs("before");
-
-  /* stride=0 resends the same red row for every scanline -> full screen. */
-
-  nv_putarea(&g_nv.dev, 0, NV3007_YRES - 1, 0, NV3007_XRES - 1,
-             (FAR const uint8_t *)line, 0);
-
-  nv_dump_regs("after");
-  _info("NV3007 DIAG: solid 0x%04x streamed\n", color);
-  nxsig_usleep((useconds_t)hold_ms * 1000);
-}
-
-/****************************************************************************
  * Public Functions: NuttX lcd_framebuffer board hooks
  ****************************************************************************/
 
@@ -630,19 +567,15 @@ int board_lcd_initialize(void)
 
   rk3506_pwm_initialize();
 
-  /* GPIO0 (PMU bank backing the RM_IO pads) bus clock MUST be ungated
-   * before touching its DR/DDR registers, otherwise RST/DC writes are
-   * silently dropped.  rk3506_gpio_config() also ungates it (and the
-   * other banks') on demand; the explicit call keeps the sequencing
-   * obvious.  Then SPI0 controller clock and pad routing.
-   *
-   * NOTE: the old blanket rk3506_all_clocks_enable() debug call has
-   * been removed -- pin-control / GPIO / SPI / PWM now each ungate
-   * their own clocks through the CRU helpers.
+  /* Clock ungating is owned by the chip layer, not the board:
+   * rk3506_gpio_config() ungates the GPIO bank it touches (the PMU bank
+   * backing the RM_IO pads included) and rk3506_spibus_initialize()
+   * ungates the SPI controller.  The old blanket
+   * rk3506_all_clocks_enable() debug call and the explicit
+   * rk3506_gpio0_clock_init() / rk3506_spi0_clock_init() here have all
+   * been removed; the board only sequences pinmux + controller bring-up.
    */
 
-  rk3506_gpio0_clock_init();
-  rk3506_spi0_clock_init();
   nv_pinctrl();
 
   g_nv.spi = rk3506_spibus_initialize(NV3007_SPI_BUS);
@@ -664,14 +597,6 @@ int board_lcd_initialize(void)
     }
 
   nv_setpower(&g_nv.dev, CONFIG_LCD_MAXPOWER);
-
-  /* TEMPORARY bring-up A/B test: bypass fb/LVGL and paint the whole panel
-   * red for 3 s.  Visible red  => panel init + SPI + wiring OK (the
-   * later fb black/LVGL content is a separate issue).  Stays black =>
-   * inspect the DIAG register dump and the CLK/MOSI/CS/DC waveforms.
-   */
-
-  nv_diag_solid(0xf800, 3000);
 
   initialized = true;
 

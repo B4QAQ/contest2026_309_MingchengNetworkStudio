@@ -384,11 +384,11 @@ void rk3506_gmac0_clock_init(void)
           CLKGATE17_ACLK_HSPERI_ROOT;
 
   putreg32(gates << 16,
-           (uint32_t)(RK3506_CRU_ADDR + 17u * 4u + 0x800u));
+            (uint32_t)RK3506_CRU_CLKGATE_CON(17));
   putreg32((CLKGATE18_CLK_MAC0) << 16,
-           (uint32_t)(RK3506_CRU_ADDR + 18u * 4u + 0x800u));
+            (uint32_t)RK3506_CRU_CLKGATE_CON(18));
   putreg32(((CLKGATE19_CLK_MAC_PTP_ROOT | CLKGATE19_CLK_MAC0_PTP) << 16),
-           (uint32_t)(RK3506_CRU_ADDR + 19u * 4u + 0x800u));
+            (uint32_t)RK3506_CRU_CLKGATE_CON(19));
 
   /* Deassert SRST_A_MAC0.  Some Rockchip SOFTRST registers require a
    * pulse (assert then deassert) for the reset to actually release.
@@ -543,6 +543,12 @@ int rk3506_gpio_clock_enable(uint8_t bank)
  *   write.  Counts come from clk-rk3506.c (highest used index = 22 main,
  *   2 PMU).  Dividers/muxes are left untouched; per-peripheral init still
  *   programs its own mux/div as needed.
+ *
+ *   DEBUG-ONLY escape hatch for bring-up (e.g. "is this peripheral dead
+ *   because its clock is gated?").  It has no production caller -- each
+ *   peripheral ungates its own clocks through the helpers above -- so it
+ *   is GC'd by LTO in a normal build.  Do NOT call it from production
+ *   paths; doing so masks real clock-ownership bugs.
  *
  ****************************************************************************/
 

@@ -412,7 +412,6 @@ int rk3506_pinctrl_set_drive(uint8_t bank, uint8_t pin, uint8_t level)
   uint32_t  bit;
   uint32_t  data;
   uint32_t  code;
-  uint8_t   nbits;
 
   if (bank >= RK3506_NR_BANKS || pin >= RK3506_BANK_NPINS || level > 7u)
     {
@@ -431,7 +430,6 @@ int rk3506_pinctrl_set_drive(uint8_t bank, uint8_t pin, uint8_t level)
     {
       reg   = (bank == 0) ? DRV_OFF_BANK0_D : DRV_OFF_BANK4;
       bit   = (bank == 0) ? 3u : 10u;
-      nbits = 2u;
       code  = level;
 
       data = ((0x3u) << (bit + 16u)) | (code << bit);

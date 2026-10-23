@@ -88,12 +88,17 @@
  *   Calculate the UART divisor for the given baud rate.
  *   DL = UART_CLK / (16 * baud)
  *
+ *   Only used by rk3506_lowsetup(), which is itself gated on
+ *   CONFIG_ARCH_EARLY_PRINT, so gate this helper the same way to avoid
+ *   a -Wunused-function warning when early print is off.
  ****************************************************************************/
 
+#ifdef CONFIG_ARCH_EARLY_PRINT
 static uint32_t rk3506_uart_divisor(uint32_t baud)
 {
   return UART_CLK / (baud << 4);
 }
+#endif
 
 /****************************************************************************
  * Public Functions

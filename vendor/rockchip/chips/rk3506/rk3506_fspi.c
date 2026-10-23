@@ -347,15 +347,12 @@ static void rk3506_sfc_set_delay_lines(uint16_t cells, uint8_t cs)
 }
 
 /****************************************************************************
- * rockchip_sfc_irq_unmask / _mask  (verbatim, kept for symmetry)
+ * rockchip_sfc_irq_mask  (verbatim)
+ *
+ * Only the mask helper is kept: this driver operates the SFC in polled
+ * mode (no IRQ is ever attached), so the verbatim rockchip_sfc_irq_unmask
+ * counterpart had no caller and was removed (it tripped -Wunused-function).
  ****************************************************************************/
-
-static void rk3506_sfc_irq_unmask(uint32_t mask)
-{
-  uint32_t reg = sfc_read(SFC_IMR);
-  reg &= ~mask;
-  sfc_write(SFC_IMR, reg);
-}
 
 static void rk3506_sfc_irq_mask(uint32_t mask)
 {
