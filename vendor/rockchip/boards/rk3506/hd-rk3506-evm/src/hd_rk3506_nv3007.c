@@ -119,11 +119,22 @@ static uint8_t g_linebuf[NV3007_XRES * (NV3007_BPP / 8)];
 
 static struct nv3007_dev_s g_nv;
 
-/* Vendor initialization sequence, verbatim from the .ino TFT_Init(). */
+/* Vendor initialization sequence (from the T279VJ-C10-01 demo, ordered
+ * per the ESP-IDF/ZMK reference drivers for this panel).
+ *
+ * ORDER MATTERS: the controller powers up asleep with its analog blocks
+ * off, and writes to the vendor register page (0xFF 0xA5 window) do not
+ * stick while it is asleep -- that failure looks exactly like a dead SPI
+ * link.  So Sleep Out comes FIRST to wake the panel, then the vendor
+ * page, then a second Sleep Out + Display ON per the vendor timing.
+ */
 
 static const struct nv_init_cmd_s g_init[] =
 {
-  { 0xff, 1,   0, { 0xa5 } },
+  { 0x11, 0, 100, { 0 } },       /* Sleep Out (1st: wake so vendor page sticks) */
+  { 0x36, 1,   0, { 0x00 } },    /* MADCTL: default scan, x-offset = 12 cols */
+  { 0x3a, 1,   0, { 0x05 } },    /* COLMOD: 16-bit RGB565 */
+  { 0xff, 1,   0, { 0xa5 } },    /* open vendor register page */
   { 0x9a, 1,   0, { 0x08 } },
   { 0x9b, 1,   0, { 0x08 } },
   { 0x9c, 1,   0, { 0xb0 } },
@@ -194,7 +205,7 @@ static const struct nv_init_cmd_s g_init[] =
   { 0xc4, 1,   0, { 0x33 } },
   { 0xc5, 1,   0, { 0x7e } },
   { 0xc6, 1,   0, { 0x7e } },
-  { 0xc8, 1,   0, { 0x33 } },
+  { 0xc8, 2,   0, { 0x33, 0x33 } },
   { 0xc9, 1,   0, { 0x68 } },
   { 0xca, 1,   0, { 0x69 } },
   { 0xcb, 1,   0, { 0x6a } },
@@ -238,10 +249,9 @@ static const struct nv_init_cmd_s g_init[] =
   { 0x35, 1,   0, { 0x00 } },
   { 0x44, 2,   0, { 0x00, 0x10 } },
   { 0x46, 1,   0, { 0x10 } },
-  { 0xff, 1,   0, { 0x00 } },
-  { 0x3a, 1,   0, { 0x05 } },    /* COLMOD: 16-bit RGB565 */
-  { 0x11, 0, 220, { 0 } },       /* Sleep Out + 220 ms */
-  { 0x29, 0,   0, { 0 } },       /* Display ON */
+  { 0xff, 1,   0, { 0x00 } },    /* close vendor register page */
+  { 0x11, 0, 220, { 0 } },       /* Sleep Out (2nd: vendor timing) */
+  { 0x29, 0, 200, { 0 } },       /* Display ON + 200 ms */
 };
 
 /****************************************************************************
@@ -285,11 +295,13 @@ static void nv_pinctrl(void)
   rk3506_gpio_config(NV_GPIN_DC,  RK3506_GPIO_OUTPUT | RK3506_GPIO_VALUE_HIGH);
 }
 
-/* The vendor demo toggles CS for EVERY byte (CS low around the single
- * command byte, then CS low around each parameter byte).  The NV3007 does
- * not latch a multi-byte group under one CS assertion, so reproduce that
- * exactly.  Bus lock/mode/frequency are taken once; only SER (CS) and DC
- * toggle per byte.
+/* Take the bus and select the panel.  SPI_SELECT is REQUIRED even though
+ * the panel CS is a plain GPIO: on the Rockchip DesignWare SPI block the
+ * controller only generates SCLK for an enabled slave-select (SER != 0).
+ * With SER == 0 bytes land in the TX FIFO but are never clocked out, which
+ * is exactly why the panel stayed dark (backlight on, no picture).  The
+ * hardware CSN0 pad is not routed, so the SER bit only gates the engine;
+ * the panel's real CS is the GPIO toggled by nv_cs().
  */
 
 static void nv_select(void)
@@ -298,80 +310,100 @@ static void nv_select(void)
   SPI_SETMODE(g_nv.spi, NV3007_SPI_MODE);
   SPI_SETBITS(g_nv.spi, 8);
   SPI_SETFREQUENCY(g_nv.spi, NV3007_SPI_FREQ);
+  SPI_SELECT(g_nv.spi, SPIDEV_DISPLAY(0), true);
 }
 
 static void nv_deselect(void)
 {
   nv_cs(false);
+  SPI_SELECT(g_nv.spi, SPIDEV_DISPLAY(0), false);
   SPI_LOCK(g_nv.spi, false);
 }
 
-/* One byte with its own CS pulse, DC selects command(0)/data(1). */
+/* Send a parameter/pixel data byte (DC high), CS held for the byte. */
 
-static void nv_xfer_byte(uint8_t v, bool data)
+static void nv_send_data(uint8_t v)
 {
+  nv_dc(true);
   nv_cs(true);
-  nv_dc(data);
   SPI_SEND(g_nv.spi, (uint16_t)v);
   nv_cs(false);
 }
 
-/* One command plus its parameters, each byte in its own CS assertion,
- * matching TFT_SEND_CMD / TFT_SEND_DATA exactly.
+/* One command plus its parameters, the whole group framed by one CS
+ * assertion (DC low for the command, DC high for the parameters), which
+ * is the standard MIPI-DBI 4-wire framing.  NV_DATA_ONLY sends a bare
+ * data byte with no command.
  */
 
 static void nv_command(uint16_t cmd, FAR const uint8_t *p, uint8_t n)
 {
-  uint8_t k;
-
   nv_select();
 
   if (cmd == NV_DATA_ONLY)
     {
-      nv_xfer_byte(p[0], true);
+      nv_send_data(p[0]);
     }
   else
     {
-      nv_xfer_byte((uint8_t)cmd, false);
-      for (k = 0; k < n; k++)
+      nv_dc(false);            /* command phase */
+      nv_cs(true);
+      SPI_SEND(g_nv.spi, (uint16_t)cmd);
+
+      if (n > 0)
         {
-          nv_xfer_byte(p[k], true);
+          nv_dc(true);         /* parameter phase, CS still low */
+          SPI_SNDBLOCK(g_nv.spi, p, n);
         }
+
+      nv_cs(false);
     }
 
   nv_deselect();
 }
 
-/* CASET/RASET/RAMWR window, every byte with its own CS pulse (verbatim
- * TFT_SET_ADD).  Ends with CS held low and DC high so the following pixel
- * bytes stream as one RAMWR burst.
+/* CASET/RASET/RAMWR window.  The whole command sequence runs under one
+ * CS assertion, ending with CS held low and DC high so the pixel bytes
+ * that follow stream as one continuous RAMWR burst.
  */
 
 static void nv_stream_begin(fb_coord_t c0, fb_coord_t c1,
                             fb_coord_t r0, fb_coord_t r1)
 {
+  uint8_t col[4];
+  uint8_t row[4];
+
   c0 += NV3007_XOFFSET;
   c1 += NV3007_XOFFSET;
 
+  col[0] = (uint8_t)(c0 >> 8);
+  col[1] = (uint8_t)(c0);
+  col[2] = (uint8_t)(c1 >> 8);
+  col[3] = (uint8_t)(c1);
+
+  row[0] = (uint8_t)(r0 >> 8);
+  row[1] = (uint8_t)(r0);
+  row[2] = (uint8_t)(r1 >> 8);
+  row[3] = (uint8_t)(r1);
+
   nv_select();
 
-  nv_xfer_byte(NV_CMD_CASET, false);
-  nv_xfer_byte((uint8_t)(c0 >> 8), true);
-  nv_xfer_byte((uint8_t)(c0), true);
-  nv_xfer_byte((uint8_t)(c1 >> 8), true);
-  nv_xfer_byte((uint8_t)(c1), true);
-
-  nv_xfer_byte(NV_CMD_RASET, false);
-  nv_xfer_byte((uint8_t)(r0 >> 8), true);
-  nv_xfer_byte((uint8_t)(r0), true);
-  nv_xfer_byte((uint8_t)(r1 >> 8), true);
-  nv_xfer_byte((uint8_t)(r1), true);
-
-  nv_xfer_byte(NV_CMD_RAMWR, false);
-
-  /* Hold CS low / DC high for the continuous pixel burst. */
-
+  nv_dc(false);          /* CASET command */
   nv_cs(true);
+  SPI_SEND(g_nv.spi, NV_CMD_CASET);
+  nv_dc(true);           /* CASET 4 data bytes */
+  SPI_SNDBLOCK(g_nv.spi, col, 4);
+
+  nv_dc(false);          /* RASET command */
+  SPI_SEND(g_nv.spi, NV_CMD_RASET);
+  nv_dc(true);           /* RASET 4 data bytes */
+  SPI_SNDBLOCK(g_nv.spi, row, 4);
+
+  nv_dc(false);          /* RAMWR command */
+  SPI_SEND(g_nv.spi, NV_CMD_RAMWR);
+
+  /* Hold CS low / DC high for the continuous pixel burst that follows. */
+
   nv_dc(true);
 }
 
