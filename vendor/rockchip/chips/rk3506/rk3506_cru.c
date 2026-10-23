@@ -26,9 +26,7 @@
 
 #include <sys/types.h>
 #include <stdint.h>
-#include <inttypes.h>
 #include <errno.h>
-#include <debug.h>
 
 #include "hardware/rk3506_memorymap.h"
 #include "rk3506_cru.h"
@@ -286,9 +284,6 @@ void rk3506_fspi_clock_init(void)
    */
 
   putreg32(gates << 16, RK3506_CRU_CLKGATE_CON(17));
-
-  _info("FSPI CRU: CLKSEL50=0x%08" PRIx32 " CLKGATE17=0x%08" PRIx32 "\n",
-        getreg32(RK3506_CRU_CLKSEL_CON(50)), getreg32(RK3506_CRU_CLKGATE_CON(17)));
 }
 
 /****************************************************************************

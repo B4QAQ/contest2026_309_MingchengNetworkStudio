@@ -32,7 +32,6 @@
 #include <nuttx/config.h>
 
 #include <sys/types.h>
-#include <syslog.h>
 #include <errno.h>
 #include <debug.h>
 
@@ -115,7 +114,7 @@ int rk3506_rptun_initialize(void);
     int _r = (stmt); \
     if (_r < 0) \
       { \
-        syslog(LOG_ERR, "ERROR: " fmt " (errno=%d)\n", \
+        _err("ERROR: " fmt " (errno=%d)\n", \
                ##__VA_ARGS__, _r); \
       } \
   } while (0)
@@ -143,7 +142,7 @@ static int hd_rk3506_i2c_init(void)
 {
   int ret = OK;
 
-  syslog(LOG_INFO, "Initializing I2C controllers...\n");
+  _info("Initializing I2C controllers...\n");
 
   /* Route RM_IO24/25 to I2C0 SDA/SCL first: without this the
    * GPIO1_B1/B2 pins stay in func 0 (GPIO) and every I2C0 transfer
@@ -156,12 +155,12 @@ static int hd_rk3506_i2c_init(void)
 
   if (rk3506_i2cbus_initialize(0) == NULL)
     {
-      syslog(LOG_ERR, "ERROR: rk3506_i2cbus_initialize(0) failed\n");
+      _err("ERROR: rk3506_i2cbus_initialize(0) failed\n");
       ret = -ENODEV;
     }
   else
     {
-      syslog(LOG_INFO, "I2C0 controller initialized (used by GT911)\n");
+      _info("I2C0 controller initialized (used by GT911)\n");
     }
 
   /* NOTE: only I2C0 is brought up.  The chip driver supports 3 buses
@@ -181,7 +180,7 @@ static int hd_rk3506_i2c_init(void)
    */
 
 #ifdef CONFIG_I2C_DRIVER
-  syslog(LOG_INFO, "I2C_DRIVER enabled - userspace /dev/i2cN access available\n");
+  _info("I2C_DRIVER enabled - userspace /dev/i2cN access available\n");
 #endif
 
   return ret;
@@ -205,8 +204,7 @@ int hd_rk3506_bringup(void)
 {
   int ret;
 
-  syslog(LOG_INFO,
-         "\n"
+  _info("\n"
          " ██████╗ ███████╗██████╗ ███╗   ██╗██╗   ██╗███████╗██╗      █████╗                             \n"
          "██╔═══██╗██╔════╝██╔══██╗████╗  ██║██║   ██║██╔════╝██║     ██╔══██╗                            \n"
          "██║   ██║█████╗  ██████╔╝██╔██╗ ██║██║   ██║█████╗  ██║     ███████║                            \n"
@@ -221,7 +219,7 @@ int hd_rk3506_bringup(void)
          "██║     ╚██████╔╝██║  ██║    ██║  ██║██║  ██╗██████╔╝███████║╚██████╔╝╚██████╔╝╚██████╔╝███████╗\n"
          "╚═╝      ╚═════╝ ╚═╝  ╚═╝    ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝ ╚═════╝  ╚═════╝  ╚═════╝ ╚══════╝\n");
 
-  syslog(LOG_INFO, "=== HD-RK3506-EVM bringup ===\n");
+  _info("=== HD-RK3506-EVM bringup ===\n");
 
 #ifdef CONFIG_FS_PROCFS
   /* Mount the procfs file system */
@@ -229,11 +227,11 @@ int hd_rk3506_bringup(void)
   ret = nx_mount(NULL, "/proc", "procfs", 0, NULL);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: Failed to mount procfs at /proc: %d\n", ret);
+      _err("ERROR: Failed to mount procfs at /proc: %d\n", ret);
     }
   else
     {
-      syslog(LOG_INFO, "procfs mounted at /proc\n");
+      _info("procfs mounted at /proc\n");
     }
 #endif
 
@@ -276,11 +274,11 @@ int hd_rk3506_bringup(void)
   ret = nx_mount(NULL, "/tmp", "tmpfs", 0, NULL);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: Failed to mount tmpfs at /tmp: %d\n", ret);
+      _err("ERROR: Failed to mount tmpfs at /tmp: %d\n", ret);
     }
   else
     {
-      syslog(LOG_INFO, "tmpfs mounted at /tmp\n");
+      _info("tmpfs mounted at /tmp\n");
     }
 #endif
 
@@ -294,11 +292,11 @@ int hd_rk3506_bringup(void)
   ret = fb_register(0, 0);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: fb_register(NV3007) failed: %d\n", ret);
+      _err("ERROR: fb_register(NV3007) failed: %d\n", ret);
     }
   else
     {
-      syslog(LOG_INFO, "NV3007 /dev/fb0 registered\n");
+      _info("NV3007 /dev/fb0 registered\n");
     }
 #endif
 
@@ -333,7 +331,7 @@ int hd_rk3506_bringup(void)
       conn = rk3506_usbhost_initialize(1);
       if (conn == NULL)
         {
-          syslog(LOG_ERR, "ERROR: rk3506_usbhost_initialize(1) failed\n");
+          _err("ERROR: rk3506_usbhost_initialize(1) failed\n");
         }
       else
         {
@@ -347,12 +345,12 @@ int hd_rk3506_bringup(void)
           int waiter = usbhost_waiter_initialize(conn);
           if (waiter < 0)
             {
-              syslog(LOG_ERR, "ERROR: usbhost_waiter_initialize "
+              _err("ERROR: usbhost_waiter_initialize "
                               "failed: %d\n", waiter);
             }
           else
             {
-              syslog(LOG_INFO, "USB Host (OTG1, USB-A) initialized, "
+              _info("USB Host (OTG1, USB-A) initialized, "
                                "waiter started\n");
             }
         }
@@ -384,7 +382,7 @@ int hd_rk3506_bringup(void)
       mtd = rk3506_spinand_fspi_initialize();
       if (mtd == NULL)
         {
-          syslog(LOG_ERR, "ERROR: SPI NAND init failed (FSPI CS0)\n");
+          _err("ERROR: SPI NAND init failed (FSPI CS0)\n");
           break;
         }
 
@@ -423,7 +421,7 @@ int hd_rk3506_bringup(void)
         if (mtd->ioctl(mtd, MTDIOC_GEOMETRY,
                        (unsigned long)((uintptr_t)&geo)) < 0)
           {
-            syslog(LOG_ERR, "ERROR: SPI NAND geometry ioctl failed\n");
+            _err("ERROR: SPI NAND geometry ioctl failed\n");
             break;
           }
 
@@ -433,7 +431,7 @@ int hd_rk3506_bringup(void)
 
         if (npages <= 0)
           {
-            syslog(LOG_ERR, "ERROR: userdata region empty (chip "
+            _err("ERROR: userdata region empty (chip "
                             "smaller than the parameter layout?)\n");
             break;
           }
@@ -441,18 +439,18 @@ int hd_rk3506_bringup(void)
         part = mtd_partition(mtd, first_page, npages);
         if (part == NULL)
           {
-            syslog(LOG_ERR, "ERROR: mtd_partition(userdata) failed\n");
+            _err("ERROR: mtd_partition(userdata) failed\n");
             break;
           }
 
         if (dhara_initialize(0, part) < 0)
           {
-            syslog(LOG_ERR, "ERROR: dhara_initialize(/dev/mtdblock0) "
+            _err("ERROR: dhara_initialize(/dev/mtdblock0) "
                             "failed\n");
             break;
           }
 
-        syslog(LOG_INFO, "SPI NAND /data: /dev/mtdblock0 = userdata "
+        _info("SPI NAND /data: /dev/mtdblock0 = userdata "
                          "(page %ld +%ld of %ld)\n",
                (long)first_page, (long)npages,
                (long)geo.neraseblocks * geo.erasesize / geo.blocksize);
@@ -467,7 +465,7 @@ int hd_rk3506_bringup(void)
             int ota_ret = rk3506_ota_initialize(mtd);
             if (ota_ret < 0)
               {
-                syslog(LOG_ERR, "ERROR: rk3506_ota_initialize failed: "
+                _err("ERROR: rk3506_ota_initialize failed: "
                                 "%d\n", ota_ret);
               }
           }
@@ -491,7 +489,7 @@ int hd_rk3506_bringup(void)
       int pwm_ret = rk3506_pwm_initialize();
       if (pwm_ret < 0)
         {
-          syslog(LOG_ERR, "ERROR: rk3506_pwm_initialize failed: %d\n",
+          _err("ERROR: rk3506_pwm_initialize failed: %d\n",
                  pwm_ret);
         }
     }
@@ -509,7 +507,7 @@ int hd_rk3506_bringup(void)
       int adc_ret = rk3506_saradc_initialize();
       if (adc_ret < 0)
         {
-          syslog(LOG_ERR, "ERROR: rk3506_saradc_initialize failed: "
+          _err("ERROR: rk3506_saradc_initialize failed: "
                           "%d\n", adc_ret);
         }
     }
@@ -530,7 +528,7 @@ int hd_rk3506_bringup(void)
       int can_ret = rk3506_can_initialize();
       if (can_ret < 0)
         {
-          syslog(LOG_ERR, "ERROR: rk3506_can_initialize failed: %d\n",
+          _err("ERROR: rk3506_can_initialize failed: %d\n",
                  can_ret);
         }
     }
@@ -549,7 +547,7 @@ int hd_rk3506_bringup(void)
       int wdt_ret = rk3506_wdt_initialize();
       if (wdt_ret < 0)
         {
-          syslog(LOG_ERR, "ERROR: rk3506_wdt_initialize failed: %d\n",
+          _err("ERROR: rk3506_wdt_initialize failed: %d\n",
                  wdt_ret);
         }
     }
@@ -568,7 +566,7 @@ int hd_rk3506_bringup(void)
   int gmac_ret = rk3506_gmac0_initialize();
   if (gmac_ret < 0)
     {
-      syslog(LOG_WARNING, "GMAC0: netdev register failed: %d\n",
+      _warn("GMAC0: netdev register failed: %d\n",
              gmac_ret);
     }
 #endif
@@ -584,13 +582,13 @@ int hd_rk3506_bringup(void)
       int rptun_ret = rk3506_rptun_initialize();
       if (rptun_ret < 0)
         {
-          syslog(LOG_ERR, "ERROR: rk3506_rptun_initialize failed: %d\n",
+          _err("ERROR: rk3506_rptun_initialize failed: %d\n",
                  rptun_ret);
         }
     }
   while (0);
 #endif
 
-  syslog(LOG_INFO, "=== HD-RK3506-EVM bringup done ===\n");
+  _info("=== HD-RK3506-EVM bringup done ===\n");
   return OK;
 }

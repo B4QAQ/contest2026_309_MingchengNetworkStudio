@@ -37,7 +37,7 @@
 #include <nuttx/video/fb.h>
 #include <nuttx/clock.h>
 
-#include <syslog.h>
+#include <debug.h>
 
 #include <lvgl/lvgl.h>
 
@@ -177,12 +177,12 @@ int hd_rk3506_lv_port_disp_init(void)
 {
   int ret;
 
-  syslog(LOG_INFO, "LVGL: hd_rk3506_lv_port_disp_init() enter\n");
+  _info("LVGL: hd_rk3506_lv_port_disp_init() enter\n");
 
   /* Initialise the LVGL core. */
 
   lv_init();
-  syslog(LOG_INFO, "LVGL: lv_init() done\n");
+  _info("LVGL: lv_init() done\n");
 
   /* Open the framebuffer registered by rk3506_vop_register(). */
 
@@ -192,11 +192,11 @@ int hd_rk3506_lv_port_disp_init(void)
       int err = errno;
       struct stat st;
       int stat_ret = stat(LV_PORT_DISP_DEV, &st);
-      syslog(LOG_ERR, "LVGL: open(%s) failed: errno=%d, stat=%d\n",
+      _err("LVGL: open(%s) failed: errno=%d, stat=%d\n",
              LV_PORT_DISP_DEV, err, stat_ret);
       if (stat_ret == 0)
         {
-          syslog(LOG_ERR, "LVGL: stat shows %s exists, mode=0%o, size=%lld\n",
+          _err("LVGL: stat shows %s exists, mode=0%o, size=%lld\n",
                  LV_PORT_DISP_DEV, (unsigned)(st.st_mode & 0777),
                  (long long)st.st_size);
         }
@@ -212,50 +212,50 @@ int hd_rk3506_lv_port_disp_init(void)
           int n = 0;
           while ((e = readdir(dir)) != NULL && n < 32)
             {
-              syslog(LOG_INFO, "LVGL: /dev/%s\n", e->d_name);
+              _info("LVGL: /dev/%s\n", e->d_name);
               n++;
             }
           closedir(dir);
         }
       else
         {
-          syslog(LOG_ERR, "LVGL: opendir(/dev) failed errno=%d\n", errno);
+          _err("LVGL: opendir(/dev) failed errno=%d\n", errno);
         }
 
       set_errno(err);
       return -err;
     }
-  syslog(LOG_INFO, "LVGL: open(%s) ok fd=%d\n", LV_PORT_DISP_DEV, g_fb_fd);
+  _info("LVGL: open(%s) ok fd=%d\n", LV_PORT_DISP_DEV, g_fb_fd);
 
   ret = ioctl(g_fb_fd, FBIOGET_VIDEOINFO, (unsigned long)((uintptr_t)&g_video));
   if (ret < 0)
     {
       int err = errno;
-      syslog(LOG_ERR, "LVGL: FBIOGET_VIDEOINFO failed: errno=%d\n", err);
+      _err("LVGL: FBIOGET_VIDEOINFO failed: errno=%d\n", err);
       close(g_fb_fd);
       g_fb_fd = -1;
       set_errno(err);
       return -err;
     }
-  syslog(LOG_INFO, "LVGL: videoinfo fmt=%d xres=%d yres=%d\n",
+  _info("LVGL: videoinfo fmt=%d xres=%d yres=%d\n",
          (int)g_video.fmt, (int)g_video.xres, (int)g_video.yres);
 
   ret = ioctl(g_fb_fd, FBIOGET_PLANEINFO, (unsigned long)((uintptr_t)&g_plane));
   if (ret < 0)
     {
       int err = errno;
-      syslog(LOG_ERR, "LVGL: FBIOGET_PLANEINFO failed: errno=%d\n", err);
+      _err("LVGL: FBIOGET_PLANEINFO failed: errno=%d\n", err);
       close(g_fb_fd);
       g_fb_fd = -1;
       set_errno(err);
       return -err;
     }
-  syslog(LOG_INFO, "LVGL: planeinfo stride=%u fblen=%u fbmem=%p\n",
+  _info("LVGL: planeinfo stride=%u fblen=%u fbmem=%p\n",
          (unsigned)g_plane.stride, (unsigned)g_plane.fblen, g_plane.fbmem);
 
   if (g_plane.fbmem == NULL || g_plane.fblen == 0)
     {
-      syslog(LOG_ERR, "LVGL: plane has no fbmem (fbmem=%p fblen=%u)\n",
+      _err("LVGL: plane has no fbmem (fbmem=%p fblen=%u)\n",
              g_plane.fbmem, (unsigned)g_plane.fblen);
       close(g_fb_fd);
       g_fb_fd = -1;
@@ -267,14 +267,14 @@ int hd_rk3506_lv_port_disp_init(void)
   if (g_fb_base == MAP_FAILED)
     {
       int err = errno;
-      syslog(LOG_ERR, "LVGL: mmap failed: errno=%d\n", err);
+      _err("LVGL: mmap failed: errno=%d\n", err);
       close(g_fb_fd);
       g_fb_fd = -1;
       g_fb_base = NULL;
       set_errno(err);
       return -err;
     }
-  syslog(LOG_INFO, "LVGL: mmap ok base=%p\n", g_fb_base);
+  _info("LVGL: mmap ok base=%p\n", g_fb_base);
 
   /* Allocate a render buffer large enough for the whole screen. RGB565
    * is 2 bytes per pixel.  480*854*2 = 819 840 bytes; round up to be
@@ -284,7 +284,7 @@ int hd_rk3506_lv_port_disp_init(void)
   size_t buf_pixels = (size_t)g_video.xres * (size_t)g_video.yres;
   if (buf_pixels == 0)
     {
-      syslog(LOG_ERR, "LVGL: videoinfo has zero resolution\n");
+      _err("LVGL: videoinfo has zero resolution\n");
       munmap(g_fb_base, g_plane.fblen);
       close(g_fb_fd);
       g_fb_base = NULL;
@@ -295,7 +295,7 @@ int hd_rk3506_lv_port_disp_init(void)
   g_render_buf = (lv_color_t *)malloc(buf_pixels * sizeof(lv_color_t));
   if (g_render_buf == NULL)
     {
-      syslog(LOG_ERR, "LVGL: malloc(%zu) for render buf failed\n",
+      _err("LVGL: malloc(%zu) for render buf failed\n",
              buf_pixels * sizeof(lv_color_t));
       munmap(g_fb_base, g_plane.fblen);
       close(g_fb_fd);
@@ -303,7 +303,7 @@ int hd_rk3506_lv_port_disp_init(void)
       g_fb_fd   = -1;
       return -ENOMEM;
     }
-  syslog(LOG_INFO, "LVGL: render buf %zu bytes at %p\n",
+  _info("LVGL: render buf %zu bytes at %p\n",
          buf_pixels * sizeof(lv_color_t), g_render_buf);
 
   /* Create the LVGL display and bind the flush callback. */
@@ -311,7 +311,7 @@ int hd_rk3506_lv_port_disp_init(void)
   g_disp = lv_display_create(g_video.xres, g_video.yres);
   if (g_disp == NULL)
     {
-      syslog(LOG_ERR, "LVGL: lv_display_create returned NULL\n");
+      _err("LVGL: lv_display_create returned NULL\n");
       free(g_render_buf);
       munmap(g_fb_base, g_plane.fblen);
       close(g_fb_fd);
@@ -320,13 +320,13 @@ int hd_rk3506_lv_port_disp_init(void)
       g_fb_fd      = -1;
       return -ENOMEM;
     }
-  syslog(LOG_INFO, "LVGL: lv_display_create ok disp=%p\n", g_disp);
+  _info("LVGL: lv_display_create ok disp=%p\n", g_disp);
 
   lv_display_set_flush_cb(g_disp, rk3506_disp_flush);
   lv_display_set_buffers(g_disp, g_render_buf, NULL,
                          buf_pixels * sizeof(lv_color_t),
                          LV_DISPLAY_RENDER_MODE_FULL);
-  syslog(LOG_INFO, "LVGL: flush_cb + buffers set, render mode FULL\n");
+  _info("LVGL: flush_cb + buffers set, render mode FULL\n");
 
   /* Start the LVGL timer-handler and tick threads. */
 
@@ -335,25 +335,25 @@ int hd_rk3506_lv_port_disp_init(void)
                     LV_PORT_TICK_THREAD_STACK, lv_port_tick_thread, NULL);
   if (pid < 0)
     {
-      syslog(LOG_INFO, "LVGL: lvgl_tick task_create failed: %d\n", pid);
+      _info("LVGL: lvgl_tick task_create failed: %d\n", pid);
     }
   else
     {
-      syslog(LOG_INFO, "LVGL: lvgl_tick task pid=%d\n", pid);
+      _info("LVGL: lvgl_tick task pid=%d\n", pid);
     }
 
   pid = task_create("lvgl_timer", LV_PORT_TIMER_THREAD_PRIO,
                     LV_PORT_TIMER_THREAD_STACK, lv_port_timer_thread, NULL);
   if (pid < 0)
     {
-      syslog(LOG_INFO, "LVGL: lvgl_timer task_create failed: %d\n", pid);
+      _info("LVGL: lvgl_timer task_create failed: %d\n", pid);
     }
   else
     {
-      syslog(LOG_INFO, "LVGL: lvgl_timer task pid=%d\n", pid);
+      _info("LVGL: lvgl_timer task pid=%d\n", pid);
     }
 
-  syslog(LOG_INFO, "LVGL: init done OK\n");
+  _info("LVGL: init done OK\n");
   return OK;
 }
 
