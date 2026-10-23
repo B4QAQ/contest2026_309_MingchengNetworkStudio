@@ -1297,7 +1297,7 @@ int HAL_GMAC_PHYInit(struct GMAC_HANDLE *pGMAC,
                      struct GMAC_PHY_Config *config)
 {
   int32_t i, found = 0, timeout = 500;
-  int status;
+  int status = HAL_OK;
   int32_t reg;
 
   if (!config->features)
@@ -2094,7 +2094,12 @@ uint32_t HAL_GMAC_GetTXIndex(struct GMAC_HANDLE *pGMAC)
 
 uint32_t HAL_GMAC_GetRXIndex(struct GMAC_HANDLE *pGMAC)
 {
-  return pGMAC->txDescIdx;   /* [sic] verbatim from hal_gmac.c */
+  /* SDK hal_gmac.c returns txDescIdx here ([sic]); that is a genuine bug
+   * -- the RX index must come from the RX descriptor cursor, or any RX
+   * accounting that uses it walks the TX ring.  Fixed to rxDescIdx.
+   */
+
+  return pGMAC->rxDescIdx;
 }
 
 /****************************************************************************
