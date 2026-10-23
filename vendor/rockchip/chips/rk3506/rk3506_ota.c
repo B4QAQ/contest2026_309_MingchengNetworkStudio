@@ -1116,13 +1116,13 @@ int rk3506_ota_initialize(FAR struct mtd_dev_s *mtd)
       return ret;
     }
 
-  syslog(LOG_INFO, "OTA: /dev/ota ready (misc@%luK boot_a@%luK "
-         "boot_b@%luK, %lu x %luK blocks)\n",
-         (unsigned long)(OTA_MISC_START_SECT * 512 / 1024),
-         (unsigned long)(OTA_BOOTA_START_SECT * 512 / 1024),
-         (unsigned long)(OTA_BOOTB_START_SECT * 512 / 1024),
-         (unsigned long)(priv->slot_pages * priv->pagesize / priv->erasesize),
-         (unsigned long)(priv->erasesize / 1024));
+  finfo("OTA: /dev/ota ready (misc@%luK boot_a@%luK "
+        "boot_b@%luK, %lu x %luK blocks)\n",
+        (unsigned long)(OTA_MISC_START_SECT * 512 / 1024),
+        (unsigned long)(OTA_BOOTA_START_SECT * 512 / 1024),
+        (unsigned long)(OTA_BOOTB_START_SECT * 512 / 1024),
+        (unsigned long)(priv->slot_pages * priv->pagesize / priv->erasesize),
+        (unsigned long)(priv->erasesize / 1024));
   return OK;
 }
 

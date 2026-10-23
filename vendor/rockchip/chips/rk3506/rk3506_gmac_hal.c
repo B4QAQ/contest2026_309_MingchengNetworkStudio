@@ -30,7 +30,6 @@
 #include <string.h>
 #include <errno.h>
 #include <inttypes.h>
-#include <syslog.h>
 #include <time.h>
 
 #include <nuttx/arch.h>
@@ -1907,13 +1906,6 @@ int HAL_GMAC_Start(struct GMAC_HANDLE *pGMAC, uint8_t *addr)
   value = getreg32(pGMAC->base + GMAC_DMA_CH0_RX_CONTROL);
   value |= DMA_CH0_RX_CONTROL_SR;
   putreg32(value, pGMAC->base + GMAC_DMA_CH0_RX_CONTROL);
-
-  syslog(LOG_INFO, "GMAC HAL Start: rxctl=0x%08lx txctl=0x%08lx"
-         " (rbsz=%u bytes)\n",
-         (unsigned long)getreg32(pGMAC->base + GMAC_DMA_CH0_RX_CONTROL),
-         (unsigned long)getreg32(pGMAC->base + GMAC_DMA_CH0_TX_CONTROL),
-         ((unsigned)((getreg32(pGMAC->base + GMAC_DMA_CH0_RX_CONTROL) &
-                     0xfffe) >> 1)));
 
   return HAL_OK;
 }
