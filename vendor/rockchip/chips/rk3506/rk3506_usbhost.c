@@ -2401,6 +2401,16 @@ static inline void rk3506_gint_hprtisr(struct rk3506_usbhost_s *priv)
                   rk3506_portreset(priv);
                 }
             }
+          else if ((hprt & DWC2_HPRT_PSPD_MASK) == DWC2_HPRT_PSPD_HS)
+            {
+              /* High-speed: 60 MHz UTMI PHY clock -> 60000 microframe
+               * interval.  FSLSPCS is a full/low-speed PHY clock select
+               * and is left at the reset value for HS (no reprogramming,
+               * no extra port reset).
+               */
+
+              rk3506_putreg(priv, DWC2_HFIR_OFFSET, 60000);
+            }
           else
             {
               rk3506_putreg(priv, DWC2_HFIR_OFFSET, 48000);
@@ -2528,8 +2538,15 @@ static inline void rk3506_hostinit_enable(struct rk3506_usbhost_s *priv)
   rk3506_putreg(priv, DWC2_GOTGINT_OFFSET, 0xffffffff);
   rk3506_putreg(priv, DWC2_GINTSTS_OFFSET, 0xbfffffff);
 
-  regval = (DWC2_GINT_WKUP | DWC2_GINT_USBSUSP |
-            DWC2_GINT_RXFLVL | DWC2_GINT_IPXFR  |
+  /* Enable only the interrupt sources that the ISR actually services.
+   * WKUP/USBSUSP are deliberately NOT enabled: the host never suspends or
+   * remote-wakes the bus, and the ISR has no branch to clear them.  With
+   * them masked in, a spurious WKUP/USBSUSP status bit would keep
+   * 'pending' non-zero forever and spin the ISR's for(;;) loop, hard-
+   * hanging the system.  Masked sources can never set a pending bit.
+   */
+
+  regval = (DWC2_GINT_RXFLVL | DWC2_GINT_IPXFR  |
             DWC2_GINT_HPRT   | DWC2_GINT_HC     |
             DWC2_GINT_DISC);
   rk3506_putreg(priv, DWC2_GINTMSK_OFFSET, regval);
@@ -2650,13 +2667,20 @@ static int rk3506_rh_enumerate(struct rk3506_usbhost_s *priv,
   rk3506_portreset(priv);
 
   regval = rk3506_getreg(priv, DWC2_HPRT_OFFSET);
-  if ((regval & DWC2_HPRT_PSPD_MASK) == DWC2_HPRT_PSPD_LS)
+  switch (regval & DWC2_HPRT_PSPD_MASK)
     {
-      priv->rhport.hport.speed = USB_SPEED_LOW;
-    }
-  else
-    {
-      priv->rhport.hport.speed = USB_SPEED_FULL;
+      case DWC2_HPRT_PSPD_HS:
+        priv->rhport.hport.speed = USB_SPEED_HIGH;
+        break;
+
+      case DWC2_HPRT_PSPD_LS:
+        priv->rhport.hport.speed = USB_SPEED_LOW;
+        break;
+
+      case DWC2_HPRT_PSPD_FS:
+      default:
+        priv->rhport.hport.speed = USB_SPEED_FULL;
+        break;
     }
 
   ret = rk3506_ctrlchan_alloc(priv, 0, 0, priv->rhport.hport.speed,
@@ -3496,8 +3520,20 @@ static inline int rk3506_hw_initialize(struct rk3506_usbhost_s *priv)
 
   rk3506_usbphy_init(priv);
 
+  /* Configure GUSBCFG for the on-board INNO USB2 PHY, which is an 8-bit
+   * UTMI+ (high-speed) interface -- NOT the USB 1.1 FS serial transceiver.
+   * Per the SDK HAL_USB_CoreInit: PHYSEL must be CLEARED (the |= PHYSEL
+   * here was an STM32F4-OTG-FS porting leftover that selected the wrong
+   * PHY), and the turnaround time / timeout calibration / PHY width are
+   * programmed explicitly for an 8-bit UTMI link (TRDT=9, PHYIF=0,
+   * TOCAL=7) instead of relying on reset defaults.
+   */
+
   regval = rk3506_getreg(priv, DWC2_GUSBCFG_OFFSET);
-  regval |= DWC2_GUSBCFG_PHYSEL;
+  regval &= ~(DWC2_GUSBCFG_PHYSEL |
+              DWC2_GUSBCFG_TRDT_MASK |
+              DWC2_GUSBCFG_TOCAL_MASK);
+  regval |= DWC2_GUSBCFG_TRDT(9) | 7;   /* TRDT=9 (8-bit UTMI), TOCAL=7 */
   rk3506_putreg(priv, DWC2_GUSBCFG_OFFSET, regval);
 
   for (timeout = 0; timeout < RK3506_READY_DELAY; timeout++)
