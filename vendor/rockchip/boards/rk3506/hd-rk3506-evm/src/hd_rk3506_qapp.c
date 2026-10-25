@@ -174,13 +174,28 @@ static void qapp_pump_cb(lv_timer_t *t)
  * fires regardless of which widget holds focus.
  */
 
+static void qapp_stop_async(void *user_data)
+{
+  (void)user_data;
+  qapp_stop();
+}
+
 static void qapp_key_cb(lv_event_t *e)
 {
   uint32_t key = lv_event_get_key(e);
 
   if (key == LV_KEY_ESC)
     {
-      qapp_stop();
+      /* Do NOT call qapp_stop() here: we are inside lv_obj_send_event()
+       * dispatching a key event on the very screen qapp_stop() would
+       * delete.  Deleting an object mid-event leaves the event loop
+       * walking a freed event_dsc list and the indev holding a freed
+       * focus object - the classic jump-to-data abort.  Defer the stop
+       * to the LVGL timer task via lv_async_call(), which runs outside
+       * any event dispatch.
+       */
+
+      lv_async_call(qapp_stop_async, NULL);
     }
 }
 
@@ -227,11 +242,6 @@ int qapp_run(const char *path)
   if (g_running.js == NULL)
     {
       _err("qapp: failed to start %s\n", path);
-      if (group != NULL)
-        {
-          lv_group_remove_obj(g_running.screen);
-        }
-
       lv_obj_remove_flag(g_running.prev, LV_OBJ_FLAG_HIDDEN);
       lv_screen_load(g_running.prev);
       lv_obj_delete(g_running.screen);
@@ -263,18 +273,26 @@ void qapp_stop(void)
       g_running.pump = NULL;
     }
 
-  /* Delete the app's LVGL screen FIRST: this fires LV_EVENT_DELETE on
-   * every widget, releasing the JS callbacks they hold, so no
-   * trampoline can fire into a freed JS context afterwards.
+  /* Restore the home screen FIRST so it becomes the active screen again
+   * before we delete the app screen.  Deleting the active screen would
+   * leave the display with no active screen until the next screen_load.
+   */
+
+  if (g_running.prev != NULL)
+    {
+      lv_obj_remove_flag(g_running.prev, LV_OBJ_FLAG_HIDDEN);
+      lv_screen_load(g_running.prev);
+      g_running.prev = NULL;
+    }
+
+  /* Delete the app's LVGL screen: this fires LV_EVENT_DELETE on every
+   * widget, releasing the JS callbacks they hold, so no trampoline can
+   * fire into a freed JS context afterwards.  lv_obj_delete() handles
+   * group removal and indev focus reset internally.
    */
 
   if (g_running.screen != NULL)
     {
-      if (group != NULL)
-        {
-          lv_group_remove_obj(g_running.screen);
-        }
-
       lv_obj_delete(g_running.screen);
       g_running.screen = NULL;
     }
@@ -283,13 +301,6 @@ void qapp_stop(void)
     {
       hd_qjs_app_stop(g_running.js);
       g_running.js = NULL;
-    }
-
-  if (g_running.prev != NULL)
-    {
-      lv_obj_remove_flag(g_running.prev, LV_OBJ_FLAG_HIDDEN);
-      lv_screen_load(g_running.prev);
-      g_running.prev = NULL;
     }
 
   _info("qapp: stopped\n");

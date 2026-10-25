@@ -47,7 +47,7 @@
 #define NV3007_SPI_BUS       0     /* rk3506_spibus_initialize() index    */
 
 #ifndef NV3007_SPI_FREQ
-#  define NV3007_SPI_FREQ    12000000
+#  define NV3007_SPI_FREQ    24000000  /* 24 MHz: 2x speedup over the default 12 MHz */
 #endif
 
 /* SPI mode.  MODE 0 (CPOL=0 / CPHA=0) is the mode verified by the upstream

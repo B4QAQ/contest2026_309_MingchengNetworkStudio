@@ -3,13 +3,20 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Two external push buttons on J9, wired to the LVGL default group as a
- * keypad input device with short/long press discrimination:
+ * Two external push buttons on J9, wired to the LVGL default group as an
+ * encoder input device with short/long press discrimination:
  *
  *   button 1  J9-33 = GPIO1_D1 (VO_LCDC_D2 position; RGB LCD not used)
- *             short = LV_KEY_PREV (UP)   long = LV_KEY_ENTER (OK)
+ *             short = LV_KEY_LEFT  (prev / left)  long = LV_KEY_ENTER (OK)
  *   button 2  J9-32 = GPIO1_D2 (VO_LCDC_D1 position; RGB LCD not used)
- *             short = LV_KEY_NEXT (DOWN) long = LV_KEY_ESC   (BACK)
+ *             short = LV_KEY_RIGHT (next / right) long = LV_KEY_ESC   (BACK)
+ *
+ * Registered as LV_INDEV_TYPE_ENCODER: LVGL's encoder driver turns
+ * LV_KEY_LEFT/RIGHT into encoder steps, which move focus in navigate
+ * mode and send LV_KEY_LEFT/RIGHT to the focused object in edit mode -
+ * exactly what a keyboard (buttonmatrix) needs.  LVGL's keypad driver
+ * unconditionally exits edit mode on NEXT/PREV, so it cannot drive a
+ * keyboard with only two buttons.
  *
  * Both pins are active low (button shorts the pad to GND) with the SoC
  * internal pull-up enabled, so no external pull resistor is required.
@@ -210,8 +217,6 @@ static bool btn_poll(struct rk3506_btn_s *btn, uint32_t *key,
 static void rk3506_btn_read(lv_indev_t *indev, lv_indev_data_t *data)
 {
   unsigned int i;
-  lv_group_t *group = lv_group_get_default();
-  bool editing = (group != NULL) && lv_group_get_editing(group);
 
   (void)indev;
 
@@ -227,25 +232,6 @@ static void rk3506_btn_read(lv_indev_t *indev, lv_indev_data_t *data)
 
       if (btn_poll(&g_btn[i], &key, &state))
         {
-          /* In edit mode (e.g. keyboard focused), translate PREV/NEXT
-           * to LEFT/RIGHT so the object (buttonmatrix) can navigate
-           * its internal buttons.  LVGL's keypad driver unconditionally
-           * exits edit mode on PREV/NEXT, so we must send LEFT/RIGHT
-           * instead - those are forwarded to the object unchanged.
-           */
-
-          if (editing && state == LV_INDEV_STATE_PRESSED)
-            {
-              if (key == LV_KEY_PREV)
-                {
-                  key = LV_KEY_LEFT;
-                }
-              else if (key == LV_KEY_NEXT)
-                {
-                  key = LV_KEY_RIGHT;
-                }
-            }
-
           data->key   = key;
           data->state = state;
           return;
@@ -278,10 +264,10 @@ int hd_rk3506_lv_port_indev_init(void)
   lv_group_t *group;
 
   g_btn[0].gpin      = BTN1_GPIN;
-  g_btn[0].short_key = LV_KEY_PREV;    /* UP / LEFT in edit mode   */
+  g_btn[0].short_key = LV_KEY_LEFT;    /* UP / prev in nav, left in edit  */
   g_btn[0].long_key  = LV_KEY_ENTER;   /* OK   */
   g_btn[1].gpin      = BTN2_GPIN;
-  g_btn[1].short_key = LV_KEY_NEXT;    /* DOWN / RIGHT in edit mode*/
+  g_btn[1].short_key = LV_KEY_RIGHT;   /* DOWN / next in nav, right in edit*/
   g_btn[1].long_key  = LV_KEY_ESC;     /* BACK */
 
   if (rk3506_gpio_config(BTN1_GPIN,
@@ -318,12 +304,12 @@ int hd_rk3506_lv_port_indev_init(void)
       return -1;
     }
 
-  lv_indev_set_type(indev, LV_INDEV_TYPE_KEYPAD);
+  lv_indev_set_type(indev, LV_INDEV_TYPE_ENCODER);
   lv_indev_set_read_cb(indev, rk3506_btn_read);
   lv_indev_set_group(indev, group);
 
-  _info("BTN: keypad indev registered "
-        "(btn1=J9-33 short UP long OK, btn2=J9-32 short DOWN long BACK)\n");
+  _info("BTN: encoder indev registered "
+        "(btn1=J9-33 short LEFT long OK, btn2=J9-32 short RIGHT long BACK)\n");
   return 0;
 }
 
