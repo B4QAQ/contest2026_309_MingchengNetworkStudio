@@ -74,7 +74,7 @@
 
 #include "rk3506_cru.h"
 #include "rk3506_iomux.h"
-#include "rk3506_gpio.h"
+#include "drv/gpio/rk3506_gpio.h"
 #include "rk3506_gmac_hal.h"
 
 /****************************************************************************

@@ -50,7 +50,7 @@
 #include "hardware/rk3506_memorymap.h"
 #include "rk3506_pinctrl.h"
 #include "rk3506_cru.h"
-#include "rk3506_gpio.h"
+#include "drv/gpio/rk3506_gpio.h"
 #include "rk3506_irq.h"
 #include "rk3506_register.h"
 

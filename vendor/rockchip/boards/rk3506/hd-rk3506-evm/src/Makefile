@@ -25,6 +25,12 @@ include $(TOPDIR)/Make.defs
 CSRCS = hd_rk3506_boardinit.c
 CSRCS += hd_rk3506_appinit.c
 CSRCS += hd_rk3506_bringup.c
+CSRCS += hd_rk3506_boot.c
+CSRCS += hd_rk3506_leds.c
+
+# Temporary bringup diagnostic dump (RM_IO/clock/iomux/USB-PHY readback)
+
+CSRCS += hd_rk3506_diag.c
 
 ifeq ($(CONFIG_LCD_NV3007),y)
   CSRCS += hd_rk3506_nv3007.c
@@ -40,7 +46,7 @@ endif
 
 ifeq ($(CONFIG_ETC_ROMFS),y)
   RCSRCS = etc/init.d/rc.sysinit etc/init.d/rcS
-  RCRAWS = etc/group etc/passwd
+  RCRAWS = etc/group etc/passwd etc/net.conf etc/ssl/curl/ca-certificates.crt
 endif
 
 include $(TOPDIR)/boards/Board.mk

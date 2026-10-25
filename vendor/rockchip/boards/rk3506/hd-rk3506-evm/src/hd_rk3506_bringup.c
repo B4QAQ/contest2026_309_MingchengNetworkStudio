@@ -41,7 +41,7 @@
 
 #include "rk3506_usbhost.h"
 #include "rk3506_i2c.h"
-#include "rk3506_spi.h"
+#include "drv/spi/rk3506_spi.h"
 #include "rk3506_spinand.h"
 #include "rk3506_cru.h"
 #include "rk3506_iomux.h"

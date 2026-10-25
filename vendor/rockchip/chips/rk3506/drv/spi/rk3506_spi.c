@@ -50,7 +50,7 @@
 #include <nuttx/kmalloc.h>
 
 #include "hardware/rk3506_memorymap.h"
-#include "rk3506_spi.h"
+#include "drv/spi/rk3506_spi.h"
 #include "rk3506_cru.h"
 #include "rk3506_register.h"
 

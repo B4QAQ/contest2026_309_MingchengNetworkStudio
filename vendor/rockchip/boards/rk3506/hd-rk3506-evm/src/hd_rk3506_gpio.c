@@ -40,7 +40,7 @@
 #include <nuttx/ioexpander/gpio.h>
 #include <nuttx/ioexpander/ioexpander.h>
 
-#include "rk3506_gpio.h"
+#include "drv/gpio/rk3506_gpio.h"
 
 #ifdef CONFIG_IOEXPANDER
 

@@ -38,7 +38,24 @@ set(SRCS
 
 list(APPEND SRCS rk3506_pinctrl.c)
 list(APPEND SRCS rk3506_cru.c)
-list(APPEND SRCS rk3506_gpio.c)
+
+# GPIO driver (drv/gpio/)
+
+if(CONFIG_RK3506_GPIO)
+  list(APPEND SRCS drv/gpio/rk3506_gpio.c)
+endif()
+
+# SPI driver (drv/spi/)
+
+if(CONFIG_RK3506_SPI)
+  list(APPEND SRCS drv/spi/rk3506_spi.c)
+endif()
+
+# PWM driver (drv/pwm/)
+
+if(CONFIG_RK3506_PWM)
+  list(APPEND SRCS drv/pwm/rk3506_pwm.c)
+endif()
 
 if(CONFIG_RK3506_I2C)
   list(APPEND SRCS rk3506_i2c.c)
@@ -46,10 +63,6 @@ endif()
 
 if(CONFIG_RK3506_USBHOST)
   list(APPEND SRCS rk3506_usbhost.c)
-endif()
-
-if(CONFIG_RK3506_SPI)
-  list(APPEND SRCS rk3506_spi.c)
 endif()
 
 if(CONFIG_RK3506_SPINAND OR CONFIG_RK3506_FSPI OR CONFIG_RK3506_PWM OR CONFIG_RK3506_SARADC OR CONFIG_RK3506_CAN OR CONFIG_RK3506_WDT OR CONFIG_RK3506_GMAC0)
@@ -66,10 +79,6 @@ endif()
 
 if(CONFIG_RK3506_SPINAND_FSPI)
   list(APPEND SRCS rk3506_spinand_fspi.c)
-endif()
-
-if(CONFIG_RK3506_PWM)
-  list(APPEND SRCS rk3506_pwm.c)
 endif()
 
 if(CONFIG_RK3506_SARADC)
@@ -103,4 +112,8 @@ endif()
 
 target_sources(arch PRIVATE ${SRCS})
 
-target_include_directories(arch PRIVATE ${NUTTX_CHIP_ABS_DIR}/include)
+target_include_directories(arch PRIVATE ${NUTTX_CHIP_ABS_DIR}/include
+                                        ${NUTTX_CHIP_ABS_DIR}/hardware
+                                        ${NUTTX_CHIP_ABS_DIR}/drv/gpio
+                                        ${NUTTX_CHIP_ABS_DIR}/drv/spi
+                                        ${NUTTX_CHIP_ABS_DIR}/drv/pwm)

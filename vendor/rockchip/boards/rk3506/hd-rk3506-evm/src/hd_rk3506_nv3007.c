@@ -41,8 +41,8 @@
 #include <nuttx/video/fb.h>
 #include <nuttx/signal.h>
 
-#include "rk3506_spi.h"
-#include "rk3506_gpio.h"
+#include "drv/spi/rk3506_spi.h"
+#include "drv/gpio/rk3506_gpio.h"
 #include "rk3506_pinctrl.h"
 #include "rk3506_register.h"
 #include "hardware/rk3506_memorymap.h"
