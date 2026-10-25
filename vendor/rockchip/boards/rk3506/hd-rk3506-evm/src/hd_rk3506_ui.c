@@ -43,6 +43,7 @@
 #include <lvgl/lvgl.h>
 
 #include "rk3506_gmac0.h"
+#include "hd_rk3506_qapp.h"
 
 #if defined(CONFIG_GRAPHICS_LVGL) && defined(CONFIG_HD_RK3506_UI)
 
@@ -65,7 +66,8 @@
 #define UI_PAGE_CMD     1
 #define UI_PAGE_TEST    2
 #define UI_PAGE_INFO    3
-#define UI_NPAGES       4
+#define UI_PAGE_APPS    4
+#define UI_NPAGES       5
 
 /* Palette */
 
@@ -92,6 +94,10 @@ static lv_obj_t *g_cmd_ta;
 static lv_obj_t *g_cmd_result;
 static lv_obj_t *g_test_lbl[4];
 static lv_obj_t *g_info_uptime;
+static lv_obj_t *g_apps_list;
+
+static void ui_apps_fill(void);
+static void ui_build_apps(lv_obj_t *page);
 
 /****************************************************************************
  * Private Functions - styling helpers
@@ -381,6 +387,11 @@ static void ui_show_page(int idx)
     {
       ui_refresh_cb(NULL);
     }
+
+  if (idx == UI_PAGE_APPS)
+    {
+      ui_apps_fill();
+    }
 }
 
 static void ui_menu_cb(lv_event_t *e)
@@ -595,6 +606,108 @@ static void ui_build_info(lv_obj_t *page)
 }
 
 /****************************************************************************
+ * Apps page: list installed quick apps, Run / Del per row.  The list is
+ * rebuilt every time the page is shown (ui_apps_fill from ui_show_page).
+ * Buttons carry the app index in user data; the path/name is looked up
+ * from the snapshot taken at fill time so a stale row can never run the
+ * wrong file.
+ ****************************************************************************/
+
+static struct qapp_info_s g_apps[QAPP_MAX];
+static int                g_apps_count;
+
+static void ui_apps_run_cb(lv_event_t *e)
+{
+  int idx = (int)(intptr_t)lv_event_get_user_data(e);
+
+  if (idx >= 0 && idx < g_apps_count)
+    {
+      qapp_run(g_apps[idx].path);
+    }
+}
+
+static void ui_apps_del_cb(lv_event_t *e)
+{
+  int idx = (int)(intptr_t)lv_event_get_user_data(e);
+
+  if (idx >= 0 && idx < g_apps_count && !g_apps[idx].builtin)
+    {
+      qapp_delete(g_apps[idx].name);
+      ui_apps_fill();
+    }
+}
+
+static void ui_apps_fill(void)
+{
+  int i;
+
+  lv_obj_clean(g_apps_list);
+  g_apps_count = qapp_list(g_apps, QAPP_MAX);
+
+  if (g_apps_count == 0)
+    {
+      lv_obj_t *lbl = ui_make_label(g_apps_list,
+                                    "no apps - adb push / qapp install",
+                                    &lv_font_montserrat_12, UI_COL_DIM);
+      lv_obj_set_pos(lbl, 0, 0);
+      return;
+    }
+
+  for (i = 0; i < g_apps_count; i++)
+    {
+      lv_obj_t *name;
+      lv_obj_t *btn;
+      lv_obj_t *lbl;
+      int y = i * 30;
+
+      name = ui_make_label(g_apps_list, g_apps[i].name,
+                           &lv_font_montserrat_12,
+                           g_apps[i].builtin ? UI_COL_DIM : UI_COL_TEXT);
+      lv_obj_set_pos(name, 0, y + 6);
+
+      btn = lv_button_create(g_apps_list);
+      lv_obj_set_size(btn, 44, 26);
+      lv_obj_set_pos(btn, UI_CONTENT_W - 96, y);
+      ui_style_button(btn);
+      lv_obj_add_event_cb(btn, ui_apps_run_cb, LV_EVENT_CLICKED,
+                          (void *)(intptr_t)i);
+      lbl = lv_label_create(btn);
+      lv_label_set_text(lbl, LV_SYMBOL_PLAY);
+      lv_obj_center(lbl);
+      lv_group_add_obj(lv_group_get_default(), btn);
+
+      if (!g_apps[i].builtin)
+        {
+          btn = lv_button_create(g_apps_list);
+          lv_obj_set_size(btn, 44, 26);
+          lv_obj_set_pos(btn, UI_CONTENT_W - 48, y);
+          ui_style_button(btn);
+          lv_obj_add_event_cb(btn, ui_apps_del_cb, LV_EVENT_CLICKED,
+                              (void *)(intptr_t)i);
+          lbl = lv_label_create(btn);
+          lv_label_set_text(lbl, LV_SYMBOL_TRASH);
+          lv_obj_center(lbl);
+          lv_group_add_obj(lv_group_get_default(), btn);
+        }
+    }
+}
+
+static void ui_build_apps(lv_obj_t *page)
+{
+  lv_obj_t *title = ui_make_label(page, "QuickJS apps",
+                                  &lv_font_montserrat_12, UI_COL_DIM);
+  lv_obj_set_pos(title, 0, 0);
+
+  g_apps_list = lv_obj_create(page);
+  lv_obj_set_size(g_apps_list, UI_CONTENT_W, UI_SCR_H - 30);
+  lv_obj_set_pos(g_apps_list, 0, 18);
+  lv_obj_set_style_bg_opa(g_apps_list, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(g_apps_list, 0, 0);
+  lv_obj_set_style_pad_all(g_apps_list, 0, 0);
+  lv_obj_remove_flag(g_apps_list, LV_OBJ_FLAG_SCROLLABLE);
+}
+
+/****************************************************************************
  * Name: hd_ui_main
  ****************************************************************************/
 
@@ -605,7 +718,8 @@ int hd_ui_main(int argc, char *argv[])
       LV_SYMBOL_HOME,
       LV_SYMBOL_KEYBOARD,
       LV_SYMBOL_OK,
-      LV_SYMBOL_LIST
+      LV_SYMBOL_LIST,
+      LV_SYMBOL_PLAY
     };
 
   lv_obj_t *scr;
@@ -669,6 +783,7 @@ int hd_ui_main(int argc, char *argv[])
   ui_build_cmd(g_pages[UI_PAGE_CMD]);
   ui_build_test(g_pages[UI_PAGE_TEST]);
   ui_build_info(g_pages[UI_PAGE_INFO]);
+  ui_build_apps(g_pages[UI_PAGE_APPS]);
 
   ui_show_page(UI_PAGE_HOME);
 

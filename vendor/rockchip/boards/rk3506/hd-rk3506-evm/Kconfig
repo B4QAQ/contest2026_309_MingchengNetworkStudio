@@ -73,7 +73,7 @@ config HD_RK3506_BTN_OK_PIN
 config HD_RK3506_UI
 	bool "hd_ui home screen (428x142 cards + menu UI)"
 	default n
-	depends on GRAPHICS_LVGL && HD_RK3506_LV_BUTTONS
+	depends on GRAPHICS_LVGL && HD_RK3506_LV_BUTTONS && INTERPRETERS_QUICKJS
 	---help---
 		The board home screen for the 428x142 landscape panel: four
 		live status cards (CPU uptime / heap MEM / eth0 IP / USB

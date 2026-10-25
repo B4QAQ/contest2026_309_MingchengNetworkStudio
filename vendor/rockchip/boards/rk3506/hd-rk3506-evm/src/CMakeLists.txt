@@ -54,7 +54,8 @@ if(CONFIG_HD_RK3506_UI)
     ${NUTTX_APPS_DIR}/include
     ${NUTTX_CHIP_ABS_DIR}
     SRCS
-    hd_rk3506_ui.c)
+    hd_rk3506_ui.c
+    hd_rk3506_qapp.c)
 endif()
 
 # btn: one-shot raw pad-level readout for the two J9 buttons
@@ -162,6 +163,9 @@ nuttx_add_romfs(
   # /etc/ssl/curl/ca-certificates.crt).  Shipped as a raw file so it is
   # copied verbatim into the romfs.
   etc/ssl/curl/ca-certificates.crt
+  # Built-in quick-app demo (QuickJS), listed by the LVGL apps page
+  # alongside user apps under /data/apps/.
+  etc/apps/hello.js
   PATH
   ${CMAKE_CURRENT_LIST_DIR}/etc)
 

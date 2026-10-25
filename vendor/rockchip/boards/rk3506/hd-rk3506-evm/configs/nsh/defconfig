@@ -312,7 +312,13 @@ CONFIG_EXAMPLES_LVGL_HOMEPAGE=y
 #---------------------------------------------------------------------------
 CONFIG_INTERPRETERS_MINIBASIC=y
 CONFIG_INTERPRETERS_QUICKJS=y
-CONFIG_INTERPRETERS_QUICKJS_MINI=y
+# Full interpreter (official qjs.c + quickjs-libc): std/os modules,
+# file I/O from JS - required by the /data/apps quick-app system.
+CONFIG_INTERPRETERS_QUICKJS_FULL=y
+# Full qjs + quickjs-libc needs far more stack than the 8 KiB default
+# (deep parser recursion, repl.c line editing); 32 KiB is the usual
+# upstream-full-interpreter setting.
+CONFIG_INTERPRETERS_QUICKJS_STACKSIZE=32768
 CONFIG_INTERPRETERS_LUA=y
 
 #---------------------------------------------------------------------------

@@ -83,3 +83,8 @@ hd_ui &
 # netcfg so DHCP is at least underway; the listen socket works with no
 # carrier yet.
 adbd &
+
+# QuickJS quick-app store: user apps live under /data/apps/<name>/
+# (app.js entry), built-in demos ship in romfs /etc/apps/.  Create the
+# data-side root so adb push / qapp install have a place to land.
+mkdir -p /data/apps
