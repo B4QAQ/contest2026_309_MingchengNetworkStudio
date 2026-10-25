@@ -39,7 +39,8 @@ static uint32_t btn_getreg(uintptr_t addr)
 
 static void btn_dump_pin(const char *name, uint8_t pin)
 {
-  uint32_t iomux_reg = 0x10u + ((pin & 7u) >= 4u ? 4u : 0u);
+  uint32_t iomux_reg = (uint32_t)(pin / 8u) * 0x08u +
+                       (((pin % 8u) >= 4u) ? 4u : 0u);
   uint32_t iomux_bit = (uint32_t)(pin % 4u) * 4u;
   uint32_t pull_reg  = 0x200u + (uint32_t)(pin / 8u) * 4u;
   uint32_t pull_bit  = (uint32_t)(pin % 8u) * 2u;
@@ -72,8 +73,9 @@ int btn_main(int argc, char *argv[])
   (void)argc;
   (void)argv;
 
-  btn_dump_pin("NEXT J9-18 GPIO0_C2", 18);
-  btn_dump_pin("OK   J9-20 GPIO0_C4", 20);
+  btn_dump_pin("NEXT J9-18 GPIO0_C2 (RM_IO)", 18);
+  btn_dump_pin("OK   J9-20 GPIO0_C4 (RM_IO)", 20);
+  btn_dump_pin("REF  J9-31 GPIO0_B0 (plain)", 8);
   printf("(mux 0=GPIO, pull 1=up; hold a button and re-run to watch "
          "EXT_PORT flip)\n");
   return 0;
