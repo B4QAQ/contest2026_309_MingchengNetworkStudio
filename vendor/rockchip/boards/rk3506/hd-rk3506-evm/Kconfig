@@ -50,24 +50,25 @@ config HD_RK3506_LV_BUTTONS
 		this board.
 
 config HD_RK3506_BTN_NEXT_PIN
-	int "GPIO0 linear pin number of the 'next' button (J9-18 = GPIO0_C2 = 18)"
-	default 18
+	int "Global GPIO number of the 'next' button (J9-33 = GPIO1_D1 = 57)"
+	default 57
 	depends on HD_RK3506_LV_BUTTONS
 	---help---
-		RK3506_GPIO_PIN() uses the linear 0..31 numbering inside a
-		bank: A0..A7 = 0..7, B0..B7 = 8..15, C0..C7 = 16..23,
-		D0..D7 = 24..31.  J9-18 is GPIO0_C2, i.e. pin 18 (NOT 2 -
-		pin 2 is GPIO0_A2, a different pad).
+		Global GPIO number, bank*32 + linear pin (A=0..7, B=8..15,
+		C=16..23, D=24..31) - the same formula the HD board doc
+		uses.  J9-33 is GPIO1_D1 (VO_LCDC_D2 position; the RGB LCD
+		is unused), i.e. 1*32 + 25 = 57.  Plain non-RM_IO pad: the
+		RM_IO pads on J9 (CAN/UART positions, e.g. GPIO0_C2/C4)
+		read back stuck regardless of the pad level, so both
+		buttons live on plain GPIO pins.
 
 config HD_RK3506_BTN_OK_PIN
-	int "GPIO0 linear pin number of the 'ok' button (J9-31 = GPIO0_B0 = 8)"
-	default 8
+	int "Global GPIO number of the 'ok' button (J9-32 = GPIO1_D2 = 58)"
+	default 58
 	depends on HD_RK3506_LV_BUTTONS
 	---help---
-		J9-31 is GPIO0_B0 (SAI1_MCLK position, SAI1 unused), i.e.
-		linear pin 8.  This is a plain non-RM_IO pad: J9-20
-		(GPIO0_C4, rm_io20) read back stuck regardless of the pad
-		level, which is why the button lives here instead.
+		J9-32 is GPIO1_D2 (VO_LCDC_D1 position, unused), i.e.
+		1*32 + 26 = 58.  Adjacent to the 'next' button on J9-33.
 
 config HD_RK3506_UI
 	bool "hd_ui home screen (428x142 cards + menu UI)"

@@ -6,9 +6,9 @@
  * Two external push buttons on J9, wired to the LVGL default group as a
  * keypad input device:
  *
- *   "next"  J9-18 = GPIO0_C2  (CAN1_RX position; CAN is not used)
+ *   "next"  J9-33 = GPIO1_D1  (VO_LCDC_D2 position; RGB LCD not used)
  *           LV_KEY_NEXT  - move focus to the next widget
- *   "ok"    J9-31 = GPIO0_B0  (SAI1_MCLK position; SAI1 is not used)
+ *   "ok"    J9-32 = GPIO1_D2  (VO_LCDC_D1 position; RGB LCD not used)
  *           LV_KEY_ENTER - activate the focused widget
  *
  * Both pins are active low (button shorts the pad to GND) with the SoC
@@ -17,11 +17,12 @@
  * which runs from the existing lv_timer task (~30 Hz): no IRQ or extra
  * thread is involved.
  *
- * Physical mapping comes from the HD board J9 header table
- * (HD-RK3506-EVM底板数据手册: J9-18 = CAN1_RX = GPIO0_C2, J9-31 =
- * SAI1_MCLK = GPIO0_B0).  The original OK on J9-20 (GPIO0_C4, rm_io20)
- * never reached the GPIO block input path on the desk unit, so the
- * button moved to the plain non-RM_IO pad.
+ * Both pads are plain non-RM_IO GPIOs.  The RM_IO pads on J9 (CAN/UART
+ * positions, GPIO0_C2/C4 on J9-18/20) were tried first and read back
+ * stuck regardless of the pad level - the RM_IO matrix does not pass
+ * the pad through to the GPIO block's EXT_PORT - so the buttons live
+ * on bank 1 D-group pins instead.  Pin numbering follows the HD board
+ * doc formula: global GPIO = bank*32 + linear pin.
  *
  ****************************************************************************/
 
@@ -42,22 +43,20 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-/* Both keys live in GPIO bank 0 (see the pin table in the file header). */
-
-#define BTN_BANK                 0
+/* The Kconfig values are already global GPIO numbers (bank*32 + pin),
+ * which is exactly the packed RK3506_GPIO_PIN() encoding.
+ */
 
 #ifndef CONFIG_HD_RK3506_BTN_NEXT_PIN
-#  define CONFIG_HD_RK3506_BTN_NEXT_PIN 18   /* GPIO0_C2 -> J9-18 */
+#  define CONFIG_HD_RK3506_BTN_NEXT_PIN 57   /* GPIO1_D1 -> J9-33 */
 #endif
 
 #ifndef CONFIG_HD_RK3506_BTN_OK_PIN
-#  define CONFIG_HD_RK3506_BTN_OK_PIN   8    /* GPIO0_B0 -> J9-31 */
+#  define CONFIG_HD_RK3506_BTN_OK_PIN   58   /* GPIO1_D2 -> J9-32 */
 #endif
 
-#define BTN_NEXT_GPIN            RK3506_GPIO_PIN(BTN_BANK, \
-                                                CONFIG_HD_RK3506_BTN_NEXT_PIN)
-#define BTN_OK_GPIN              RK3506_GPIO_PIN(BTN_BANK, \
-                                                CONFIG_HD_RK3506_BTN_OK_PIN)
+#define BTN_NEXT_GPIN            ((uint8_t)CONFIG_HD_RK3506_BTN_NEXT_PIN)
+#define BTN_OK_GPIN              ((uint8_t)CONFIG_HD_RK3506_BTN_OK_PIN)
 
 /* Active low: the pressed level on the pad is 0. */
 
@@ -196,14 +195,14 @@ int hd_rk3506_lv_port_indev_init(void)
   if (rk3506_gpio_config(BTN_NEXT_GPIN,
                          RK3506_GPIO_INPUT | RK3506_GPIO_PULL_UP) < 0)
     {
-      _err("BTN: GPIO0_C2 (J9-18) input config failed\n");
+      _err("BTN: GPIO1_D1 (J9-33) input config failed\n");
       return -1;
     }
 
   if (rk3506_gpio_config(BTN_OK_GPIN,
                          RK3506_GPIO_INPUT | RK3506_GPIO_PULL_UP) < 0)
     {
-      _err("BTN: GPIO0_B0 (J9-31) input config failed\n");
+      _err("BTN: GPIO1_D2 (J9-32) input config failed\n");
       return -1;
     }
 
@@ -231,8 +230,8 @@ int hd_rk3506_lv_port_indev_init(void)
   lv_indev_set_read_cb(indev, rk3506_btn_read);
   lv_indev_set_group(indev, group);
 
-  _info("BTN: keypad indev registered (next=GPIO0_C2/J9-18, "
-        "ok=GPIO0_B0/J9-31, active low)\n");
+  _info("BTN: keypad indev registered (next=GPIO1_D1/J9-33, "
+        "ok=GPIO1_D2/J9-32, active low)\n");
   return 0;
 }
 
