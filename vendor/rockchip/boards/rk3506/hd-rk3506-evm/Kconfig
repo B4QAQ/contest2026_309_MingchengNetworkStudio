@@ -50,14 +50,21 @@ config HD_RK3506_LV_BUTTONS
 		this board.
 
 config HD_RK3506_BTN_NEXT_PIN
-	int "GPIO0 pin number of the 'next' button (J9-18 = 2)"
-	default 2
+	int "GPIO0 linear pin number of the 'next' button (J9-18 = GPIO0_C2 = 18)"
+	default 18
 	depends on HD_RK3506_LV_BUTTONS
+	---help---
+		RK3506_GPIO_PIN() uses the linear 0..31 numbering inside a
+		bank: A0..A7 = 0..7, B0..B7 = 8..15, C0..C7 = 16..23,
+		D0..D7 = 24..31.  J9-18 is GPIO0_C2, i.e. pin 18 (NOT 2 -
+		pin 2 is GPIO0_A2, a different pad).
 
 config HD_RK3506_BTN_OK_PIN
-	int "GPIO0 pin number of the 'ok' button (J9-20 = 4)"
-	default 4
+	int "GPIO0 linear pin number of the 'ok' button (J9-20 = GPIO0_C4 = 20)"
+	default 20
 	depends on HD_RK3506_LV_BUTTONS
+	---help---
+		J9-20 is GPIO0_C4, i.e. linear pin 20 (NOT 4 = GPIO0_A4).
 
 config HD_RK3506_UI
 	bool "hd_ui home screen (428x142 cards + menu UI)"

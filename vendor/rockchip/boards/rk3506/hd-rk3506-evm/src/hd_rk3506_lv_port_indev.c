@@ -45,11 +45,11 @@
 #define BTN_BANK                 0
 
 #ifndef CONFIG_HD_RK3506_BTN_NEXT_PIN
-#  define CONFIG_HD_RK3506_BTN_NEXT_PIN 2    /* GPIO0_C2 -> J9-18 */
+#  define CONFIG_HD_RK3506_BTN_NEXT_PIN 18   /* GPIO0_C2 -> J9-18 */
 #endif
 
 #ifndef CONFIG_HD_RK3506_BTN_OK_PIN
-#  define CONFIG_HD_RK3506_BTN_OK_PIN   4    /* GPIO0_C4 -> J9-20 */
+#  define CONFIG_HD_RK3506_BTN_OK_PIN   20   /* GPIO0_C4 -> J9-20 */
 #endif
 
 #define BTN_NEXT_GPIN            RK3506_GPIO_PIN(BTN_BANK, \
