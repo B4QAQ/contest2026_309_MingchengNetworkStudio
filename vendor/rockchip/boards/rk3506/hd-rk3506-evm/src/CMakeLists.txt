@@ -52,10 +52,13 @@ if(CONFIG_HD_RK3506_UI)
     100
     INCLUDE_DIRECTORIES
     ${NUTTX_APPS_DIR}/include
+    ${NUTTX_APPS_DIR}/interpreters/quickjs/quickjs
     ${NUTTX_CHIP_ABS_DIR}
     SRCS
     hd_rk3506_ui.c
-    hd_rk3506_qapp.c)
+    hd_rk3506_qapp.c
+    hd_rk3506_qjs_rt.c
+    hd_rk3506_lv_binding.c)
 endif()
 
 # btn: one-shot raw pad-level readout for the two J9 buttons

@@ -26,6 +26,8 @@ struct qapp_info_s
 
 int qapp_list(struct qapp_info_s *apps, int max);
 int qapp_run(const char *path);
+void qapp_stop(void);
+bool qapp_active(void);
 int qapp_delete(const char *name);
 int qapp_install_url(const char *url);
 

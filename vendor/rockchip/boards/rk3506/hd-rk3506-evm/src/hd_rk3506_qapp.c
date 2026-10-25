@@ -15,8 +15,11 @@
  *   - qapp install <url>                          (curl a .js file)
  *   - qapp run <name> / qapp del <name> / qapp list
  *
- * Running an app spawns `qjs <path>` detached so the LVGL UI and the
- * NSH console stay responsive; console.log lands on the syslog.
+ * Running an app starts an in-process QuickJS runtime ON THE LVGL
+ * TASK: the JS event pump is an lv_timer, so JS code executes
+ * synchronously with LVGL and can draw via the `lv` global (see
+ * hd_rk3506_lv_binding.c).  The app gets a fresh screen; a long BACK
+ * press (button 2) stops it and returns to the home screen.
  *
  ****************************************************************************/
 
@@ -30,7 +33,12 @@
 #include <errno.h>
 #include <sys/stat.h>
 
+#include <debug.h>
+
+#include <lvgl/lvgl.h>
+
 #include "hd_rk3506_qapp.h"
+#include "hd_rk3506_qjs_rt.h"
 
 #if defined(CONFIG_INTERPRETERS_QUICKJS) && defined(CONFIG_HD_RK3506_UI)
 
@@ -136,14 +144,152 @@ int qapp_list(struct qapp_info_s *apps, int max)
   return count;
 }
 
-/* Spawn `qjs <path>` detached.  Returns 0 on success. */
+/****************************************************************************
+ * In-process app runner.  One app at a time: starting a second app
+ * stops the first.  The app draws on a fresh screen which replaces the
+ * home screen for the app's lifetime.
+ ****************************************************************************/
+
+static struct
+{
+  struct hd_qjs_app_s *js;       /* QuickJS runtime handle            */
+  lv_obj_t            *screen;   /* app's screen                      */
+  lv_obj_t            *prev;     /* screen to restore on stop         */
+  lv_timer_t          *pump;     /* JS job pump (lv_timer)            */
+} g_running;
+
+static void qapp_pump_cb(lv_timer_t *t)
+{
+  (void)t;
+
+  if (g_running.js != NULL)
+    {
+      hd_qjs_app_pump(g_running.js);
+    }
+}
+
+/* LV_EVENT_KEY on the app screen: long BACK (LV_KEY_ESC) stops the
+ * app.  The screen is in the default group and focused, and LVGL
+ * bubbles KEY events from any focused child up to the screen, so this
+ * fires regardless of which widget holds focus.
+ */
+
+static void qapp_key_cb(lv_event_t *e)
+{
+  uint32_t key = lv_event_get_key(e);
+
+  if (key == LV_KEY_ESC)
+    {
+      qapp_stop();
+    }
+}
 
 int qapp_run(const char *path)
 {
-  char cmd[QAPP_PATH_LEN + 16];
+  lv_group_t *group = lv_group_get_default();
 
-  snprintf(cmd, sizeof(cmd), "qjs %s &", path);
-  return system(cmd) == 0 ? 0 : -1;
+  /* One app at a time. */
+
+  qapp_stop();
+
+  /* Fresh screen for the app, remember where to return. */
+
+  g_running.prev   = lv_screen_active();
+  g_running.screen = lv_obj_create(NULL);
+  if (g_running.screen == NULL)
+    {
+      return -1;
+    }
+
+  /* Hide the home screen so its group widgets are skipped by focus
+   * traversal while the app runs.
+   */
+
+  lv_obj_add_flag(g_running.prev, LV_OBJ_FLAG_HIDDEN);
+
+  g_running.js = hd_qjs_app_start(path);
+  if (g_running.js == NULL)
+    {
+      _err("qapp: failed to start %s
+", path);
+      lv_obj_remove_flag(g_running.prev, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_delete(g_running.screen);
+      g_running.screen = NULL;
+      g_running.prev   = NULL;
+      return -1;
+    }
+
+  /* ESC on the app screen stops the app. */
+
+  lv_obj_add_event_cb(g_running.screen, qapp_key_cb, LV_EVENT_KEY, NULL);
+  if (group != NULL)
+    {
+      lv_group_add_obj(group, g_running.screen);
+      lv_group_focus_obj(g_running.screen);
+    }
+
+  lv_screen_load(g_running.screen);
+
+  /* Pump JS jobs from the LVGL task. */
+
+  g_running.pump = lv_timer_create(qapp_pump_cb, 33, NULL);
+
+  _info("qapp: %s running
+", path);
+  return 0;
+}
+
+void qapp_stop(void)
+{
+  lv_group_t *group = lv_group_get_default();
+
+  if (g_running.js == NULL && g_running.screen == NULL)
+    {
+      return;
+    }
+
+  if (g_running.pump != NULL)
+    {
+      lv_timer_delete(g_running.pump);
+      g_running.pump = NULL;
+    }
+
+  /* Delete the app's LVGL screen FIRST: this fires LV_EVENT_DELETE on
+   * every widget, releasing the JS callbacks they hold, so no
+   * trampoline can fire into a freed JS context afterwards.
+   */
+
+  if (g_running.screen != NULL)
+    {
+      if (group != NULL)
+        {
+          lv_group_remove_obj(g_running.screen);
+        }
+
+      lv_obj_delete(g_running.screen);
+      g_running.screen = NULL;
+    }
+
+  if (g_running.js != NULL)
+    {
+      hd_qjs_app_stop(g_running.js);
+      g_running.js = NULL;
+    }
+
+  if (g_running.prev != NULL)
+    {
+      lv_obj_remove_flag(g_running.prev, LV_OBJ_FLAG_HIDDEN);
+      lv_screen_load(g_running.prev);
+      g_running.prev = NULL;
+    }
+
+  _info("qapp: stopped
+");
+}
+
+bool qapp_active(void)
+{
+  return g_running.js != NULL;
 }
 
 /* Delete a user app directory (recursive, best effort).  Romfs apps are
