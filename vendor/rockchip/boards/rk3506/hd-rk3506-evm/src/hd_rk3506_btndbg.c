@@ -74,8 +74,8 @@ int btn_main(int argc, char *argv[])
   (void)argv;
 
   btn_dump_pin("NEXT J9-18 GPIO0_C2 (RM_IO)", 18);
-  btn_dump_pin("OK   J9-20 GPIO0_C4 (RM_IO)", 20);
-  btn_dump_pin("REF  J9-31 GPIO0_B0 (plain)", 8);
+  btn_dump_pin("OK   J9-31 GPIO0_B0 (plain)", 8);
+  btn_dump_pin("OLD  J9-20 GPIO0_C4 (RM_IO)", 20);
   printf("(mux 0=GPIO, pull 1=up; hold a button and re-run to watch "
          "EXT_PORT flip)\n");
   return 0;

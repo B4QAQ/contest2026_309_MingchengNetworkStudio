@@ -8,7 +8,7 @@
  *
  *   "next"  J9-18 = GPIO0_C2  (CAN1_RX position; CAN is not used)
  *           LV_KEY_NEXT  - move focus to the next widget
- *   "ok"    J9-20 = GPIO0_C4  (CAN0_RX position; CAN is not used)
+ *   "ok"    J9-31 = GPIO0_B0  (SAI1_MCLK position; SAI1 is not used)
  *           LV_KEY_ENTER - activate the focused widget
  *
  * Both pins are active low (button shorts the pad to GND) with the SoC
@@ -17,9 +17,11 @@
  * which runs from the existing lv_timer task (~30 Hz): no IRQ or extra
  * thread is involved.
  *
- * Physical mapping comes from the board dtsi CAN routing
- * (vanxoak-hd-rk3506-evm-v1.dtsi: rm_io18_can1_rx = GPIO0_C2 and
- * rm_io20_can0_rx = GPIO0_C4; both CAN nodes status="disabled").
+ * Physical mapping comes from the HD board J9 header table
+ * (HD-RK3506-EVM底板数据手册: J9-18 = CAN1_RX = GPIO0_C2, J9-31 =
+ * SAI1_MCLK = GPIO0_B0).  The original OK on J9-20 (GPIO0_C4, rm_io20)
+ * never reached the GPIO block input path on the desk unit, so the
+ * button moved to the plain non-RM_IO pad.
  *
  ****************************************************************************/
 
@@ -49,7 +51,7 @@
 #endif
 
 #ifndef CONFIG_HD_RK3506_BTN_OK_PIN
-#  define CONFIG_HD_RK3506_BTN_OK_PIN   20   /* GPIO0_C4 -> J9-20 */
+#  define CONFIG_HD_RK3506_BTN_OK_PIN   8    /* GPIO0_B0 -> J9-31 */
 #endif
 
 #define BTN_NEXT_GPIN            RK3506_GPIO_PIN(BTN_BANK, \
@@ -194,16 +196,14 @@ int hd_rk3506_lv_port_indev_init(void)
   if (rk3506_gpio_config(BTN_NEXT_GPIN,
                          RK3506_GPIO_INPUT | RK3506_GPIO_PULL_UP) < 0)
     {
-      _err("BTN: GPIO0_C%u (J9-18) input config failed\n",
-           (unsigned)CONFIG_HD_RK3506_BTN_NEXT_PIN);
+      _err("BTN: GPIO0_C2 (J9-18) input config failed\n");
       return -1;
     }
 
   if (rk3506_gpio_config(BTN_OK_GPIN,
                          RK3506_GPIO_INPUT | RK3506_GPIO_PULL_UP) < 0)
     {
-      _err("BTN: GPIO0_C%u (J9-20) input config failed\n",
-           (unsigned)CONFIG_HD_RK3506_BTN_OK_PIN);
+      _err("BTN: GPIO0_B0 (J9-31) input config failed\n");
       return -1;
     }
 
@@ -231,10 +231,8 @@ int hd_rk3506_lv_port_indev_init(void)
   lv_indev_set_read_cb(indev, rk3506_btn_read);
   lv_indev_set_group(indev, group);
 
-  _info("BTN: keypad indev registered (next=GPIO0_C%u/J9-18, "
-        "ok=GPIO0_C%u/J9-20, active low)\n",
-        (unsigned)CONFIG_HD_RK3506_BTN_NEXT_PIN,
-        (unsigned)CONFIG_HD_RK3506_BTN_OK_PIN);
+  _info("BTN: keypad indev registered (next=GPIO0_C2/J9-18, "
+        "ok=GPIO0_B0/J9-31, active low)\n");
   return 0;
 }
 

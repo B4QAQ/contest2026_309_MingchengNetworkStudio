@@ -60,11 +60,14 @@ config HD_RK3506_BTN_NEXT_PIN
 		pin 2 is GPIO0_A2, a different pad).
 
 config HD_RK3506_BTN_OK_PIN
-	int "GPIO0 linear pin number of the 'ok' button (J9-20 = GPIO0_C4 = 20)"
-	default 20
+	int "GPIO0 linear pin number of the 'ok' button (J9-31 = GPIO0_B0 = 8)"
+	default 8
 	depends on HD_RK3506_LV_BUTTONS
 	---help---
-		J9-20 is GPIO0_C4, i.e. linear pin 20 (NOT 4 = GPIO0_A4).
+		J9-31 is GPIO0_B0 (SAI1_MCLK position, SAI1 unused), i.e.
+		linear pin 8.  This is a plain non-RM_IO pad: J9-20
+		(GPIO0_C4, rm_io20) read back stuck regardless of the pad
+		level, which is why the button lives here instead.
 
 config HD_RK3506_UI
 	bool "hd_ui home screen (428x142 cards + menu UI)"
