@@ -1190,7 +1190,7 @@ int rk3506_gmac0_get_stats(FAR uint64_t *rx_bytes, FAR uint64_t *tx_bytes)
       return -ENODEV;
     }
 
-#ifdef CONFIG_NET_STATISTICS
+#ifdef CONFIG_NETDEV_STATISTICS
   *rx_bytes = priv->dev.d_statistics.rx_bytes;
   *tx_bytes = priv->dev.d_statistics.tx_bytes;
 #else

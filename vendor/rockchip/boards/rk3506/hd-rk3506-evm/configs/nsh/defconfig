@@ -190,8 +190,12 @@ CONFIG_ADBD_PRODUCT_NAME="hd_rk3506_evm"
 CONFIG_ADBD_PRODUCT_MODEL="HD-RK3506-EVM"
 CONFIG_ADBD_PRODUCT_DEVICE="rk3506"
 # Cumulative per-netdev byte counters (GMAC RX/TX); the hd_ui network
-# card samples them 1 Hz to show live throughput.
+# card samples them 1 Hz to show live throughput.  NET_STATISTICS gates
+# the global /proc/net/stat stack stats, NETDEV_STATISTICS (needs
+# ARCH_HAVE_NETDEV_STATISTICS, selected by RK3506_GMAC0) grows
+# net_driver_s.d_statistics which the driver getter reads.
 CONFIG_NET_STATISTICS=y
+CONFIG_NETDEV_STATISTICS=y
 
 #---------------------------------------------------------------------------
 # File Systems

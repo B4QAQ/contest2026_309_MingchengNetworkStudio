@@ -196,6 +196,7 @@ config RK3506_GMAC0
 	bool "RK3506 GMAC0 (Synopsys DWMAC 4.20a) Ethernet"
 	default n
 	select ARCH_PHY_INTERRUPT
+	select ARCH_HAVE_NETDEV_STATISTICS
 	---help---
 		Enable the RK3506 GMAC0 Ethernet netdev ("eth0"; snps,dwmac-4.20a
 		@0xFF4C8000, IRQ66).  All hardware sequences come from the Linux
