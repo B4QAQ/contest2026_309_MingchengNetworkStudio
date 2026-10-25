@@ -68,6 +68,8 @@
 #include <nuttx/spinlock.h>
 #include <nuttx/net/ip.h>
 #include <nuttx/net/netdev.h>
+
+#include "rk3506_gmac0.h"
 #include <nuttx/cache.h>
 
 #include "hardware/rk3506_memorymap.h"
@@ -1168,6 +1170,34 @@ int rk3506_gmac0_initialize(void)
 
   ret = netdev_register(&priv->dev, NET_LL_ETHERNET);
   return ret;
+}
+
+/****************************************************************************
+ * Name: rk3506_gmac0_get_stats
+ *
+ * Description:
+ *   Copy the cumulative eth0 byte counters for board apps (flat build;
+ *   there is no standard userspace ioctl path to d_statistics).
+ *
+ ****************************************************************************/
+
+int rk3506_gmac0_get_stats(FAR uint64_t *rx_bytes, FAR uint64_t *tx_bytes)
+{
+  FAR struct rk3506_gmac0_s *priv = &g_gmac0;
+
+  if (priv->dev.d_ifup == NULL)
+    {
+      return -ENODEV;
+    }
+
+#ifdef CONFIG_NET_STATISTICS
+  *rx_bytes = priv->dev.d_statistics.rx_bytes;
+  *tx_bytes = priv->dev.d_statistics.tx_bytes;
+#else
+  *rx_bytes = 0;
+  *tx_bytes = 0;
+#endif
+  return OK;
 }
 
 #endif /* CONFIG_RK3506_GMAC0 */

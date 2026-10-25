@@ -31,6 +31,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <malloc.h>
+#include <fcntl.h>
 #include <time.h>
 #include <sys/mman.h>
 #include <sys/ioctl.h>
@@ -40,6 +41,8 @@
 #include <arpa/inet.h>
 
 #include <lvgl/lvgl.h>
+
+#include "rk3506_gmac0.h"
 
 #if defined(CONFIG_GRAPHICS_LVGL) && defined(CONFIG_HD_RK3506_UI)
 
@@ -88,6 +91,7 @@ static lv_obj_t *g_card_lbl[4];     /* value labels of the 4 cards */
 static lv_obj_t *g_cmd_ta;
 static lv_obj_t *g_cmd_result;
 static lv_obj_t *g_test_lbl[4];
+static lv_obj_t *g_info_uptime;
 
 /****************************************************************************
  * Private Functions - styling helpers
@@ -161,27 +165,59 @@ static lv_obj_t *ui_make_label(lv_obj_t *parent, const char *text,
  * Private Functions - data gathering
  ****************************************************************************/
 
-static void ui_fmt_uptime(char *buf, size_t len)
-{
-  struct timespec ts;
-  unsigned long s;
+/* CPU card: total CPU busy ratio from /proc/cpuload (" 12.3%\n", one
+ * line per CPU; single-core build -> one line).  procfs sampling is
+ * cumulative since boot, which is exactly what a glanceable card wants.
+ */
 
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  s = (unsigned long)ts.tv_sec;
-  snprintf(buf, len, "up %lu:%02lu:%02lu",
-           s / 3600, (s / 60) % 60, s % 60);
+static void ui_fmt_cpu(char *buf, size_t len)
+{
+  char line[32];
+  int fd;
+  int n;
+
+  fd = open("/proc/cpuload", O_RDONLY);
+  if (fd < 0)
+    {
+      strlcpy(buf, "n/a", len);
+      return;
+    }
+
+  n = read(fd, line, sizeof(line) - 1);
+  close(fd);
+  if (n <= 0)
+    {
+      strlcpy(buf, "n/a", len);
+      return;
+    }
+
+  line[n] = '\0';
+
+  /* Strip the trailing newline so the label stays on one line */
+
+  {
+    char *nl = strchr(line, '\n');
+
+    if (nl != NULL)
+      {
+        *nl = '\0';
+      }
+  }
+
+  strlcpy(buf, line, len);
 }
 
 static void ui_fmt_mem(char *buf, size_t len)
 {
   struct mallinfo mi = mallinfo();
+  unsigned long total = mi.uordblks + mi.fordblks;
+  unsigned int pct = (total != 0) ?
+                     (unsigned int)((100ull * mi.uordblks) / total) : 0;
 
-  snprintf(buf, len, "%uK / %uK",
-           (unsigned)(mi.uordblks / 1024),
-           (unsigned)((mi.uordblks + mi.fordblks) / 1024));
+  snprintf(buf, len, "%u%% (%uK)", pct, (unsigned)(mi.uordblks / 1024));
 }
 
-static void ui_fmt_net(char *buf, size_t len)
+static void ui_fmt_ip(char *buf, size_t len)
 {
   struct ifreq ifr;
   int fd;
@@ -212,6 +248,63 @@ static void ui_fmt_net(char *buf, size_t len)
     }
 }
 
+/* NETWORK card value label shows two lines: the eth0 IPv4 address and
+ * the instantaneous throughput, derived from the GMAC driver's
+ * cumulative byte counters sampled at the 1 Hz refresh period.
+ */
+
+static void ui_fmt_net(char *buf, size_t len, uint32_t period_ms)
+{
+  static uint64_t last_rx;
+  static uint64_t last_tx;
+  static bool primed;
+  uint64_t rx = 0;
+  uint64_t tx = 0;
+  char ip[32];
+  char rate[32];
+
+  ui_fmt_ip(ip, sizeof(ip));
+
+  if (rk3506_gmac0_get_stats(&rx, &tx) < 0 || rx == 0)
+    {
+      snprintf(buf, len, "%s\n-", ip);
+      return;
+    }
+
+  if (!primed)
+    {
+      primed  = true;
+      last_rx = rx;
+      last_tx = tx;
+      snprintf(buf, len, "%s\nrx - tx -", ip);
+      return;
+    }
+
+  {
+    uint64_t rbps = (rx - last_rx) * 1000ull / period_ms;
+    uint64_t tbps = (tx - last_tx) * 1000ull / period_ms;
+
+    last_rx = rx;
+    last_tx = tx;
+
+    if (rbps >= 1024 * 1024 || tbps >= 1024 * 1024)
+      {
+        snprintf(rate, sizeof(rate), "%u.%u/%u.%u MB/s",
+                 (unsigned)(rbps >> 20),
+                 (unsigned)(((rbps >> 10) & 0x3ff) * 10 / 1024),
+                 (unsigned)(tbps >> 20),
+                 (unsigned)(((tbps >> 10) & 0x3ff) * 10 / 1024));
+      }
+    else
+      {
+        snprintf(rate, sizeof(rate), "%u/%u KB/s",
+                 (unsigned)(rbps >> 10), (unsigned)(tbps >> 10));
+      }
+  }
+
+  snprintf(buf, len, "%s\n%s", ip, rate);
+}
+
 static void ui_fmt_usb(char *buf, size_t len)
 {
   if (access("/dev/sda", F_OK) == 0)
@@ -234,17 +327,29 @@ static void ui_refresh_cb(lv_timer_t *t)
 
   (void)t;
 
-  ui_fmt_uptime(buf, sizeof(buf));
+  ui_fmt_cpu(buf, sizeof(buf));
   lv_label_set_text(g_card_lbl[0], buf);
 
   ui_fmt_mem(buf, sizeof(buf));
   lv_label_set_text(g_card_lbl[1], buf);
 
-  ui_fmt_net(buf, sizeof(buf));
+  ui_fmt_net(buf, sizeof(buf), UI_REFRESH_MS);
   lv_label_set_text(g_card_lbl[2], buf);
 
   ui_fmt_usb(buf, sizeof(buf));
   lv_label_set_text(g_card_lbl[3], buf);
+
+  if (g_info_uptime != NULL)
+    {
+      struct timespec ts;
+      unsigned long s;
+
+      clock_gettime(CLOCK_MONOTONIC, &ts);
+      s = (unsigned long)ts.tv_sec;
+      snprintf(buf, sizeof(buf), "uptime %lu:%02lu:%02lu",
+               s / 3600, (s / 60) % 60, s % 60);
+      lv_label_set_text(g_info_uptime, buf);
+    }
 }
 
 /****************************************************************************
@@ -404,7 +509,7 @@ static void ui_test_run_cb(lv_event_t *e)
           {
             char buf[48];
 
-            ui_fmt_net(buf, sizeof(buf));
+            ui_fmt_ip(buf, sizeof(buf));
             if (strcmp(buf, "no link") != 0)
               {
                 result = "PASS";
@@ -478,6 +583,10 @@ static void ui_build_info(lv_obj_t *page)
                                 &lv_font_montserrat_12, UI_COL_TEXT);
 
   lv_obj_set_pos(lbl, 0, 0);
+
+  g_info_uptime = ui_make_label(page, "", &lv_font_montserrat_12,
+                                UI_COL_DIM);
+  lv_obj_set_pos(g_info_uptime, 0, 100);
 }
 
 /****************************************************************************

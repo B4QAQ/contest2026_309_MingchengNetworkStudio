@@ -50,6 +50,9 @@ if(CONFIG_HD_RK3506_UI)
     8192
     PRIORITY
     100
+    INCLUDE_DIRECTORIES
+    ${NUTTX_APPS_DIR}/include
+    ${NUTTX_CHIP_ABS_DIR}
     SRCS
     hd_rk3506_ui.c)
 endif()

@@ -173,11 +173,14 @@ CONFIG_SYSTEM_DD=y
 # Network ADB daemon (adb shell / push / pull over TCP :5555).
 # rcS starts `adbd &`; the TCP server binds the wildcard address, so it
 # works as soon as DHCP completes.  Shell needs PTYs and parent/child
-# task tracking.
+# task tracking.  LIBC_PRINT_EXTENSION: microADB's log shim formats
+# through %pV; without the extension every adbd message degrades to a
+# bare va_list pointer.
 CONFIG_SCHED_HAVE_PARENT=y
 CONFIG_SCHED_CHILD_STATUS=y
 CONFIG_PSEUDOTERM=y
 CONFIG_LIBC_EXECFUNCS=y
+CONFIG_LIBC_PRINT_EXTENSION=y
 CONFIG_NET_TCPBACKLOG=y
 CONFIG_SYSTEM_ADBD=y
 CONFIG_ADBD_TCP_SERVER=y
@@ -186,6 +189,9 @@ CONFIG_ADBD_FILE_SERVICE=y
 CONFIG_ADBD_PRODUCT_NAME="hd_rk3506_evm"
 CONFIG_ADBD_PRODUCT_MODEL="HD-RK3506-EVM"
 CONFIG_ADBD_PRODUCT_DEVICE="rk3506"
+# Cumulative per-netdev byte counters (GMAC RX/TX); the hd_ui network
+# card samples them 1 Hz to show live throughput.
+CONFIG_NET_STATISTICS=y
 
 #---------------------------------------------------------------------------
 # File Systems
