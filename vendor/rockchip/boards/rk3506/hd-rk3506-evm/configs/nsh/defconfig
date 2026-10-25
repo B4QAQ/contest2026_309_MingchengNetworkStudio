@@ -599,6 +599,10 @@ CONFIG_NETUTILS_IPERF=y
 # registered as /dev/led0 through the userled lower half)
 #---------------------------------------------------------------------------
 CONFIG_BOARD_CUSTOM_LEDS=y
+# ARCH_LEDS defaults y once ARCH_HAVE_LEDS is selected, but this custom
+# board provides no board_autoled_* hooks; the run LED is driven through
+# the userled lower half instead, so it must be disabled explicitly.
+# CONFIG_ARCH_LEDS is not set
 CONFIG_USERLED=y
 CONFIG_USERLED_LOWER=y
 CONFIG_HD_RK3506_LED_HEARTBEAT=y

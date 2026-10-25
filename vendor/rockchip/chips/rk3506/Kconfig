@@ -448,7 +448,9 @@ config RK3506_RPTUN
 config RK3506_MMC
 	bool "RK3506 SD/MMC host controller (dw-mshc @ 0xFF480000)"
 	default n
-	depends on MMCSD && MMCSD_SDIO
+	depends on MMCSD
+	select ARCH_HAVE_SDIO
+	select MMCSD_SDIO
 	---help---
 		Register the RK3506 Synopsys DesignWare MSHC controller
 		("rockchip,rk3506-dw-mshc", 0xFF480000, GIC SPI 86) as an
