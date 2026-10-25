@@ -38,6 +38,22 @@ if(CONFIG_GRAPHICS_LVGL)
   endif()
 endif()
 
+# hd_ui: 428x142 home screen (status cards + menu).  Registered as an
+# NSH builtin ("hd_ui") and auto-started from rcS in the background.
+# Same builtin-registration rules as netcfg: application target only,
+# never in the board SRCS list.
+if(CONFIG_HD_RK3506_UI)
+  nuttx_add_application(
+    NAME
+    hd_ui
+    STACKSIZE
+    8192
+    PRIORITY
+    100
+    SRCS
+    hd_rk3506_ui.c)
+endif()
+
 if(CONFIG_RK3506_MMC)
   list(APPEND SRCS hd_rk3506_mmc.c)
 endif()

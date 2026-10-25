@@ -59,6 +59,20 @@ config HD_RK3506_BTN_OK_PIN
 	default 4
 	depends on HD_RK3506_LV_BUTTONS
 
+config HD_RK3506_UI
+	bool "hd_ui home screen (428x142 cards + menu UI)"
+	default n
+	depends on GRAPHICS_LVGL && HD_RK3506_LV_BUTTONS
+	---help---
+		The board home screen for the 428x142 landscape panel: four
+		live status cards (CPU uptime / heap MEM / eth0 IP / USB
+		disk) on the left, a focusable menu on the right switching
+		to a command page (on-screen keyboard + system()), a
+		hardware smoke-test page (SD/USB/net/M0 PASS-FAIL) and a
+		system info page.  Navigated with the two J9 buttons
+		(NEXT moves focus, ENTER activates).  rcS starts it in the
+		background at boot.
+
 config HD_RK3506_NETCFG
 	bool "netcfg network configuration daemon"
 	default n

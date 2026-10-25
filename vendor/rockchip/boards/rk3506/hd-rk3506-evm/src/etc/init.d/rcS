@@ -72,3 +72,8 @@ ntpcstart
 # (cable replug, switch STP expiry) via the GMAC0 SIOCMIINOTIFY
 # signal.  Priority 90: below NSH so it never starves the console.
 netcfg &
+
+# Home screen UI on the NV3007 panel (status cards + menu, navigated
+# with the J9 buttons).  The LVGL display/indev are already up from
+# bringup; run detached so NSH stays interactive.
+hd_ui &
