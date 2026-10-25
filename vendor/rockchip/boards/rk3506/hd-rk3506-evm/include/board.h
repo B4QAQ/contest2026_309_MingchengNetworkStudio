@@ -47,17 +47,18 @@
 
 #define BOARD_NV3007_PIN_CS    3     /* GPIO0_A3 -> J9-14 */
 #define BOARD_NV3007_PIN_RST   8     /* GPIO0_B0 -> J9-31 */
-#define BOARD_NV3007_PIN_DC    11    /* GPIO0_B3 -> J9-30 */
+#define BOARD_NV3007_PIN_DC    6     /* GPIO0_A6 -> J9-15 */
 #define BOARD_NV3007_PIN_BL    12    /* GPIO0_B4 -> J9-29 */
 #define BOARD_NV3007_PIN_CLK   7     /* GPIO0_A7 -> J9-17 (RM_IO, fn 82) */
 #define BOARD_NV3007_PIN_MOSI  1     /* GPIO0_A1 -> J9-16 (RM_IO, fn 83) */
 
-/* LED definitions (if available) */
+/* LED definitions (if available).  Only the green run LED on GPIO1_B3
+ * is software-controlled; the red power LED is not CPU-gpio wired.
+ */
 
 #ifdef CONFIG_USERLED
-#  define BOARD_NLEDS 2
-#  define BOARD_LED_PWR 0
-#  define BOARD_LED_RUN 1
+#  define BOARD_NLEDS 1
+#  define BOARD_LED_RUN 0
 #endif
 
 /* Heartbeat LED (SDK: GPIO1_B3, active low) */
@@ -127,6 +128,10 @@ int hd_rk3506_lv_port_disp_init(void);
 
 #ifdef CONFIG_IOEXPANDER
 int hd_rk3506_gpio_initialize(void);
+#endif
+
+#ifdef CONFIG_HD_RK3506_LED_HEARTBEAT
+int hd_rk3506_led_heartbeat_start(void);
 #endif
 
 #endif /* __ASSEMBLY__ */

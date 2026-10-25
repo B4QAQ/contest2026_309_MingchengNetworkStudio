@@ -23,6 +23,18 @@ config LCD_NV3007
 		Visible window 142x428 RGB565 with a 12-column GRAM x-offset
 		(per the vendor demo).
 
+config HD_RK3506_LED_HEARTBEAT
+	bool "Linux-style heartbeat on the green run LED (GPIO1_B3)"
+	default y
+	depends on USERLED
+	---help---
+		Start a low-priority kernel thread at boot that blinks the
+		green run LED with the Linux heartbeat pattern (two short
+		flashes per second).  The run LED is active low and is NOT
+		routed to a PWM channel, so this replaces Linux's
+		default-trigger="heartbeat" in software.  The LED is still
+		reachable as /dev/led0 through the userled lower half.
+
 config HD_RK3506_NETCFG
 	bool "netcfg network configuration daemon"
 	default n

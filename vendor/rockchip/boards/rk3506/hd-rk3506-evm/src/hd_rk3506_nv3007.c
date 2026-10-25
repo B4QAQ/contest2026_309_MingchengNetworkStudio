@@ -17,7 +17,7 @@
  *   J9-16 SDA  = GPIO0_A1 / RM_IO1  <- spi0_mosi (routing fn 83)
  *   J9-14 CS   = GPIO0_A3 / RM_IO3  (GPIO output, active low)
  *   J9-31 RST  = GPIO0_B0 / RM_IO8  (GPIO output)
- *   J9-30 DC   = GPIO0_B3 / RM_IO11 (GPIO output)
+ *   J9-15 DC   = GPIO0_A6 / RM_IO6  (GPIO output)
  *   J9-29 BL   = GPIO0_B4 / RM_IO12 (GPIO output, high = lit)
  *
  * The module has NO MISO line, so register read-back (and therefore the
@@ -308,33 +308,6 @@ static void nv_pinctrl(void)
   rk3506_gpio_config(NV_GPIN_RST, RK3506_GPIO_OUTPUT | RK3506_GPIO_VALUE_HIGH);
   rk3506_gpio_config(NV_GPIN_DC,  RK3506_GPIO_OUTPUT | RK3506_GPIO_VALUE_HIGH);
   rk3506_gpio_config(NV_GPIN_BL,  RK3506_GPIO_OUTPUT | RK3506_GPIO_VALUE_LOW);
-
-  /* DIAG: verify the RMIO matrix actually connects GPIO0_A1/A7 to the
-   * pads.  If the RMIO write landed, the pad should follow the GPIO
-   * controller.  We toggle the GPIO and read back the pad level.
-   */
-
-  {
-    /* A1 and A7 are RMIO pins; we cannot drive them as GPIO without
-     * breaking the SPI routing.  Instead we verify the RMIO register
-     * values and the IOMUX nibble.
-     */
-
-    int mux_a1 = rk3506_pinctrl_get_mux(0, NV3007_PIN_SPI_MOSI);
-    int mux_a7 = rk3506_pinctrl_get_mux(0, NV3007_PIN_SPI_CLK);
-
-    _err("NV3007 RMIO: A1 mux=%d (want 7), A7 mux=%d (want 7)\n",
-         mux_a1, mux_a7);
-
-    /* Read the RMIO channel registers directly */
-
-    uint32_t sel_a1 = getreg32(RK3506_GRF_PMU_ADDR + 0x84);
-    uint32_t sel_a7 = getreg32(RK3506_GRF_PMU_ADDR + 0x9c);
-
-    _err("NV3007 RMIO: ch1(MOSI) SEL=0x%02x (want 68), "
-         "ch7(CLK) SEL=0x%02x (want 67)\n",
-         sel_a1 & 0x7f, sel_a7 & 0x7f);
-  }
 }
 
 /* Take the bus and gate the engine on.
@@ -492,8 +465,8 @@ static void nv_stream_begin(fb_coord_t col_start, fb_coord_t col_end,
 }
 
 /* Push one row.  src is the framebuffer (RGB565 little-endian in memory);
- * the panel wants high byte first, so bytes are swapped into g_xlate[]
- * first.  g_xlate[] is private to the driver, never the caller's buffer.
+ * the panel wants the high byte first, so each 16-bit pixel is emitted
+ * hi-then-lo directly from the caller's (read-only) buffer.
  */
 
 static void nv_send_pixels(FAR const uint8_t *src, unsigned int npixels)

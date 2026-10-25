@@ -901,15 +901,20 @@ static int rk3506_mmc_sendcmd_sync(uint32_t cmd, uint32_t arg)
 
   if (rspmode == MMCSD_R2_RESPONSE)
     {
-      uint32_t r0 = mmc_getreg(MMC_RESP0);
-      uint32_t r1 = mmc_getreg(MMC_RESP1);
-      uint32_t r2 = mmc_getreg(MMC_RESP2);
-      uint32_t r3 = mmc_getreg(MMC_RESP3);
+      /* 136-bit long response (CID/CSD).  DesignWare mshc stores the
+       * first received word in RESP3 and the last in RESP0, so assemble
+       * the SD-ordered array by a pure reversal with no shifting,
+       * exactly as Linux dw_mci_read_response() and U-Boot dw_mmc.c
+       * (response[0]=RESP3 ... response[3]=RESP0) do.  mmcsd_decode_csd()
+       * reads the array as big-endian SD fields (csd[0]>>30 = CSD_STRUCTURE,
+       * (csd[1]>>16)&0xf = READ_BL_LEN, ...); the previous <<8 / >>24
+       * shift-and-stitch shifted every field and broke identification.
+       */
 
-      priv->response[0] = (r3 << 8) | (r2 >> 24);
-      priv->response[1] = (r2 << 8) | (r1 >> 24);
-      priv->response[2] = (r1 << 8) | (r0 >> 24);
-      priv->response[3] = (r0 << 8);
+      priv->response[0] = mmc_getreg(MMC_RESP3);
+      priv->response[1] = mmc_getreg(MMC_RESP2);
+      priv->response[2] = mmc_getreg(MMC_RESP1);
+      priv->response[3] = mmc_getreg(MMC_RESP0);
     }
   else if (rspmode != MMCSD_NO_RESPONSE)
     {

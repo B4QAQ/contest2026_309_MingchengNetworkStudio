@@ -37,6 +37,7 @@
 
 #include <nuttx/board.h>
 #include <nuttx/i2c/i2c_master.h>
+#include <nuttx/leds/userled.h>
 #include <nuttx/video/fb.h>
 
 #include "rk3506_usbhost.h"
@@ -488,10 +489,11 @@ int hd_rk3506_bringup(void)
 #endif
 
 #ifdef CONFIG_RK3506_PWM
-  /* M2b.6: /dev/pwm0 on the PWM0 channel-2 block (0xFF932000),
-   * output pin RM_IO12 (GPIO0_B4 = J9-29, RM_IO function 47 = PWM0_CH2).
-   * The SDK iot dts uses this same channel for the LCD backlight,
-   * period 25000 ns (40 kHz) - a good first multimeter target:
+  /* /dev/pwm0 on the PWM0 channel-2 block (0xFF932000).  NOTE: the
+   * NV3007 backlight pad GPIO0_B4/J9-29 (RM_IO12, PWM0_CH2 function 47)
+   * is owned by the panel driver as a plain GPIO, so CONFIG_RK3506_PWM
+   * stays off in the board defconfig; enable it only when no panel is
+   * wired and a scope/multimeter is attached to the header:
    *   pwm -f 40000 -d 50
    */
 
@@ -526,12 +528,12 @@ int hd_rk3506_bringup(void)
 #endif
 
 #ifdef CONFIG_RK3506_CAN
-  /* M2b.8: SocketCAN devices can0/can1 (0xFF320000/0xFF330000).
-   * Default build uses loopback mode (single-node self-test):
+  /* SocketCAN devices can0/can1 (0xFF320000/0xFF330000).  Default build
+   * uses loopback mode (single-node self-test) and never touches the pad
+   * mux (TX/RX pads are 255=unrouted, see rk3506_can.c), so this does
+   * not contend for GPIO0_B3 (gmac0 PHY reset) or GPIO0_B4 (panel BL):
    *   cansend can0 123#DEADBEEF
    *   candump can0 -n 1   (must echo the frame)
-   * Pin routing: CAN0 -> RM_IO11, CAN1 -> RM_IO12 (kept clear of
-   * RM_IO12 (J9-29) = PWM0_CH2, NV3007 backlight).
    */
 
   do
@@ -565,11 +567,29 @@ int hd_rk3506_bringup(void)
   while (0);
 #endif
 
-#ifdef CONFIG_USERLED
-  /* Heartbeat LED (GPIO1_B3, active low) */
+#ifdef CONFIG_USERLED_LOWER
+  /* Register the run LED (GPIO1_B3, active low) as /dev/led0 through
+   * the standard NuttX userled lower half.  userled_lower_initialize()
+   * calls board_userled_initialize(), which must return the LED count.
+   */
 
-  board_userled_initialize();
-  _info("Heartbeat LED initialized (GPIO1_B3)\n");
+  ret = userled_lower_initialize("/dev/led0");
+  if (ret < 0)
+    {
+      _err("ERROR: userled_lower_initialize failed: %d\n", ret);
+    }
+#endif
+
+#ifdef CONFIG_HD_RK3506_LED_HEARTBEAT
+  /* Software heartbeat: the run LED is not PWM-wired, so a low-priority
+   * thread reproduces the Linux double-flash trigger.
+   */
+
+  ret = hd_rk3506_led_heartbeat_start();
+  if (ret < 0)
+    {
+      _err("ERROR: heartbeat LED thread failed: %d\n", ret);
+    }
 #endif
 
 #ifdef CONFIG_RK3506_MMC

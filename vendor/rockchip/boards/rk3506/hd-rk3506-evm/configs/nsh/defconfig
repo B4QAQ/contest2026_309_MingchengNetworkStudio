@@ -172,10 +172,12 @@ CONFIG_DISABLE_ENVIRON=n
 #---------------------------------------------------------------------------
 CONFIG_DRIVERS_VIDEO=y
 CONFIG_VIDEO_FB=y
+CONFIG_FB_UPDATE=y
 CONFIG_LCD=y
 CONFIG_LCD_MAXPOWER=255
 CONFIG_LCD_FRAMEBUFFER=y
 CONFIG_LCD_NV3007=y
+CONFIG_SPI_EXCHANGE=y
 
 #---------------------------------------------------------------------------
 # Input (USB HID kbd/mouse; no touchscreen on this panel)
@@ -593,11 +595,13 @@ CONFIG_NETUTILS_NTPCLIENT=y
 CONFIG_NETUTILS_IPERF=y
 
 #---------------------------------------------------------------------------
-# LED (heartbeat on GPIO1_B3, active low)
+# LED (green run LED on GPIO1_B3, active low; software heartbeat,
+# registered as /dev/led0 through the userled lower half)
 #---------------------------------------------------------------------------
+CONFIG_BOARD_CUSTOM_LEDS=y
 CONFIG_USERLED=y
 CONFIG_USERLED_LOWER=y
-CONFIG_ARCH_LEDS=y
+CONFIG_HD_RK3506_LED_HEARTBEAT=y
 
 #---------------------------------------------------------------------------
 # RNG (hardware random number generator)
@@ -621,13 +625,14 @@ CONFIG_MMCSD_SDIO=y
 CONFIG_MMCSD_HAVE_CARDDETECT=y
 CONFIG_RK3506_MMC=y
 CONFIG_RK3506_MMC_MAXFREQ=50000000
-CONFIG_RK3506_MMC_PWREN=y
-CONFIG_RK3506_MMC_PWREN_BANK=3
-CONFIG_RK3506_MMC_PWREN_PIN=6
-CONFIG_RK3506_MMC_PWREN_ACTIVELOW=y
+# No GPIO power switch on this board: the SD rail is the always-on
+# vcc3v3_stb regulator (vanxoak-hd-rk3506-evm-v1.dtsi vmmc-supply).
+# CONFIG_RK3506_MMC_PWREN is not set
+# Card detect = GPIO3_A6 active low with internal pull-up
+# (vanxoak-hd-rk3506-evm-v1.dtsi cd_gpio: <3 RK_PA6 RK_FUNC_GPIO pcfg_pull_up>)
 CONFIG_RK3506_MMC_CD_GPIO=y
 CONFIG_RK3506_MMC_CD_BANK=3
-CONFIG_RK3506_MMC_CD_PIN=7
+CONFIG_RK3506_MMC_CD_PIN=6
 CONFIG_RK3506_MMC_CD_ACTIVELOW=y
 CONFIG_RK3506_MMC_HOTPLUG=y
 CONFIG_RK3506_MMC_POLL_MS=500
@@ -702,7 +707,10 @@ CONFIG_GD5F_SPIMODE=0
 
 #---------------------------------------------------------------------------
 # GMAC0 Ethernet (eth0) - Synopsys DWMAC 4.20a @ 0xFF4C8000, IRQ66.
-# PHY: YT8512B RMII @ MDIO addr 0, reset GPIO4_A2 active low; RMII
+# PHY: YT8512B RMII @ MDIO addr 0, reset GPIO0_B3 active low
+# (vanxoak-hd-rk3506-evm-v1.dtsi:
+#  snps,reset-gpio = <&gpio0 RK_PB3 GPIO_ACTIVE_LOW>,
+#  snps,reset-delays-us = <0 20000 100000>); RMII
 # REF_CLK direction = INPUT (the PHY's crystal-locked 50 MHz feeds
 # GPIO2_B2), per the HD-RK3506-EVM board doc GMAC.md:
 #   clock_in_out = "input"  ->  CONFIG_RK3506_GMAC0_EXTCLK=y
@@ -711,6 +719,8 @@ CONFIG_GD5F_SPIMODE=0
 #---------------------------------------------------------------------------
 CONFIG_RK3506_GMAC0=y
 CONFIG_RK3506_GMAC0_EXTCLK=y
+CONFIG_RK3506_GMAC0_PHY_RESET_BANK=0
+CONFIG_RK3506_GMAC0_PHY_RESET_PIN=11
 
 #---------------------------------------------------------------------------
 # AMP: A7 rptun master <-> bus Cortex-M0 rpmsg-lite firmware.

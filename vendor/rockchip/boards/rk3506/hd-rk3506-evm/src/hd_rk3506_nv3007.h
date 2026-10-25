@@ -74,13 +74,19 @@
  *   J9-16 SDA = GPIO0_A1 / RM_IO1  <- spi0_mosi (RMIO fn 83, mux 7)
  *   J9-14 CS  = GPIO0_A3 / RM_IO3  (plain GPIO output, idle high)
  *   J9-31 RST = GPIO0_B0 / RM_IO8  (plain GPIO output)
- *   J9-30 DC  = GPIO0_B3 / RM_IO11 (plain GPIO output)
+ *   J9-15 DC  = GPIO0_A6 / RM_IO6  (plain GPIO output)
  *   J9-29 BL  = GPIO0_B4 / RM_IO12 (plain GPIO output, high = lit)
+ *
+ * DC is on GPIO0_A6 (J9-15), the physical wiring verified with the
+ * working Linux driver (vanxoak-hd-rk3506-evm-spi-nv3007.dtsi:
+ * dc-gpios = <&gpio0 RK_PA6 GPIO_ACTIVE_HIGH>).  GPIO0_B3/J9-30 must
+ * never be used here: on this board it is the gmac0 PHY hardware reset
+ * (vanxoak-hd-rk3506-evm-v1.dtsi snps,reset-gpio = <&gpio0 RK_PB3>).
  */
 
 #define NV3007_PIN_CS        3     /* GPIO0_A3 -> J9-14                    */
 #define NV3007_PIN_RST       8     /* GPIO0_B0 -> J9-31                    */
-#define NV3007_PIN_DC        11    /* GPIO0_B3 -> J9-30                    */
+#define NV3007_PIN_DC        6     /* GPIO0_A6 -> J9-15                    */
 #define NV3007_PIN_BL        12    /* GPIO0_B4 -> J9-29                    */
 
 #endif /* CONFIG_LCD_NV3007 */

@@ -206,6 +206,44 @@ static int rk3506_rmio_reg_offset(uint8_t bank, uint8_t pin)
 }
 
 /****************************************************************************
+ * Name: rk3506_ioc_pin_valid
+ *
+ * Description:
+ *   Per-bank valid pin range for the PULL / DRIVE / SCHMITT IOC fields,
+ *   taken from U-Boot's rk3506_calc_{pull,drive,schmitt}_reg_and_bit():
+ *     bank0: 0..24   bank1: 0..27   bank2: 0..16
+ *     bank3: 0..14   bank4: 8..11 (2-bit special field only)
+ *   Pins outside a bank's physical range have no IOC field; the old code
+ *   only tested pin < 32 and computed an offset into the next register
+ *   block, so HIWORD writes could corrupt a neighbouring register.
+ *
+ ****************************************************************************/
+
+static bool rk3506_ioc_pin_valid(uint8_t bank, uint8_t pin)
+{
+  switch (bank)
+    {
+      case 0:
+        return pin <= 24u;
+
+      case 1:
+        return pin < 28u;
+
+      case 2:
+        return pin < 17u;
+
+      case 3:
+        return pin < 15u;
+
+      case 4:
+        return pin >= 8u && pin <= 11u;
+
+      default:
+        return false;
+    }
+}
+
+/****************************************************************************
  * Public Functions
  ****************************************************************************/
 
@@ -235,6 +273,13 @@ int rk3506_pinctrl_get_mux(uint8_t bank, uint8_t pin)
   uint8_t   group;
 
   if (bank >= RK3506_NR_BANKS || pin >= RK3506_BANK_NPINS)
+    {
+      return -EINVAL;
+    }
+
+  /* bank0 has only 25 pins; pin 25..31 do not map to any field. */
+
+  if (bank == 0 && pin > 24u)
     {
       return -EINVAL;
     }
@@ -302,6 +347,15 @@ int rk3506_pinctrl_set_mux(uint8_t bank, uint8_t pin, uint8_t func)
   int       rmio_off;
 
   if (bank >= RK3506_NR_BANKS || pin >= RK3506_BANK_NPINS)
+    {
+      return -EINVAL;
+    }
+
+  /* bank0 has only 25 pins (A0..D0 = pin 0..24); only pin 24 uses the
+   * recalced 2-bit field in GPIO0D_CON (u-boot rk3506_mux_recalced_data).
+   */
+
+  if (bank == 0 && pin > 24u)
     {
       return -EINVAL;
     }
@@ -404,7 +458,7 @@ int rk3506_pinctrl_set_pull(uint8_t bank, uint8_t pin, uint8_t pull)
   uint8_t   val = pull;
 
   if (bank >= RK3506_NR_BANKS || pin >= RK3506_BANK_NPINS ||
-      pull > RK3506_PULL_BUS_HOLD)
+      pull > RK3506_PULL_BUS_HOLD || !rk3506_ioc_pin_valid(bank, pin))
     {
       return -EINVAL;
     }
@@ -477,7 +531,8 @@ int rk3506_pinctrl_set_drive(uint8_t bank, uint8_t pin, uint8_t level)
   uint32_t  data;
   uint32_t  code;
 
-  if (bank >= RK3506_NR_BANKS || pin >= RK3506_BANK_NPINS || level > 7u)
+  if (bank >= RK3506_NR_BANKS || pin >= RK3506_BANK_NPINS ||
+      level > 7u || !rk3506_ioc_pin_valid(bank, pin))
     {
       return -EINVAL;
     }
@@ -546,7 +601,8 @@ int rk3506_pinctrl_set_schmitt(uint8_t bank, uint8_t pin, bool enable)
   uint32_t  bit;
   uint32_t  data;
 
-  if (bank >= RK3506_NR_BANKS || pin >= RK3506_BANK_NPINS)
+  if (bank >= RK3506_NR_BANKS || pin >= RK3506_BANK_NPINS ||
+      !rk3506_ioc_pin_valid(bank, pin))
     {
       return -EINVAL;
     }

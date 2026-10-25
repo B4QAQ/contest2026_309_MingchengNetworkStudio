@@ -202,8 +202,9 @@ config RK3506_GMAC0
 		SDK GMAC HAL ported verbatim (rk3506_gmac_hal.c: hal_gmac.c +
 		hal_gmac_rk3506.c) behind a NuttX net_driver_s shell (dm90x0
 		pattern).  Covers CRU clocks, RMII IOMUX, the PHY reset GPIO
-		(configured below, default GPIO4_A2 per the HD-RK3506-EVM board
-		doc), MDIO/PHY autoneg (YT8512B @ addr 0), DMA descriptor rings
+		(configured below, default GPIO0_B3 per the HD board's active
+		vanxoak-hd-rk3506-evm-v1.dtsi), MDIO/PHY autoneg (YT8512B @
+		addr 0), DMA descriptor rings
 		and the MAC IRQ.  The interface is brought up by NETINIT + DHCPC.
 		ARCH_PHY_INTERRUPT enables the NuttX PHY-event plumbing: the
 		driver implements SIOCMIINOTIFY/SIOCGMIIPHY/SIOCGMIIREG so the
@@ -212,19 +213,20 @@ config RK3506_GMAC0
 
 config RK3506_GMAC0_PHY_RESET_BANK
 	int "PHY reset GPIO bank (0..4)"
-	default 4
+	default 0
 	range 0 4
 	depends on RK3506_GMAC0
 	---help---
-		GPIO bank of the PHY hardware-reset pin (active low).  Board
-		setting: HD-RK3506-EVM wires the YT8512B reset to GPIO4_A2
-		(snps,reset-gpio = <&gpio4 RK_PA2 GPIO_ACTIVE_LOW>), so the
-		default is bank 4 / pin 2.  Override in the board defconfig
-		when a different pad drives the PHY reset.
+		GPIO bank of the PHY hardware-reset pin (active low).
+		HD-RK3506-EVM: vanxoak-hd-rk3506-evm-v1.dtsi sets
+		snps,reset-gpio = <&gpio0 RK_PB3 GPIO_ACTIVE_LOW> (the
+		<&gpio4 RK_PA2> line is commented out - that is the
+		Rockchip in-house EVM wiring), so the default is
+		bank 0 / pin 11.  Override for carriers wired differently.
 
 config RK3506_GMAC0_PHY_RESET_PIN
 	int "PHY reset GPIO pin within the bank (0..31)"
-	default 2
+	default 11
 	range 0 31
 	depends on RK3506_GMAC0
 	---help---
@@ -510,15 +512,18 @@ config RK3506_MMC_CIU_HZ
 		(2 * n) to the card clock.  100 MHz gives exactly 400 kHz and
 		50 MHz.
 
-comment "SD card power switch (vcc3v3_sd)"
+comment "SD card power switch"
 
 config RK3506_MMC_PWREN
 	bool "Drive the SD card power switch from a GPIO"
-	default y
+	default n
 	---help---
-		The reference board gates the SD 3.3 V rail with a GPIO
-		(regulator-fixed vcc3v3_sd, active low).  Without driving it
-		the card never powers up and never answers CMD0/CMD8.
+		Enable only on carriers that gate the SD 3.3 V rail with a
+		GPIO.  The HD-RK3506-EVM does NOT: its vmmc/vqmmc is the
+		always-on vcc3v3_stb regulator
+		(vanxoak-hd-rk3506-evm-v1.dtsi), so this must stay off
+		there; driving GPIO3_A6 as a power switch fights the real
+		card-detect signal on that pad.
 
 config RK3506_MMC_PWREN_BANK
 	int "SD power switch GPIO bank"
@@ -532,8 +537,8 @@ config RK3506_MMC_PWREN_PIN
 	range 0 31
 	depends on RK3506_MMC_PWREN
 	---help---
-		Default 6 = GPIO3_A6, the vcc3v3_sd gate in
-		kernel-6.1/arch/arm/boot/dts/rk3506g-iotest-v10.dts:75.
+		GPIO pin of the (carrier-specific) SD rail switch.  Unused
+		on the HD-RK3506-EVM, whose SD rail is always on.
 
 config RK3506_MMC_PWREN_ACTIVELOW
 	bool "SD power switch is active low"
@@ -558,14 +563,15 @@ config RK3506_MMC_CD_BANK
 
 config RK3506_MMC_CD_PIN
 	int "Card detect GPIO pin"
-	default 7
+	default 6
 	range 0 31
 	depends on RK3506_MMC_CD_GPIO
 	---help---
-		Default 7 = GPIO3_A7, matching cd-gpios in
-		rk3506g-iotest-v10.dts:149.  If the board's detect switch is
-		really on GPIO3_A6 (next to SDMMC_D3 on A5), set this to 6
-		and move RK3506_MMC_PWREN_* off A6.
+		Default 6 = GPIO3_A6, the socket card-detect switch on the
+		HD-RK3506-EVM (active low, internal pull-up):
+		vanxoak-hd-rk3506-evm-v1.dtsi cd_gpio =
+		<3 RK_PA6 RK_FUNC_GPIO &pcfg_pull_up>.
+		GPIO3_A7 is RMII1_RXD1 on this board and MUST NOT be used.
 
 config RK3506_MMC_CD_ACTIVELOW
 	bool "Card detect is active low"

@@ -102,16 +102,15 @@
 
 #define PKTBUF_SIZE (MAX_NETDEV_PKTSIZE + CONFIG_NET_GUARDSIZE)
 
-/* PHY hardware reset, active low (HD-RK3506-EVM GMAC.md:
- * snps,reset-gpio = <&gpio4 RK_PA2 GPIO_ACTIVE_LOW>,
- * reset-delays-us = <0 20000 100000>).  The pad is a board choice:
- * it comes from CONFIG_RK3506_GMAC0_PHY_RESET_BANK/PIN (default
- * bank 4 / pin 2 = GPIO4_A2 for this board; override in the board
- * defconfig).  The pin is driven through the shared GPIO back-end
- * (rk3506_gpio_config/write) instead of poking the v2 controller
- * registers directly.
- * NOTE: GPIO0_C2 was the Rockchip in-house EVM value and is NOT the
- * pin wired to the PHY reset on the HD-RK3506-EVM.
+/* PHY hardware reset, active low.  The active board wiring for the
+ * HD-RK3506-EVM is (vanxoak-hd-rk3506-evm-v1.dtsi):
+ *   snps,reset-gpio      = <&gpio0 RK_PB3 GPIO_ACTIVE_LOW>;  GPIO0_B3
+ *   snps,reset-delays-us = <0 20000 100000>;
+ * The <&gpio4 RK_PA2> value is commented out in that dtsi (Rockchip
+ * in-house EVM wiring), as is GPIO0_C2 (another historical in-house
+ * value); neither is the HD-RK3506-EVM pad.  The pad comes from
+ * CONFIG_RK3506_GMAC0_PHY_RESET_BANK/PIN (default bank 0 / pin 11) and
+ * is driven through the shared GPIO back-end (rk3506_gpio_config/write).
  */
 
 #define RK3506_PHY_RESET_GPIN  \
@@ -374,23 +373,20 @@ static int rk3506_gmac0_yt8512b_init(FAR struct GMAC_HANDLE *gmac)
  * Name: rk3506_gmac0_phy_reset
  *
  * Description:
- *   Hardware-reset the Ethernet PHY via GPIO4_A2 (active low), per
- *   the board vendor doc (HD-RK3506-EVM, SDK开发与外设设备树配置
- *   /GMAC.md):
- *     reset-gpios = <&gpio4 RK_PA2 GPIO_ACTIVE_LOW>;
- *     reset-delays-us = <0 20000 100000>;
- *   GPIO v2 controller HIWORD semantics: writing (bit<<16)|value sets
- *   the bit to value.  DDR bit = 1 means OUTPUT.  A2 = pin 2 -> the _L
- *   register pair (SWPORT_DR_L / SWPORT_DDR_L).
+ *   Hardware-reset the Ethernet PHY via GPIO0_B3 (active low), per the
+ *   active board device tree (vanxoak-hd-rk3506-evm-v1.dtsi):
+ *     snps,reset-gpio      = <&gpio0 RK_PB3 GPIO_ACTIVE_LOW>;
+ *     snps,reset-delays-us = <0 20000 100000>;
+ *   The pin is an output on the _L register pair (pin 11 < 16).
  *
  ****************************************************************************/
 
 static void rk3506_gmac0_phy_reset(void)
 {
-  /* Configure GPIO4_A2 as an output driving high (deasserted), then
-   * pulse it low for the vendor-specified 20 ms and release.
-   * rk3506_gpio_config() muxes the pin to GPIO and ungates the GPIO4
-   * clocks; rk3506_gpio_write() does the HIWORD single-bit drive.
+  /* Configure the reset pad as an output driving high (deasserted),
+   * then pulse it low for the dts-specified 20 ms and release for
+   * 100 ms.  rk3506_gpio_config() muxes the pin to GPIO and ungates the
+   * bank clocks; rk3506_gpio_write() does the HIWORD single-bit drive.
    */
 
   rk3506_gpio_config(RK3506_PHY_RESET_GPIN, RK3506_GPIO_OUTPUT |

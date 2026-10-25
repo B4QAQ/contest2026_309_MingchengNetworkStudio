@@ -112,12 +112,17 @@
 
 struct rk3506_gpio_bank_s
 {
+#ifdef CONFIG_IOEXPANDER
+  /* MUST be first: ioexpander callbacks hand back this struct's address
+   * as "dev", which is only a legal cast when the ioexpander device is
+   * the first member (same convention as drivers/ioexpander/pca9555).
+   */
+
+  struct ioexpander_dev_s ioe;      /* ioexpander lower-half device    */
+#endif
   uintptr_t               base;     /* bank register base address      */
   uint8_t                 irq;      /* combined GIC IRQ number         */
   bool                    clk_on;   /* clocks have been ungated        */
-#ifdef CONFIG_IOEXPANDER
-  struct ioexpander_dev_s ioe;      /* ioexpander lower-half device    */
-#endif
 #ifdef CONFIG_IOEXPANDER_INT_ENABLE
   ioe_callback_t          cb[RK3506_BANK_NPINS];   /* per-pin callbacks */
   FAR void               *cb_arg[RK3506_BANK_NPINS];
@@ -130,11 +135,11 @@ struct rk3506_gpio_bank_s
 
 static struct rk3506_gpio_bank_s g_rk3506_gpio[RK3506_GPIO_NBANKS] =
 {
-  { RK3506_GPIO0_ADDR, RK3506_IRQ_GPIO0_0, false },
-  { RK3506_GPIO1_ADDR, RK3506_IRQ_GPIO1_0, false },
-  { RK3506_GPIO2_ADDR, RK3506_IRQ_GPIO2_0, false },
-  { RK3506_GPIO3_ADDR, RK3506_IRQ_GPIO3_0, false },
-  { RK3506_GPIO4_ADDR, RK3506_IRQ_GPIO4_0, false },
+  { .base = RK3506_GPIO0_ADDR, .irq = RK3506_IRQ_GPIO0_0, .clk_on = false },
+  { .base = RK3506_GPIO1_ADDR, .irq = RK3506_IRQ_GPIO1_0, .clk_on = false },
+  { .base = RK3506_GPIO2_ADDR, .irq = RK3506_IRQ_GPIO2_0, .clk_on = false },
+  { .base = RK3506_GPIO3_ADDR, .irq = RK3506_IRQ_GPIO3_0, .clk_on = false },
+  { .base = RK3506_GPIO4_ADDR, .irq = RK3506_IRQ_GPIO4_0, .clk_on = false },
 };
 
 /****************************************************************************
@@ -193,6 +198,22 @@ static int rk3506_gpio_bank_clock(FAR struct rk3506_gpio_bank_s *priv,
   return ret;
 }
 
+/* RK3506 bank4 hardware quirk: logical pins 0..5 are pairwise swapped in
+ * every controller register EXCEPT EXT_PORT (kernel gpio-rockchip.c
+ * rockchip_gpio_writel_bit()/readl_bit(): "if (bank4 && bit < 6) bit ^= 1",
+ * plus the 0x15/0x2a word shuffle in writel()/readl()).  Translate a
+ * logical pin number to the physical bit for register writes.  EXT_PORT
+ * reads are NOT swapped (rockchip_gpio_get() reads it raw).
+ */
+
+static inline uint8_t rk3506_gpio_hwpin(FAR const struct rk3506_gpio_bank_s
+                                        *priv, uint8_t pin)
+{
+  uint8_t bank = (uint8_t)(priv - &g_rk3506_gpio[0]);
+
+  return (bank == 4u && pin < 6u) ? (uint8_t)(pin ^ 1u) : pin;
+}
+
 /****************************************************************************
  * Name: rk3506_gpio_set_dir
  *
@@ -205,9 +226,10 @@ static int rk3506_gpio_bank_clock(FAR struct rk3506_gpio_bank_s *priv,
 static void rk3506_gpio_set_dir(FAR struct rk3506_gpio_bank_s *priv,
                                 uint8_t pin, bool output)
 {
+  uint8_t  hwpin = rk3506_gpio_hwpin(priv, pin);
   uintptr_t reg = priv->base +
-                  ((pin < 16u) ? GPIO_SWPORT_DDR_L : GPIO_SWPORT_DDR_H);
-  uint32_t  bit = 1u << (pin & 0xfu);
+                  ((hwpin < 16u) ? GPIO_SWPORT_DDR_L : GPIO_SWPORT_DDR_H);
+  uint32_t  bit = 1u << (hwpin & 0xfu);
 
   putreg32((bit << 16) | (output ? bit : 0u), reg);
 }
@@ -223,9 +245,10 @@ static void rk3506_gpio_set_dir(FAR struct rk3506_gpio_bank_s *priv,
 static void rk3506_gpio_set_level(FAR struct rk3506_gpio_bank_s *priv,
                                   uint8_t pin, bool high)
 {
+  uint8_t  hwpin = rk3506_gpio_hwpin(priv, pin);
   uintptr_t reg = priv->base +
-                  ((pin < 16u) ? GPIO_SWPORT_DR_L : GPIO_SWPORT_DR_H);
-  uint32_t  bit = 1u << (pin & 0xfu);
+                  ((hwpin < 16u) ? GPIO_SWPORT_DR_L : GPIO_SWPORT_DR_H);
+  uint32_t  bit = 1u << (hwpin & 0xfu);
 
   putreg32((bit << 16) | (high ? bit : 0u), reg);
 }
@@ -258,9 +281,10 @@ static bool rk3506_gpio_get_level(FAR struct rk3506_gpio_bank_s *priv,
 static int rk3506_gpio_set_trigger(FAR struct rk3506_gpio_bank_s *priv,
                                    uint8_t pin, uint32_t trigger)
 {
+  uint8_t   hwpin = rk3506_gpio_hwpin(priv, pin);
   uintptr_t base = priv->base;
-  uint32_t  bit  = 1u << (pin & 0xfu);
-  bool      high16 = (pin >= 16u);
+  uint32_t  bit  = 1u << (hwpin & 0xfu);
+  bool      high16 = (hwpin >= 16u);
   uintptr_t type_reg;
   uintptr_t pol_reg;
   uintptr_t both_reg;
@@ -322,9 +346,10 @@ static int rk3506_gpio_set_trigger(FAR struct rk3506_gpio_bank_s *priv,
 static void rk3506_gpio_irq_maskpin(FAR struct rk3506_gpio_bank_s *priv,
                                     uint8_t pin, bool mask)
 {
+  uint8_t   hwpin = rk3506_gpio_hwpin(priv, pin);
   uintptr_t reg = priv->base +
-                  ((pin < 16u) ? GPIO_INT_MASK_L : GPIO_INT_MASK_H);
-  uint32_t  bit = 1u << (pin & 0xfu);
+                  ((hwpin < 16u) ? GPIO_INT_MASK_L : GPIO_INT_MASK_H);
+  uint32_t  bit = 1u << (hwpin & 0xfu);
 
   putreg32((bit << 16) | (mask ? bit : 0u), reg);
 }
@@ -340,9 +365,10 @@ static void rk3506_gpio_irq_maskpin(FAR struct rk3506_gpio_bank_s *priv,
 static void rk3506_gpio_irq_ack(FAR struct rk3506_gpio_bank_s *priv,
                                 uint8_t pin)
 {
+  uint8_t   hwpin = rk3506_gpio_hwpin(priv, pin);
   uintptr_t reg = priv->base +
-                  ((pin < 16u) ? GPIO_PORT_EOI_L : GPIO_PORT_EOI_H);
-  uint32_t  bit = 1u << (pin & 0xfu);
+                  ((hwpin < 16u) ? GPIO_PORT_EOI_L : GPIO_PORT_EOI_H);
+  uint32_t  bit = 1u << (hwpin & 0xfu);
 
   putreg32((bit << 16) | bit, reg);
 }
@@ -369,7 +395,14 @@ static int rk3506_gpio_interrupt(int irq, FAR void *context,
 
   while (status != 0u)
     {
-      pin = (uint8_t)(__builtin_ffs((int)status) - 1);
+      uint8_t statpin = (uint8_t)(__builtin_ffs((int)status) - 1);
+
+      /* INT_STATUS reports the PHYSICAL bit position; on bank4 pins 0..5
+       * convert it back to the logical pin number (inverse of the
+       * rk3506_gpio_hwpin() XOR swap) before ack/dispatch.
+       */
+
+      pin = rk3506_gpio_hwpin(priv, statpin);
 
       /* Acknowledge the edge interrupt before running the callback so
        * a level that is still asserted does not re-enter spuriously.
@@ -383,7 +416,7 @@ static int rk3506_gpio_interrupt(int irq, FAR void *context,
                         priv->cb_arg[pin]);
         }
 
-      status &= ~(1u << pin);
+      status &= ~(1u << statpin);
     }
 
   return OK;

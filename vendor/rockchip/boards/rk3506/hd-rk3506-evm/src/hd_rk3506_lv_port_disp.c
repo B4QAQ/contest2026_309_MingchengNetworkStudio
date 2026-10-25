@@ -67,11 +67,11 @@ static struct fb_planeinfo_s g_plane;
 static struct fb_videoinfo_s g_video;
 static lv_display_t     *g_disp       = NULL;
 
-/* One full-screen render buffer (RGB565 == 2 bytes/pixel). 480*854*2 = 820 KB.
- * We allocate it from the heap so LVGL can render into it; on flush we copy
- * to the framebuffer.  A partial-mode buffer (a few rows) would be lighter
- * but requires LVGL to render in stripes; for now the simplest correct
- * behaviour is full-frame.
+/* One full-screen render buffer (RGB565 == 2 bytes/pixel).  On the NV3007
+ * panel this is 142*428*2 ~= 119 KB.  We allocate it from the heap so LVGL
+ * can render into it; on flush we copy to the framebuffer.  A partial-mode
+ * buffer (a few rows) would be lighter but requires LVGL to render in
+ * stripes; for now the simplest correct behaviour is full-frame.
  */
 
 static lv_color_t       *g_render_buf = NULL;
@@ -277,8 +277,7 @@ int hd_rk3506_lv_port_disp_init(void)
   _info("LVGL: mmap ok base=%p\n", g_fb_base);
 
   /* Allocate a render buffer large enough for the whole screen. RGB565
-   * is 2 bytes per pixel.  480*854*2 = 819 840 bytes; round up to be
-   * safe.
+   * is 2 bytes per pixel (142*428*2 ~= 121 552 bytes on the NV3007).
    */
 
   size_t buf_pixels = (size_t)g_video.xres * (size_t)g_video.yres;

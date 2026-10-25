@@ -7,13 +7,18 @@
  * pin mux, SD rail power switch, card-detect GPIO and (optionally) a
  * low-rate card-detect poll feeding the MMCSD hotplug callback.
  *
- * Wiring reference (Linux SDK):
+ * Wiring reference (Linux SDK, THIS board - HD-RK3506-EVM):
  *  - sdmmc_clk/cmd/d0..d3 = GPIO3_A0..A5, function 1
  *      u-boot/arch/arm/dts/rk3506-pinctrl.dtsi:1046-1068
- *  - SD 3.3 V switch        = GPIO3_A6, active low (vcc3v3_sd)
- *      kernel-6.1/arch/arm/boot/dts/rk3506g-iotest-v10.dts:73-81
- *  - card detect            = GPIO3_A7, active low
- *      kernel-6.1/arch/arm/boot/dts/rk3506g-iotest-v10.dts:149
+ *  - SD 3.3 V rail         = always-on vcc3v3_stb, NO GPIO power switch
+ *      kernel-6.1/arch/arm/boot/dts/vanxoak-hd-rk3506-evm-v1.dtsi:
+ *      vmmc-supply/vqmmc-supply = <&vcc3v3_stb>
+ *  - card detect            = GPIO3_A6, active low, internal pull-up
+ *      vanxoak-hd-rk3506-evm-v1.dtsi: cd_gpio =
+ *      <3 RK_PA6 RK_FUNC_GPIO &pcfg_pull_up>
+ *
+ * (The rk3506g-iotest-v10.dts values - PWREN on A6, CD on A7 - belong to
+ * a different carrier and are WRONG for this board: A7 is RMII1_RXD1.)
  *
  * All four SDMMC pads are plain IOMUX nibbles (function value 1 <= 15), so
  * rk3506_pinctrl_set_mux() applies them directly with no RM_IO routing.
@@ -74,8 +79,9 @@ static void hd_rk3506_mmc_pins(void)
     }
 
 #if !defined(CONFIG_RK3506_MMC_CD_GPIO)
-  /* Controller-side detect: SDMMC_DET is GPIO0_B0 function 1
-   * (kernel rk3506-pinctrl.dtsi:1103-1107).
+  /* Controller-side detect fallback: SDMMC_DET mux.  NOTE: on the
+   * HD-RK3506-EVM this pad is not the socket switch (CD is GPIO3_A6),
+   * so this path is not used on this board.
    */
 
   if (rk3506_pinctrl_set_mux(0, 8, 1) < 0)
@@ -120,9 +126,9 @@ int hd_rk3506_mmc_initialize(void)
 
   hd_rk3506_mmc_pins();
 
-  /* 2. Power the socket.  vcc3v3_sd is a fixed regulator gated by
-   *    GPIO3_A6 (active low).  Drive it enabled *before* the controller
-   *    is initialised, otherwise CMD0/CMD8 get no answer at all.
+  /* 2. Optional socket power switch.  The HD-RK3506-EVM SD rail is the
+   *    always-on vcc3v3_stb regulator (no GPIO gate), so PWREN is off in
+   *    the board defconfig.  Kept generic for carriers that do gate it.
    */
 
 #ifdef CONFIG_RK3506_MMC_PWREN
@@ -139,9 +145,13 @@ int hd_rk3506_mmc_initialize(void)
     {
       _err("MMC: SD power switch GPIO config failed: %d\n", ret);
     }
+
+  /* SD physical layer spec: >=1 ms supply ramp before identification. */
+
+  nxsig_usleep(5000);
 #endif
 
-  /* 3. Card detect input (the switch is pulled up on the socket) */
+  /* 3. Card detect input (the socket switch is active low, pulled up) */
 
 #ifdef CONFIG_RK3506_MMC_CD_GPIO
   ret = rk3506_gpio_config(RK3506_GPIO_PIN(CONFIG_RK3506_MMC_CD_BANK,
