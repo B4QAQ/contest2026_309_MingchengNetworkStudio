@@ -51,6 +51,14 @@
 #define RMIO_MUX_I2C0_SDA  31u
 #define RMIO_MUX_I2C0_SCL  30u
 
+/* I2C2 RM_IO function numbers (rk3506-pinctrl-rmio.dtsi):
+ *   rm_io4_i2c2_scl = <0 RK_PA4 32>    (bank0 pin 4, func 32)
+ *   rm_io5_i2c2_sda = <0 RK_PA5 33>    (bank0 pin 5, func 33)
+ */
+
+#define RMIO_MUX_I2C2_SCL  32u
+#define RMIO_MUX_I2C2_SDA  33u
+
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
@@ -121,6 +129,26 @@ void rk3506_ioc_i2c0_setup(void)
 {
   rk3506_pinctrl_set_mux(1, 9,  RMIO_MUX_I2C0_SDA);  /* B1 -> RM_IO24 */
   rk3506_pinctrl_set_mux(1, 10, RMIO_MUX_I2C0_SCL);  /* B2 -> RM_IO25 */
+}
+
+/****************************************************************************
+ * Name: rk3506_ioc_i2c2_setup
+ *
+ * Description:
+ *   Route RM_IO4/5 to I2C2 SCL/SDA, per the SDK pinctrl data
+ *   (rk3506-pinctrl-rmio.dtsi):
+ *
+ *     rm_io4_i2c2_scl:  <0 RK_PA4 32 &pcfg_pull_none>
+ *     rm_io5_i2c2_sda:  <0 RK_PA5 33 &pcfg_pull_none>
+ *
+ *   The rjgt102 crypt chip sits on this bus at address 0x68.
+ *
+ ****************************************************************************/
+
+void rk3506_ioc_i2c2_setup(void)
+{
+  rk3506_pinctrl_set_mux(0, 4,  RMIO_MUX_I2C2_SCL);  /* A4 -> RM_IO4 */
+  rk3506_pinctrl_set_mux(0, 5,  RMIO_MUX_I2C2_SDA);  /* A5 -> RM_IO5 */
 }
 
 /****************************************************************************

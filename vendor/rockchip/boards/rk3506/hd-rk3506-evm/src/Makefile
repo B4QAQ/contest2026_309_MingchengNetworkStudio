@@ -44,6 +44,10 @@ ifeq ($(CONFIG_IOEXPANDER),y)
   CSRCS += hd_rk3506_gpio.c
 endif
 
+ifeq ($(CONFIG_RK3506_MMC),y)
+  CSRCS += hd_rk3506_mmc.c
+endif
+
 ifeq ($(CONFIG_ETC_ROMFS),y)
   RCSRCS = etc/init.d/rc.sysinit etc/init.d/rcS
   RCRAWS = etc/group etc/passwd etc/net.conf etc/ssl/curl/ca-certificates.crt

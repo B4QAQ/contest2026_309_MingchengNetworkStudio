@@ -41,6 +41,8 @@
 
 #include "rk3506_usbhost.h"
 #include "rk3506_i2c.h"
+#include "rk3506_rng.h"
+#include "rk3506_tsadc.h"
 #include "drv/spi/rk3506_spi.h"
 #include "rk3506_spinand.h"
 #include "rk3506_cru.h"
@@ -163,12 +165,19 @@ static int hd_rk3506_i2c_init(void)
       _info("I2C0 controller initialized (used by GT911)\n");
     }
 
-  /* NOTE: only I2C0 is brought up.  The chip driver supports 3 buses
-   * (RK3506_I2C_NUM_BUS), but I2C1/I2C2 have no pads or devices wired
-   * on this board, so they are intentionally not initialized here (the
-   * earlier CONFIG_RK3506_I2C1/2 blocks were dead code: those symbols
-   * were never defined in Kconfig).
-   */
+  /* I2C2: rjgt102 crypt chip (0x68), RM_IO4/5 (GPIO0_A4/A5) */
+
+  rk3506_ioc_i2c2_setup();
+
+  if (rk3506_i2cbus_initialize(2) == NULL)
+    {
+      _err("ERROR: rk3506_i2cbus_initialize(2) failed\n");
+      ret = -ENODEV;
+    }
+  else
+    {
+      _info("I2C2 controller initialized (rjgt102 crypt)\n");
+    }
 
   /* Optionally register I2C character device for userspace testing.
    * When CONFIG_I2C_DRIVER is enabled, we need to also expose the I2C
@@ -554,6 +563,44 @@ int hd_rk3506_bringup(void)
   while (0);
 #endif
 
+#ifdef CONFIG_USERLED
+  /* Heartbeat LED (GPIO1_B3, active low) */
+
+  board_userled_initialize();
+  _info("Heartbeat LED initialized (GPIO1_B3)\n");
+#endif
+
+#ifdef CONFIG_RK3506_MMC
+  /* TF/SD socket on the DesignWare MSHC (0xFF480000).  Board wiring,
+   * power switch and card detect are handled in hd_rk3506_mmc.c; the
+   * chip driver registers /dev/mmcsd0:
+   *   mount -t vfat /dev/mmcsd0 /mnt/sd
+   */
+
+  do
+    {
+      int mmc_ret = hd_rk3506_mmc_initialize();
+      if (mmc_ret < 0)
+        {
+          _err("ERROR: hd_rk3506_mmc_initialize failed: %d\n",
+                 mmc_ret);
+        }
+    }
+  while (0);
+#endif
+
+#ifdef CONFIG_RK3506_RNG
+  /* Hardware random number generator */
+
+  rk3506_rng_initialize();
+#endif
+
+#ifdef CONFIG_RK3506_TSADC
+  /* CPU temperature sensor */
+
+  rk3506_tsadc_initialize();
+#endif
+
 #ifdef CONFIG_RK3506_GMAC0
   /* M2b.3: register the GMAC0 netdev ("eth0").  All hardware
    * sequences are the Linux SDK GMAC HAL ported verbatim
@@ -592,3 +639,23 @@ int hd_rk3506_bringup(void)
   _info("=== HD-RK3506-EVM bringup done ===\n");
   return OK;
 }
+
+#ifdef CONFIG_USERLED
+/****************************************************************************
+ * Name: board_userled_initialize
+ ****************************************************************************/
+
+int board_userled_initialize(void)
+{
+  /* Configure heartbeat LED as output, initially off (high = off for
+   * active low)
+   */
+
+  rk3506_gpio_config(LED_HEARTBEAT_BANK, LED_HEARTBEAT_PIN,
+                     RK3506_GPIO_OUTPUT);
+  rk3506_gpio_write(LED_HEARTBEAT_BANK, LED_HEARTBEAT_PIN,
+                    RK3506_GPIO_VALUE_HIGH);
+
+  return 0;
+}
+#endif

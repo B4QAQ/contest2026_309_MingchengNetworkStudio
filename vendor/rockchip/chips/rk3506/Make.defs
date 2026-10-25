@@ -109,6 +109,18 @@ ifeq ($(CONFIG_RK3506_RPTUN),y)
 CHIP_CSRCS += rk3506_rptun.c
 endif
 
+ifeq ($(CONFIG_RK3506_MMC),y)
+CHIP_CSRCS += rk3506_mmc.c
+endif
+
+ifeq ($(CONFIG_RK3506_RNG),y)
+CHIP_CSRCS += rk3506_rng.c
+endif
+
+ifeq ($(CONFIG_RK3506_TSADC),y)
+CHIP_CSRCS += rk3506_tsadc.c
+endif
+
 ifeq ($(CONFIG_OPENAMP),y)
 ifneq ($(CONFIG_MM_PGALLOC),y)
 CHIP_CSRCS += rk3506_addrenv.c

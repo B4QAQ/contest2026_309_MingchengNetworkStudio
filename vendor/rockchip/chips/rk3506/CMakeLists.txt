@@ -106,6 +106,18 @@ if(CONFIG_RK3506_RPTUN)
   list(APPEND SRCS rk3506_rptun.c)
 endif()
 
+if(CONFIG_RK3506_MMC)
+  list(APPEND SRCS rk3506_mmc.c)
+endif()
+
+if(CONFIG_RK3506_RNG)
+  list(APPEND SRCS rk3506_rng.c)
+endif()
+
+if(CONFIG_RK3506_TSADC)
+  list(APPEND SRCS rk3506_tsadc.c)
+endif()
+
 if(CONFIG_OPENAMP AND NOT CONFIG_MM_PGALLOC)
   list(APPEND SRCS rk3506_addrenv.c)
 endif()

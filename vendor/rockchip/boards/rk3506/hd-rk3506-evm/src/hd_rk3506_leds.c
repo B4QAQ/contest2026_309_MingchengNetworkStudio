@@ -4,12 +4,23 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * LED support for HD-RK3506-EVM.
- * Currently a stub; no LEDs are wired on this board.
+ * Heartbeat LED on GPIO1_B3 (SDK dts: heart_led, active low).
  ****************************************************************************/
 
 #include <nuttx/config.h>
 
 #include <debug.h>
+
+#include "drv/gpio/rk3506_gpio.h"
+
+/****************************************************************************
+ * Pre-processor Definitions
+ ****************************************************************************/
+
+/* Heartbeat LED: GPIO1_B3, active low (SDK dts: heart_led) */
+
+#define LED_HEARTBEAT_BANK  1
+#define LED_HEARTBEAT_PIN   11    /* GPIO1_B3 */
 
 /****************************************************************************
  * Public Functions
@@ -22,7 +33,14 @@
 #ifdef CONFIG_USERLED
 int board_userled_initialize(void)
 {
-  /* No LEDs wired on this board */
+  /* Configure heartbeat LED as output, initially off (high = off for
+   * active low)
+   */
+
+  rk3506_gpio_config(LED_HEARTBEAT_BANK, LED_HEARTBEAT_PIN,
+                     RK3506_GPIO_OUTPUT);
+  rk3506_gpio_write(LED_HEARTBEAT_BANK, LED_HEARTBEAT_PIN,
+                    RK3506_GPIO_VALUE_HIGH);
 
   return 0;
 }
@@ -35,7 +53,14 @@ int board_userled_initialize(void)
 #ifdef CONFIG_USERLED
 void board_userled(int led, bool ledon)
 {
-  /* No LEDs wired on this board */
+  if (led == 0)
+    {
+      /* Heartbeat LED (active low) */
+
+      rk3506_gpio_write(LED_HEARTBEAT_BANK, LED_HEARTBEAT_PIN,
+                        ledon ? RK3506_GPIO_VALUE_LOW :
+                                RK3506_GPIO_VALUE_HIGH);
+    }
 }
 #endif
 
@@ -46,6 +71,6 @@ void board_userled(int led, bool ledon)
 #ifdef CONFIG_USERLED
 void board_userled_all(uint32_t ledset)
 {
-  /* No LEDs wired on this board */
+  board_userled(0, (ledset & 1) != 0);
 }
 #endif

@@ -51,9 +51,28 @@ config RK3506_UART1
 	---help---
 		Enable UART1 (base 0xFF0B0000, IRQ 67).
 
-comment "UART2-UART5 exist in hardware but are not yet implemented in rk3506_serial.c"
+config RK3506_UART2
+	bool "UART 2"
+	default n
+	select UART2_SERIALDRIVER
+	select ARCH_HAVE_SERIAL_TERMIOS
+	---help---
+		Enable UART2 (base 0xFF0C0000, IRQ 68).
+		SDK dts: RM_IO0 (RX), RM_IO2 (TX) -> GPIO0_A0/A2.
+		Used for M0 debug console.
 
-comment "Do not add RK3506_UART2..5 until the driver grows per-port instances for them"
+config RK3506_UART3
+	bool "UART 3"
+	default n
+	select UART3_SERIALDRIVER
+	select ARCH_HAVE_SERIAL_TERMIOS
+	---help---
+		Enable UART3 (base 0xFF0D0000, IRQ 69).
+		SDK dts: RM_IO15 (RX), RM_IO14 (TX) -> GPIO0_B7/B6.
+
+comment "UART4-UART5 exist in hardware but are not yet implemented in rk3506_serial.c"
+
+comment "Do not add RK3506_UART4..5 until the driver grows per-port instances for them"
 
 config RK3506_I2C
 	bool "RK3506 I2C Bus Controller"
@@ -423,6 +442,190 @@ config RK3506_RPTUN
 		reloads or re-releases the M0.  The 2 MiB window
 		0x03c00000..0x03e00000 must stay outside the NuttX RAM;
 		enable RPMSG_CHAR for /dev/rpmsg/mcu.
+
+config RK3506_MMC
+	bool "RK3506 SD/MMC host controller (dw-mshc @ 0xFF480000)"
+	default n
+	depends on MMCSD && MMCSD_SDIO
+	---help---
+		Register the RK3506 Synopsys DesignWare MSHC controller
+		("rockchip,rk3506-dw-mshc", 0xFF480000, GIC SPI 86) as an
+		NuttX MMCSD slot (/dev/mmcsd0).  Polled PIO data transfers
+		(no IDMAC, no interrupt); card detect is polled by board
+		code because the board wires it to a plain GPIO.
+
+		Acceptance:
+		  nsh> ls /dev/mmcsd0
+		  nsh> mount -t vfat /dev/mmcsd0 /mnt/sd
+		  nsh> ls /mnt/sd
+
+if RK3506_MMC
+
+config RK3506_MMC_MAXFREQ
+	int "Maximum SD card clock (Hz)"
+	default 50000000
+	range 400000 150000000
+	---help---
+		Card clock used for data transfers (CLOCK_MMC_TRANSFER /
+		CLOCK_SD_TRANSFER_1BIT / CLOCK_SD_TRANSFER_4BIT).  The dts
+		allows 150 MHz, but this board is SD 2.0 / 3.3 V only
+		(HD-RK3506-EVM SDMMC doc: "no 1.8 V, no SD 3.0"), so no UHS
+		mode is attempted and 50 MHz high-speed is the practical
+		ceiling.  Identification always uses 400 kHz.
+
+config RK3506_MMC_BLOCKSIZE
+	int "Transfer block size (bytes)"
+	default 512
+	range 512 512
+	---help---
+		SD block size.  Also selects 4-bit operation: the controller
+		reports SDIO_CAPS_4BIT.
+
+config RK3506_MMC_CIU_FROM_XIN24M
+	bool "Drive the controller from xin24m instead of GPLL"
+	default n
+	---help---
+		The card clock is ciu / ((CLKDIV & 0xff) * 2).  By default
+		ciu comes from GPLL divided down to RK3506_MMC_CIU_HZ, which
+		needs the GPLL rate to be right.  Enable this to use the
+		24 MHz oscillator (divider /1, no assumption at all) if card
+		identification behaves oddly; the card clock then tops out at
+		12 MHz.
+
+config RK3506_MMC_GPLL_HZ
+	int "GPLL frequency (Hz)"
+	default 1200000000
+	depends on !RK3506_MMC_CIU_FROM_XIN24M
+	---help---
+		GPLL rate used to derive the SDMMC ciu divider.  A wrong value
+		only scales the card clock (the SD spec tolerates it), it does
+		not break enumeration.
+
+config RK3506_MMC_CIU_HZ
+	int "Desired SDMMC ciu clock (Hz)"
+	default 100000000
+	depends on !RK3506_MMC_CIU_FROM_XIN24M
+	---help---
+		Target controller input clock; CLKDIV then divides it by
+		(2 * n) to the card clock.  100 MHz gives exactly 400 kHz and
+		50 MHz.
+
+comment "SD card power switch (vcc3v3_sd)"
+
+config RK3506_MMC_PWREN
+	bool "Drive the SD card power switch from a GPIO"
+	default y
+	---help---
+		The reference board gates the SD 3.3 V rail with a GPIO
+		(regulator-fixed vcc3v3_sd, active low).  Without driving it
+		the card never powers up and never answers CMD0/CMD8.
+
+config RK3506_MMC_PWREN_BANK
+	int "SD power switch GPIO bank"
+	default 3
+	range 0 4
+	depends on RK3506_MMC_PWREN
+
+config RK3506_MMC_PWREN_PIN
+	int "SD power switch GPIO pin"
+	default 6
+	range 0 31
+	depends on RK3506_MMC_PWREN
+	---help---
+		Default 6 = GPIO3_A6, the vcc3v3_sd gate in
+		kernel-6.1/arch/arm/boot/dts/rk3506g-iotest-v10.dts:75.
+
+config RK3506_MMC_PWREN_ACTIVELOW
+	bool "SD power switch is active low"
+	default y
+	depends on RK3506_MMC_PWREN
+
+comment "SD card detect"
+
+config RK3506_MMC_CD_GPIO
+	bool "Card detect comes from a GPIO"
+	default y
+	---help---
+		Enable when the socket's card-detect switch is wired to a
+		GPIO.  Disable to use the controller's own CDETECT bit
+		(SDMMC_DET pin, muxed to the controller in board init).
+
+config RK3506_MMC_CD_BANK
+	int "Card detect GPIO bank"
+	default 3
+	range 0 4
+	depends on RK3506_MMC_CD_GPIO
+
+config RK3506_MMC_CD_PIN
+	int "Card detect GPIO pin"
+	default 7
+	range 0 31
+	depends on RK3506_MMC_CD_GPIO
+	---help---
+		Default 7 = GPIO3_A7, matching cd-gpios in
+		rk3506g-iotest-v10.dts:149.  If the board's detect switch is
+		really on GPIO3_A6 (next to SDMMC_D3 on A5), set this to 6
+		and move RK3506_MMC_PWREN_* off A6.
+
+config RK3506_MMC_CD_ACTIVELOW
+	bool "Card detect is active low"
+	default y
+	depends on RK3506_MMC_CD_GPIO
+
+config RK3506_MMC_HOTPLUG
+	bool "Poll card detect for hotplug"
+	default y
+	---help---
+		Run a low-rate board poll that calls rk3506_mmc_carddetect()
+		and drives the mmcsd media-change callback.  The DM_INSERTED
+		callback is armed when no card is present at boot.
+
+config RK3506_MMC_POLL_MS
+	int "Card detect poll interval (ms)"
+	default 500
+	range 100 5000
+	depends on RK3506_MMC_HOTPLUG
+
+endif # RK3506_MMC
+
+config RK3506_RNG
+	bool "RK3506 True Random Number Generator"
+	default n
+	---help---
+		Enable the RK3506 TRNG (0xFF0E0000).  Provides hardware
+		random numbers for /dev/random.
+
+config RK3506_TSADC
+	bool "RK3506 Temperature Sensor ADC"
+	default n
+	depends on SENSORS
+	---help---
+		Enable the RK3506 TSADC (0xFF2A8000).  Provides CPU
+		temperature readings via /dev/tsadc.
+
+config RK3506_RGA2
+	bool "RK3506 2D Graphics Accelerator"
+	default n
+	---help---
+		Enable the RK3506 RGA2 (0xFF400000).  2D graphics
+		acceleration (blitting, scaling, rotation).  Stub only -
+		full driver needs Rockchip RGA library integration.
+
+config RK3506_GMAC1
+	bool "RK3506 GMAC1 Ethernet (second port)"
+	default n
+	depends on RK3506_GMAC0
+	---help---
+		Enable the second GMAC controller (0xFF680000).  Requires
+		RMII PHY on the second port.
+
+config RK3506_USBHOST_OTG0
+	bool "RK3506 USB OTG0 (peripheral mode)"
+	default n
+	depends on RK3506_USBHOST
+	---help---
+		Enable USB OTG0 (0xFF740000) in peripheral mode.  Used for
+		firmware flashing via USB Type-C port.
 
 endmenu # "Rockchip RK3506 Peripheral Selection"
 

@@ -40,6 +40,10 @@ if(CONFIG_GRAPHICS_LVGL)
   list(APPEND SRCS hd_rk3506_lv_port_disp.c)
 endif()
 
+if(CONFIG_RK3506_MMC)
+  list(APPEND SRCS hd_rk3506_mmc.c)
+endif()
+
 if(CONFIG_IOEXPANDER)
   list(APPEND SRCS hd_rk3506_gpio.c)
 endif()

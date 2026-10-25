@@ -65,6 +65,22 @@ void rk3506_ioc_fspi_setup(void);
 void rk3506_ioc_i2c0_setup(void);
 
 /****************************************************************************
+ * Name: rk3506_ioc_i2c2_setup
+ *
+ * Description:
+ *   Route RM_IO4/5 to I2C2 SCL/SDA, per the SDK pinctrl data
+ *   (rk3506-pinctrl-rmio.dtsi):
+ *
+ *     rm_io4_i2c2_scl:  <0 RK_PA4 32 &pcfg_pull_none>
+ *     rm_io5_i2c2_sda:  <0 RK_PA5 33 &pcfg_pull_none>
+ *
+ *   The rjgt102 crypt chip sits on this bus at address 0x68.
+ *
+ ****************************************************************************/
+
+void rk3506_ioc_i2c2_setup(void);
+
+/****************************************************************************
  * Name: rk3506_ioc_gmac0_rmii_setup
  *
  * Description:
