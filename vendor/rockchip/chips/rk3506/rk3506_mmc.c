@@ -835,7 +835,19 @@ static int rk3506_mmc_sendcmd_sync(uint32_t cmd, uint32_t arg)
                                  MMC_CMD_TIMEOUT_MS);
       if (ret < 0)
         {
+          /* DAT0 (GPIO3_A2) held low for a full second is not a legal
+           * busy: read the raw pad level via the GPIO block to tell a
+           * stuck-low board trace from a card that is genuinely busy.
+           */
+
+          bool d0 = true;
+
           _warn("MMC: CMD%" PRIu32 " data busy, trying anyway\n", index);
+          if (rk3506_gpio_read(RK3506_GPIO_PIN(3, 2), &d0) == 0)
+            {
+              _warn("MMC: DAT0 pad level = %d (0 = line stuck low)\n",
+                    (int)d0);
+            }
         }
     }
 
