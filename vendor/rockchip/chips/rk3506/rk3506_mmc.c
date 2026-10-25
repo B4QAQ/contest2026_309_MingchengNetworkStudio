@@ -923,6 +923,7 @@ static int rk3506_mmc_sendcmd_sync(uint32_t cmd, uint32_t arg)
             _err("MMC: CMD%" PRIu32 " timeout, RINTSTS=%08" PRIx32 "\n",
                  index, rintsts);
             mmc_putreg(MMC_RINTSTS, INT_ALL);
+            priv->wkupevent = SDIOWAIT_ERROR | SDIOWAIT_TIMEOUT;
             return -ETIMEDOUT;
           }
       }
@@ -933,6 +934,7 @@ static int rk3506_mmc_sendcmd_sync(uint32_t cmd, uint32_t arg)
       _err("MMC: CMD%" PRIu32 " response timeout, RINTSTS=%08" PRIx32 "\n",
            index, rintsts);
       mmc_putreg(MMC_RINTSTS, INT_ALL);
+      priv->wkupevent = SDIOWAIT_ERROR | SDIOWAIT_TIMEOUT;
       return -ETIMEDOUT;
     }
 
@@ -942,6 +944,7 @@ static int rk3506_mmc_sendcmd_sync(uint32_t cmd, uint32_t arg)
            " RESP0=%08" PRIx32 "\n",
            index, rintsts, mmc_getreg(MMC_RESP0));
       mmc_putreg(MMC_RINTSTS, INT_ALL);
+      priv->wkupevent = SDIOWAIT_ERROR;
       return -EIO;
     }
 
@@ -1153,6 +1156,17 @@ static int rk3506_mmc_recv_rx(FAR struct sdio_dev_s *dev, uint32_t cmd,
                               FAR uint32_t *resp, int nwords)
 {
   int i;
+
+  /* The command may have timed out or been CRC-dropped in sendcmd();
+   * the recv path must NOT pretend success in that case, otherwise the
+   * mmcsd core reads a zeroed response as a valid OCR and misdetects
+   * an SD card as an MMC card (CMD1 ping-pong forever).
+   */
+
+  if ((g_mmc0.wkupevent & (SDIOWAIT_ERROR | SDIOWAIT_TIMEOUT)) != 0)
+    {
+      return (g_mmc0.wkupevent & SDIOWAIT_TIMEOUT) ? -ETIMEDOUT : -EIO;
+    }
 
   for (i = 0; i < nwords; i++)
     {

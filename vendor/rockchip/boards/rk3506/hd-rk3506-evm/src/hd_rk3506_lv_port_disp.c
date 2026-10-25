@@ -102,31 +102,56 @@ static void rk3506_disp_flush(lv_display_t *disp,
       return;
     }
 
-  /* px_map is laid out as a contiguous w*h block of lv_color16 (RGB565).
-   * Copy row-by-row into the framebuffer at (area->x1, area->y1) using
-   * the plane's stride.
+  /* px_map is a contiguous w*h RGB565 block in the LANDSCAPE logical
+   * frame (428 wide x 142 tall).  The panel framebuffer is panel-native
+   * PORTRAIT (142 wide x 428 tall, stride from the fb driver), so each
+   * logical pixel is transposed with a 90 degree rotation:
+   *
+   *   logical (x,y)  ->  fb (fb_x = y, fb_y = fb_h - 1 - x)
+   *
+   * (fb_h = physical yres = 428).  With FULL render mode the flushed
+   * area is always the whole logical screen, but keep the math general
+   * so partial areas would work too.
    */
 
   const uint8_t *src = px_map;
-  uint8_t       *dst = (uint8_t *)g_fb_base
-                     + (size_t)area->y1 * g_plane.stride
-                     + (size_t)area->x1 * (g_video.fmt == FB_FMT_RGB16_565
-                                            ? 2 : 1);
-  size_t row_bytes = (size_t)w * (g_video.fmt == FB_FMT_RGB16_565 ? 2 : 1);
+  uint8_t       *fb  = (uint8_t *)g_fb_base;
+  size_t bpp         = (g_video.fmt == FB_FMT_RGB16_565) ? 2 : 1;
+  int32_t fb_h       = (int32_t)g_video.yres;   /* physical panel height */
 
   for (int32_t y = 0; y < h; y++)
     {
-      memcpy(dst, src, row_bytes);
-      src += row_bytes;
-      dst += g_plane.stride;
+      uint8_t *dst = fb + (size_t)(area->y1 + y) * bpp
+                   + (size_t)(fb_h - 1 - area->x1) * g_plane.stride;
+
+      if (bpp == 2)
+        {
+          const uint16_t *s = (const uint16_t *)src;
+
+          for (int32_t x = 0; x < w; x++)
+            {
+              *(uint16_t *)dst = s[x];
+              dst -= g_plane.stride;
+            }
+        }
+      else
+        {
+          for (int32_t x = 0; x < w; x++)
+            {
+              *dst = src[x];
+              dst -= g_plane.stride;
+            }
+        }
+
+      src += (size_t)w * bpp;
     }
 
 #ifdef CONFIG_FB_UPDATE
   struct fb_area_s upd;
-  upd.x = area->x1;
-  upd.y = area->y1;
-  upd.w = w;
-  upd.h = h;
+  upd.x = 0;
+  upd.y = 0;
+  upd.w = g_video.xres;      /* physical fb width  */
+  upd.h = g_video.yres;      /* physical fb height */
   (void)ioctl(g_fb_fd, FBIO_UPDATE, &upd);
 #endif
 
@@ -309,9 +334,14 @@ int hd_rk3506_lv_port_disp_init(void)
   _info("LVGL: render buf %zu bytes at %p\n",
          buf_pixels * sizeof(lv_color_t), g_render_buf);
 
-  /* Create the LVGL display and bind the flush callback. */
+  /* Create the LVGL display as landscape: the panel is physically
+   * 142x428, but the UI is rotated 90 degrees so LVGL sees 428x142.
+   * The flush callback transposes logical (x,y) into the panel-native
+   * framebuffer layout, so the panel init / CASET / RASET / MADCTL stay
+   * exactly at the vendor defaults.
+   */
 
-  g_disp = lv_display_create(g_video.xres, g_video.yres);
+  g_disp = lv_display_create(g_video.yres, g_video.xres);
   if (g_disp == NULL)
     {
       _err("LVGL: lv_display_create returned NULL\n");
@@ -330,17 +360,6 @@ int hd_rk3506_lv_port_disp_init(void)
                          buf_pixels * sizeof(lv_color_t),
                          LV_DISPLAY_RENDER_MODE_FULL);
   _info("LVGL: flush_cb + buffers set, render mode FULL\n");
-
-  /* Rotate the UI 90 degrees.  The display is created at the panel's
-   * physical resolution (142x428); matrix rotation makes LVGL render the
-   * 428x142 logical screen through a 3x3 transform, so the buffer handed to
-   * the flush callback is already rotated in the panel's native
-   * orientation - the flush/FBIO_UPDATE path is unchanged.
-   * Requires CONFIG_LV_DRAW_TRANSFORM_USE_MATRIX.
-   */
-
-  lv_display_set_rotation(g_disp, LV_DISPLAY_ROTATION_90);
-  lv_display_set_matrix_rotation(g_disp, true);
 
   /* Start the LVGL timer-handler and tick threads. */
 
