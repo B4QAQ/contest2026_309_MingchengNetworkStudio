@@ -192,7 +192,9 @@
 
 #define MMC_CMD_TIMEOUT_MS        1000   /* one command + response       */
 #define MMC_DATA_TIMEOUT_MS       5000   /* one data transfer            */
-#define MMC_RESET_TIMEOUT_MS      100    /* BMOD/CTRL/FIFO soft reset    */
+#define MMC_RESET_TIMEOUT_MS      500    /* BMOD/CTRL/FIFO reset, CIU
+                                          * update (Linux mci_send_cmd
+                                          * polls START for 500ms)     */
 
 /* Clock tree: CCLK_SRC_SDMMC mux/divider (clk-rk3506.c:582) */
 
@@ -330,15 +332,38 @@ static int rk3506_mmc_send_ciu_cmd(void)
   return rk3506_mmc_wait_bits(MMC_CMD, CMD_START, 0, MMC_RESET_TIMEOUT_MS);
 }
 
+static int rk3506_mmc_ctrl_init(void);
+
 /* Clock-change wrapper that refuses to fail silently: a CIU update whose
  * START bit never clears leaves the controller locked, and the next CMD
  * write then fails with HLE for a reason that is otherwise invisible.
+ *
+ * Recovery: if the update hangs (observed when the card still drives
+ * DAT0 busy from a preceding R1b command such as CMD7 - STATUS bit 9
+ * shows it), reset the controller, which clears CMD.START, and retry
+ * once.  Linux waits 500ms for the same bit (dw_mmc.c mci_send_cmd).
  */
 
 static void rk3506_mmc_ciu_cmd_checked(void)
 {
   if (rk3506_mmc_send_ciu_cmd() < 0)
     {
+      _warn("MMC: CIU clock update timeout, STATUS=%08" PRIx32
+            " - resetting controller\n", mmc_getreg(MMC_STATUS));
+
+      if (rk3506_mmc_ctrl_init() == 0)
+        {
+          /* ctrl_init() put CTYPE back to 1-bit; restore the bus width */
+
+          mmc_putreg(MMC_CTYPE,
+                     g_mmc0.widebus ? CTYPE_WIDTH4 : CTYPE_WIDTH1);
+
+          if (rk3506_mmc_send_ciu_cmd() == 0)
+            {
+              return;
+            }
+        }
+
       _err("MMC: CIU clock update did not complete (no cclk_in?)\n");
     }
 }
@@ -838,10 +863,11 @@ static int rk3506_mmc_sendcmd_sync(uint32_t cmd, uint32_t arg)
 
       flags |= CMD_ABORT_STOP;
     }
-  else if (data)
+  else if (data || rspmode == MMCSD_R1B_RESPONSE)
     {
-      /* Wait for data completion only for actual data commands
-       * (U-Boot dwmci_send_cmd / Linux dw_mci_prepare_command).
+      /* Wait for data completion for actual data commands, and for
+       * busy-driven R1b responses (CMD7 select etc.) - Linux
+       * dw_mci_prepare_command sets PRV_DAT_WAIT for MMC_RSP_BUSY too.
        */
 
       flags |= CMD_PRV_DAT_WAIT;
