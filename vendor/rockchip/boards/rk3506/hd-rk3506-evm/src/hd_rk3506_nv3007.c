@@ -398,24 +398,29 @@ static void nv_command(uint16_t cmd, FAR const uint8_t *p, uint8_t n)
 
   nv_bus_acquire();
 
+  /* One CS window for command + all parameters (matches SDK/Linux
+   * mipi_dbi_command() behavior).  The NV3007 latches parameters on the
+   * same CS assertion as the command; splitting them across multiple
+   * CS windows causes the panel to drop parameters.
+   */
+
+  nv_cs_select(true);
+
   if (cmd != NV_DATA_ONLY)
     {
       uint8_t c = (uint8_t)cmd;
 
-      nv_cs_select(true);
       nv_dc_set(false);                 /* command phase */
       nv_spi_write(&c, 1);
-      nv_cs_select(false);
     }
 
   for (i = 0; i < n; i++)
     {
-      nv_cs_select(true);
       nv_dc_set(true);                  /* data phase */
       nv_spi_write(&p[i], 1);
-      nv_cs_select(false);
     }
 
+  nv_cs_select(false);
   nv_bus_release();
 }
 
@@ -447,45 +452,43 @@ static void nv_stream_begin(fb_coord_t col_start, fb_coord_t col_end,
 
   nv_bus_acquire();
 
-  /* CASET: cmd window, then 4 data windows */
+  /* CASET: one CS window for command + 4 data bytes */
 
   nv_cs_select(true);
   nv_dc_set(false);
   c = NV_CMD_CASET;
   nv_spi_write(&c, 1);
-  nv_cs_select(false);
 
   for (i = 0; i < 4; i++)
     {
-      nv_cs_select(true);
       nv_dc_set(true);
       nv_spi_write(&col[i], 1);
-      nv_cs_select(false);
     }
+  nv_cs_select(false);
 
-  /* RASET: cmd window, then 4 data windows */
+  /* RASET: one CS window for command + 4 data bytes */
 
   nv_cs_select(true);
   nv_dc_set(false);
   c = NV_CMD_RASET;
   nv_spi_write(&c, 1);
-  nv_cs_select(false);
 
   for (i = 0; i < 4; i++)
     {
-      nv_cs_select(true);
       nv_dc_set(true);
       nv_spi_write(&row[i], 1);
-      nv_cs_select(false);
     }
+  nv_cs_select(false);
 
-  /* RAMWR: cmd window only; pixel data follows in nv_send_pixels() */
+  /* RAMWR: one CS window for command only; pixel data follows in
+   * nv_send_pixels() with CS held low and DC high.
+   */
 
   nv_cs_select(true);
   nv_dc_set(false);
   c = NV_CMD_RAMWR;
   nv_spi_write(&c, 1);
-  nv_cs_select(false);
+  /* Keep CS low, caller will send pixels then call nv_bus_release() */
 }
 
 /* Push one row.  src is the framebuffer (RGB565 little-endian in memory);
@@ -503,22 +506,19 @@ static void nv_send_pixels(FAR const uint8_t *src, unsigned int npixels)
       npixels = NV3007_XRES;
     }
 
-  /* Vendor demo sends every pixel byte in its own CS window (DC high). */
+  /* Continuous CS window for all pixels (matches SDK/Linux behavior).
+   * CS is already low from nv_stream_begin(); DC stays high for data.
+   */
+
+  nv_dc_set(true);
 
   for (i = 0; i < npixels; i++)
     {
       uint8_t hi = (uint8_t)(in[i] >> 8);
       uint8_t lo = (uint8_t)(in[i]);
 
-      nv_cs_select(true);
-      nv_dc_set(true);
       nv_spi_write(&hi, 1);
-      nv_cs_select(false);
-
-      nv_cs_select(true);
-      nv_dc_set(true);
       nv_spi_write(&lo, 1);
-      nv_cs_select(false);
     }
 }
 
