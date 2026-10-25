@@ -210,6 +210,8 @@ static bool btn_poll(struct rk3506_btn_s *btn, uint32_t *key,
 static void rk3506_btn_read(lv_indev_t *indev, lv_indev_data_t *data)
 {
   unsigned int i;
+  lv_group_t *group = lv_group_get_default();
+  bool editing = (group != NULL) && lv_group_get_editing(group);
 
   (void)indev;
 
@@ -225,6 +227,25 @@ static void rk3506_btn_read(lv_indev_t *indev, lv_indev_data_t *data)
 
       if (btn_poll(&g_btn[i], &key, &state))
         {
+          /* In edit mode (e.g. keyboard focused), translate PREV/NEXT
+           * to LEFT/RIGHT so the object (buttonmatrix) can navigate
+           * its internal buttons.  LVGL's keypad driver unconditionally
+           * exits edit mode on PREV/NEXT, so we must send LEFT/RIGHT
+           * instead - those are forwarded to the object unchanged.
+           */
+
+          if (editing && state == LV_INDEV_STATE_PRESSED)
+            {
+              if (key == LV_KEY_PREV)
+                {
+                  key = LV_KEY_LEFT;
+                }
+              else if (key == LV_KEY_NEXT)
+                {
+                  key = LV_KEY_RIGHT;
+                }
+            }
+
           data->key   = key;
           data->state = state;
           return;
@@ -257,10 +278,10 @@ int hd_rk3506_lv_port_indev_init(void)
   lv_group_t *group;
 
   g_btn[0].gpin      = BTN1_GPIN;
-  g_btn[0].short_key = LV_KEY_PREV;    /* UP   */
+  g_btn[0].short_key = LV_KEY_PREV;    /* UP / LEFT in edit mode   */
   g_btn[0].long_key  = LV_KEY_ENTER;   /* OK   */
   g_btn[1].gpin      = BTN2_GPIN;
-  g_btn[1].short_key = LV_KEY_NEXT;    /* DOWN */
+  g_btn[1].short_key = LV_KEY_NEXT;    /* DOWN / RIGHT in edit mode*/
   g_btn[1].long_key  = LV_KEY_ESC;     /* BACK */
 
   if (rk3506_gpio_config(BTN1_GPIN,

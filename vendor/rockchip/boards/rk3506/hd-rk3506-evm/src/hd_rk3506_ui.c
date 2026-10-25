@@ -488,7 +488,11 @@ static void ui_build_cmd(lv_obj_t *page)
 
   kb = lv_keyboard_create(page);
   lv_obj_set_size(kb, UI_CONTENT_W, 96);
-  lv_obj_set_pos(kb, 0, 40);
+  /* The keyboard constructor aligns itself BOTTOM_MID which would push
+   * it past the visible area on this 142 px-tall page; anchor it right
+   * under the result line instead.
+   */
+  lv_obj_align(kb, LV_ALIGN_TOP_LEFT, 0, 40);
   lv_obj_set_style_text_font(kb, &lv_font_montserrat_12, 0);
   lv_obj_set_style_bg_color(kb, lv_color_hex(UI_COL_BG), 0);
   lv_obj_set_style_bg_color(kb, lv_color_hex(UI_COL_BTN),
