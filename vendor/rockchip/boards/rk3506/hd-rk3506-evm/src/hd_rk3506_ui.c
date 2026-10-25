@@ -165,47 +165,50 @@ static lv_obj_t *ui_make_label(lv_obj_t *parent, const char *text,
  * Private Functions - data gathering
  ****************************************************************************/
 
-/* CPU card: total CPU busy ratio from /proc/cpuload (" 12.3%\n", one
- * line per CPU; single-core build -> one line).  procfs sampling is
- * cumulative since boot, which is exactly what a glanceable card wants.
+/* CPU card: line 1 = total busy ratio from /proc/cpuload (" 12.3%\n",
+ * one line per CPU; single-core build -> one line), line 2 = uptime.
+ * procfs sampling is cumulative since boot, which is exactly what a
+ * glanceable card wants.
  */
 
 static void ui_fmt_cpu(char *buf, size_t len)
 {
-  char line[32];
+  struct timespec ts;
+  unsigned long s;
+  char line[24];
   int fd;
   int n;
 
+  strlcpy(line, "n/a", sizeof(line));
   fd = open("/proc/cpuload", O_RDONLY);
-  if (fd < 0)
+  if (fd >= 0)
     {
-      strlcpy(buf, "n/a", len);
-      return;
+      n = read(fd, line, sizeof(line) - 1);
+      close(fd);
+      if (n > 0)
+        {
+          char *nl;
+
+          line[n] = '\0';
+          nl = strchr(line, '\n');
+          if (nl != NULL)
+            {
+              *nl = '\0';
+            }
+        }
+      else
+        {
+          strlcpy(line, "n/a", sizeof(line));
+        }
     }
 
-  n = read(fd, line, sizeof(line) - 1);
-  close(fd);
-  if (n <= 0)
-    {
-      strlcpy(buf, "n/a", len);
-      return;
-    }
-
-  line[n] = '\0';
-
-  /* Strip the trailing newline so the label stays on one line */
-
-  {
-    char *nl = strchr(line, '\n');
-
-    if (nl != NULL)
-      {
-        *nl = '\0';
-      }
-  }
-
-  strlcpy(buf, line, len);
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  s = (unsigned long)ts.tv_sec;
+  snprintf(buf, len, "%s\nup %lu:%02lu:%02lu",
+           line, s / 3600, (s / 60) % 60, s % 60);
 }
+
+/* MEM card: line 1 = heap usage percent + used KiB, line 2 = free KiB */
 
 static void ui_fmt_mem(char *buf, size_t len)
 {
@@ -214,7 +217,9 @@ static void ui_fmt_mem(char *buf, size_t len)
   unsigned int pct = (total != 0) ?
                      (unsigned int)((100ull * mi.uordblks) / total) : 0;
 
-  snprintf(buf, len, "%u%% (%uK)", pct, (unsigned)(mi.uordblks / 1024));
+  snprintf(buf, len, "%u%% %uK\nfree %uK", pct,
+           (unsigned)(mi.uordblks / 1024),
+           (unsigned)(mi.fordblks / 1024));
 }
 
 static void ui_fmt_ip(char *buf, size_t len)
@@ -400,7 +405,7 @@ static lv_obj_t *ui_make_card(lv_obj_t *parent, int x, int y,
                       UI_COL_DIM);
   lv_obj_align(lbl, LV_ALIGN_TOP_LEFT, 0, 0);
 
-  lbl = ui_make_label(card, "-", &lv_font_montserrat_14,
+  lbl = ui_make_label(card, "-", &lv_font_montserrat_12,
                       UI_COL_TEXT);
   lv_obj_align(lbl, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 
@@ -613,25 +618,10 @@ int hd_ui_main(int argc, char *argv[])
   scr = lv_screen_active();
   ui_style_screen(scr);
 
-  /* Content pages on the left */
-
-  for (i = 0; i < UI_NPAGES; i++)
-    {
-      g_pages[i] = lv_obj_create(scr);
-      lv_obj_set_size(g_pages[i], UI_CONTENT_W, UI_SCR_H - 8);
-      lv_obj_set_pos(g_pages[i], 0, 0);
-      ui_style_screen(g_pages[i]);
-      lv_obj_set_style_radius(g_pages[i], 0, 0);
-      lv_obj_remove_flag(g_pages[i], LV_OBJ_FLAG_SCROLLABLE);
-    }
-
-  ui_build_home(g_pages[UI_PAGE_HOME]);
-  ui_build_cmd(g_pages[UI_PAGE_CMD]);
-  ui_build_test(g_pages[UI_PAGE_TEST]);
-  ui_build_info(g_pages[UI_PAGE_INFO]);
-
-  /* Right-side icon menu; every button joins the default group so the
-   * J9 keys can walk and activate them.
+  /* Right-side icon menu FIRST: LVGL group focus order follows the
+   * lv_group_add_obj() order, and the J9 NEXT key walks it, so the
+   * four menu buttons must be the first members or focus would land
+   * on page widgets (textarea/keyboard) the user cannot see yet.
    */
 
   menu = lv_obj_create(scr);
@@ -663,7 +653,36 @@ int hd_ui_main(int argc, char *argv[])
       lv_group_add_obj(lv_group_get_default(), btn);
     }
 
+  /* Content pages on the left */
+
+  for (i = 0; i < UI_NPAGES; i++)
+    {
+      g_pages[i] = lv_obj_create(scr);
+      lv_obj_set_size(g_pages[i], UI_CONTENT_W, UI_SCR_H - 8);
+      lv_obj_set_pos(g_pages[i], 0, 0);
+      ui_style_screen(g_pages[i]);
+      lv_obj_set_style_radius(g_pages[i], 0, 0);
+      lv_obj_remove_flag(g_pages[i], LV_OBJ_FLAG_SCROLLABLE);
+    }
+
+  ui_build_home(g_pages[UI_PAGE_HOME]);
+  ui_build_cmd(g_pages[UI_PAGE_CMD]);
+  ui_build_test(g_pages[UI_PAGE_TEST]);
+  ui_build_info(g_pages[UI_PAGE_INFO]);
+
   ui_show_page(UI_PAGE_HOME);
+
+  /* Park the focus ring on the HOME menu button at startup. */
+
+  {
+    lv_group_t *group = lv_group_get_default();
+    lv_obj_t *first = lv_obj_get_child(menu, 0);
+
+    if (group != NULL && first != NULL)
+      {
+        lv_group_focus_obj(first);
+      }
+  }
 
   lv_timer_create(ui_refresh_cb, UI_REFRESH_MS, NULL);
 
