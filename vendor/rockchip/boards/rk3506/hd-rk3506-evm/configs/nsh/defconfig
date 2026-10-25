@@ -593,6 +593,25 @@ CONFIG_NETUTILS_NTPCLIENT=y
 CONFIG_NETUTILS_IPERF=y
 
 #---------------------------------------------------------------------------
+# LED (heartbeat on GPIO1_B3, active low)
+#---------------------------------------------------------------------------
+CONFIG_USERLED=y
+CONFIG_USERLED_LOWER=y
+CONFIG_ARCH_LEDS=y
+
+#---------------------------------------------------------------------------
+# RNG (hardware random number generator)
+#---------------------------------------------------------------------------
+CONFIG_RK3506_RNG=y
+CONFIG_DEV_URANDOM=y
+
+#---------------------------------------------------------------------------
+# TSADC (CPU temperature sensor)
+#---------------------------------------------------------------------------
+CONFIG_SENSORS=y
+CONFIG_RK3506_TSADC=y
+
+#---------------------------------------------------------------------------
 # MMC/SD: TF socket on the DesignWare MSHC (0xFF480000, IRQ 86).
 # CONFIG_MMCSD_SDIO needs ARCH_HAVE_SDIO (selected by
 # ARCH_CHIP_RK3506 in nuttx/arch/arm/Kconfig).

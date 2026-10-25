@@ -16,17 +16,19 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include <nuttx/random.h>
-
 #include <debug.h>
 
+#include "arm_internal.h"
 #include "rk3506_rng.h"
+#include "hardware/rk3506_memorymap.h"
 
 #ifdef CONFIG_RK3506_RNG
 
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
+
+#define RK3506_RNG_BASE           RK3506_RNG_ADDR
 
 /* TRNG register offsets (from SDK hal_trng.c) */
 

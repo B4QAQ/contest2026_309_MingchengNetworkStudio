@@ -19,8 +19,7 @@
 
 /* Heartbeat LED: GPIO1_B3, active low (SDK dts: heart_led) */
 
-#define LED_HEARTBEAT_BANK  1
-#define LED_HEARTBEAT_PIN   11    /* GPIO1_B3 */
+#define LED_HEARTBEAT_GPIN  RK3506_GPIO_PIN(1, 11)   /* GPIO1_B3 */
 
 /****************************************************************************
  * Public Functions
@@ -37,10 +36,8 @@ int board_userled_initialize(void)
    * active low)
    */
 
-  rk3506_gpio_config(LED_HEARTBEAT_BANK, LED_HEARTBEAT_PIN,
-                     RK3506_GPIO_OUTPUT);
-  rk3506_gpio_write(LED_HEARTBEAT_BANK, LED_HEARTBEAT_PIN,
-                    RK3506_GPIO_VALUE_HIGH);
+  rk3506_gpio_config(LED_HEARTBEAT_GPIN, RK3506_GPIO_OUTPUT);
+  rk3506_gpio_write(LED_HEARTBEAT_GPIN, true);  /* High = LED off */
 
   return 0;
 }
@@ -57,9 +54,7 @@ void board_userled(int led, bool ledon)
     {
       /* Heartbeat LED (active low) */
 
-      rk3506_gpio_write(LED_HEARTBEAT_BANK, LED_HEARTBEAT_PIN,
-                        ledon ? RK3506_GPIO_VALUE_LOW :
-                                RK3506_GPIO_VALUE_HIGH);
+      rk3506_gpio_write(LED_HEARTBEAT_GPIN, !ledon);
     }
 }
 #endif

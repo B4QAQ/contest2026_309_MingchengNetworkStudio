@@ -43,6 +43,8 @@
 #include "rk3506_i2c.h"
 #include "rk3506_rng.h"
 #include "rk3506_tsadc.h"
+
+#include "drv/gpio/rk3506_gpio.h"
 #include "drv/spi/rk3506_spi.h"
 #include "rk3506_spinand.h"
 #include "rk3506_cru.h"
@@ -639,23 +641,3 @@ int hd_rk3506_bringup(void)
   _info("=== HD-RK3506-EVM bringup done ===\n");
   return OK;
 }
-
-#ifdef CONFIG_USERLED
-/****************************************************************************
- * Name: board_userled_initialize
- ****************************************************************************/
-
-int board_userled_initialize(void)
-{
-  /* Configure heartbeat LED as output, initially off (high = off for
-   * active low)
-   */
-
-  rk3506_gpio_config(LED_HEARTBEAT_BANK, LED_HEARTBEAT_PIN,
-                     RK3506_GPIO_OUTPUT);
-  rk3506_gpio_write(LED_HEARTBEAT_BANK, LED_HEARTBEAT_PIN,
-                    RK3506_GPIO_VALUE_HIGH);
-
-  return 0;
-}
-#endif
