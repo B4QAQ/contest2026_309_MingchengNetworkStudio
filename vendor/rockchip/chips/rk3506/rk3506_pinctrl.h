@@ -121,6 +121,24 @@ extern "C"
 int rk3506_pinctrl_set_mux(uint8_t bank, uint8_t pin, uint8_t func);
 
 /****************************************************************************
+ * Name: rk3506_pinctrl_get_mux
+ *
+ * Description:
+ *   Read back the current 4-bit IOMUX function select of a pin.
+ *   Used to verify that set_mux() actually landed on the hardware.
+ *
+ * Input Parameters:
+ *   bank - GPIO bank number, 0..4
+ *   pin  - Pin number within the bank, 0..31
+ *
+ * Returned Value:
+ *   The 4-bit function value (0..15), or -EINVAL on bad bank/pin.
+ *
+ ****************************************************************************/
+
+int rk3506_pinctrl_get_mux(uint8_t bank, uint8_t pin);
+
+/****************************************************************************
  * Name: rk3506_pinctrl_set_pull
  *
  * Description:

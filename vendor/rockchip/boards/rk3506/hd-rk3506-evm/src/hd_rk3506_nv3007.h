@@ -16,12 +16,15 @@
 
 #ifdef CONFIG_LCD_NV3007
 
+#include <nuttx/spi/spi.h>
+
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
 
 /* Visible GRAM window per the vendor demo (TFT_COLUMN_NUMBER /
- * TFT_LINE_NUMBER / TFT_COLUMN_OFFSET).
+ * TFT_LINE_NUMBER / TFT_COLUMN_OFFSET).  The controller GRAM is 168 wide;
+ * the visible 142 columns start at X = 12.
  */
 
 #define NV3007_XRES          142
@@ -29,29 +32,56 @@
 #define NV3007_XOFFSET       12
 #define NV3007_BPP           16
 
-/* 4-wire SPI on DesignWare SPI0; conservative bring-up rate (the pad is
- * rated to 50 MHz, raise after validation).
+/* 4-wire SPI on DesignWare SPI0.  The NV3007 is happy at 40 MHz on a short
+ * ribbon; the RK3506 pad is rated 50 MHz.
  */
 
 #define NV3007_SPI_BUS       0     /* rk3506_spibus_initialize() index    */
-#define NV3007_SPI_FREQ      1000000
-#define NV3007_SPI_MODE      0     /* SPIDEV_MODE0: CPOL=0, CPHA=0 */
+
+#ifndef NV3007_SPI_FREQ
+#  define NV3007_SPI_FREQ    1000000
+#endif
+
+/* SPI mode.  MODE 0 (CPOL=0 / CPHA=0) is the mode verified by the upstream
+ * ZMK nv3007 driver and is what every Arduino_GFX / TFT_eSPI port uses.
+ */
+
+#ifndef NV3007_SPI_MODE
+#  define NV3007_SPI_MODE    SPIDEV_MODE0
+#endif
+
+/* CS / DC setup and hold, in microseconds.  The panel needs well under
+ * 100 ns; 1 us is a 10x margin and costs nothing.  These guarantee that DC
+ * is never switched while the controller is still shifting bytes out.
+ */
+
+#ifndef NV3007_CS_SETUP_US
+#  define NV3007_CS_SETUP_US 1
+#endif
+
+#ifndef NV3007_CS_HOLD_US
+#  define NV3007_CS_HOLD_US  1
+#endif
+
+#ifndef NV3007_DC_SETUP_US
+#  define NV3007_DC_SETUP_US 1
+#endif
 
 /* J9 expansion-header pads, given as the GPIO0 in-bank pin number
- * (== RM_IO matrix physical index).  Only SCK/MOSI go through the SPI
- * controller; CS/DC/RST are ordinary GPIO outputs, matching the proven
- * vendor/Arduino bit-bang wiring (per-byte software CS):
- *   J9-17 SCK = GPIO0_A7 / RM_IO7 <- spi0_clk  (RMIO fn 82, mux 7)
- *   J9-16 SDA = GPIO0_A1 / RM_IO1 <- spi0_mosi (RMIO fn 83, mux 7)
+ * (== RM_IO matrix physical index).  Only SCK/MOSI go through the SPI0
+ * controller; CS/DC/RST/BL are ordinary GPIO outputs:
+ *   J9-17 SCK = GPIO0_A7 / RM_IO7  <- spi0_clk  (RMIO fn 82, mux 7)
+ *   J9-16 SDA = GPIO0_A1 / RM_IO1  <- spi0_mosi (RMIO fn 83, mux 7)
  *   J9-14 CS  = GPIO0_A3 / RM_IO3  (plain GPIO output, idle high)
  *   J9-31 RST = GPIO0_B0 / RM_IO8  (plain GPIO output)
  *   J9-30 DC  = GPIO0_B3 / RM_IO11 (plain GPIO output)
- *   J9-29 BL  = GPIO0_B4 / RM_IO12 (PWM0 ch2, routed by rk3506_pwm)
+ *   J9-29 BL  = GPIO0_B4 / RM_IO12 (plain GPIO output, high = lit)
  */
 
 #define NV3007_PIN_CS        3     /* GPIO0_A3 -> J9-14                    */
 #define NV3007_PIN_RST       8     /* GPIO0_B0 -> J9-31                    */
 #define NV3007_PIN_DC        11    /* GPIO0_B3 -> J9-30                    */
+#define NV3007_PIN_BL        12    /* GPIO0_B4 -> J9-29                    */
 
 #endif /* CONFIG_LCD_NV3007 */
 #endif /* __BOARDS_RK3506_HD_RK3506_EVM_SRC_HD_RK3506_NV3007_H */

@@ -87,7 +87,8 @@
 
 #define RK3506_GPIO_INPUT            0x01u  /* input (Hi-Z)            */
 #define RK3506_GPIO_OUTPUT           0x02u  /* push-pull output        */
-#define RK3506_GPIO_VALUE_HIGH       0x04u  /* initial output level    */
+#define RK3506_GPIO_VALUE_LOW        0x00u  /* initial output low (default) */
+#define RK3506_GPIO_VALUE_HIGH       0x04u  /* initial output high     */
 #define RK3506_GPIO_PULL_UP          0x08u  /* enable pull-up          */
 #define RK3506_GPIO_PULL_DOWN        0x10u  /* enable pull-down        */
 

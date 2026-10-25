@@ -17,10 +17,11 @@ config LCD_NV3007
 	select SPI
 	---help---
 		Enable the NV3007 2.79in SPI TFT panel.  The panel is driven by
-		the DesignWare SPI0 controller (DC/RST on RM_IO GPIO, backlight
-		on PWM0 ch2/RM_IO10) and exposed as /dev/fb0 through the NuttX
-		lcd_framebuffer bridge.  Visible window 142x428 RGB565 with a
-		12-column GRAM x-offset (per the vendor demo).
+		the DesignWare SPI0 controller (SCK/MOSI on the RM_IO matrix,
+		CS/DC/RST and the backlight BL on plain GPIO outputs) and
+		exposed as /dev/fb0 through the NuttX lcd_framebuffer bridge.
+		Visible window 142x428 RGB565 with a 12-column GRAM x-offset
+		(per the vendor demo).
 
 config HD_RK3506_NETCFG
 	bool "netcfg network configuration daemon"

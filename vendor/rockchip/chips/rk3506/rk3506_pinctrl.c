@@ -224,6 +224,70 @@ int rk3506_pinctrl_rmio_offset(uint8_t bank, uint8_t pin)
 }
 
 /****************************************************************************
+ * Name: rk3506_pinctrl_get_mux
+ ****************************************************************************/
+
+int rk3506_pinctrl_get_mux(uint8_t bank, uint8_t pin)
+{
+  uintptr_t base;
+  uint32_t  reg;
+  uint32_t  bit;
+  uint8_t   group;
+
+  if (bank >= RK3506_NR_BANKS || pin >= RK3506_BANK_NPINS)
+    {
+      return -EINVAL;
+    }
+
+  if (bank == 4)
+    {
+      return 0;    /* bank4 is GPIO-only, mux is hard-wired */
+    }
+
+  base = rk3506_ioc_base(bank);
+  if (base == 0)
+    {
+      return -EINVAL;
+    }
+
+  group = pin / 8u;
+
+  if (bank == 0)
+    {
+      if (group < 3)
+        {
+          reg = IOMUX_OFF_BANK0_A + (uint32_t)group * IOMUX_GROUP_STRIDE;
+          bit = (pin % 4u) * 4u;
+          if ((pin % 8u) >= 4u)
+            {
+              reg += 0x4u;
+            }
+        }
+      else
+        {
+          reg = IOMUX_OFF_BANK0_D;
+          bit = 0u;
+        }
+    }
+  else
+    {
+      static const uint8_t bank_base[4] =
+        {
+          0, IOMUX_OFF_BANK1_A, IOMUX_OFF_BANK2_A, IOMUX_OFF_BANK3_A
+        };
+
+      reg = bank_base[bank] + (uint32_t)group * IOMUX_GROUP_STRIDE;
+      bit = (pin % 4u) * 4u;
+      if ((pin % 8u) >= 4u)
+        {
+          reg += 0x4u;
+        }
+    }
+
+  return (int)((getreg32(base + reg) >> bit) & 0xfu);
+}
+
+/****************************************************************************
  * Name: rk3506_pinctrl_set_mux
  ****************************************************************************/
 

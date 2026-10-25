@@ -22,6 +22,11 @@
 
 set(SRCS hd_rk3506_boardinit.c hd_rk3506_appinit.c hd_rk3506_bringup.c)
 
+# Temporary bringup diagnostic dump (RM_IO/clock/iomux/USB-PHY readback)
+# for the backlight + USB regression.  Remove once root-caused.
+
+list(APPEND SRCS hd_rk3506_diag.c)
+
 if(CONFIG_LCD_NV3007)
   list(APPEND SRCS hd_rk3506_nv3007.c)
 endif()

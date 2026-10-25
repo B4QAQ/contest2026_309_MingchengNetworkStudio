@@ -236,9 +236,12 @@ config RK3506_PWM
 		Register /dev/pwm0 backed by the pwm0_4ch_2 channel block
 		(0xFF932000, 100 MHz time base).  The output pad is routed
 		through the RM_IO matrix (see the RK3506_PWM_* options below;
-		the HD-RK3506-EVM default is RM_IO12 = GPIO0_B4, J9-29,
-		DTS function 47).  Register sequence ported from the SDK
-		hal_pwm.c continuous mode.
+		the default is RM_IO12 = GPIO0_B4, J9-29, DTS function 47).
+		Register sequence ported from the SDK hal_pwm.c continuous
+		mode.  NOTE: on the HD-RK3506-EVM that pad is the NV3007
+		backlight and hd_rk3506_nv3007.c drives it as a plain GPIO
+		output, so this option is off there -- enabling it would
+		re-mux the pad away from the backlight.
 
 config RK3506_PWM_BANK
 	int "PWM output GPIO bank"
@@ -250,7 +253,8 @@ config RK3506_PWM_BANK
 		PWM0_CH2 signal only reaches the outside through the RM_IO
 		matrix, which on this chip serves bank 0 pads (RM_IO0..23 =
 		GPIO0_A0..C7).  The default bank 0 / pin 12 (GPIO0_B4 =
-		RM_IO12) matches the HD-RK3506-EVM backlight header J9-29.
+		RM_IO12) is J9-29 on the HD-RK3506-EVM, i.e. the NV3007
+		backlight pad -- which is why RK3506_PWM is off on that board.
 
 config RK3506_PWM_PIN
 	int "PWM output GPIO pin within the bank (0..31)"
@@ -260,10 +264,10 @@ config RK3506_PWM_PIN
 	---help---
 		Pin number of the PWM output pad inside RK3506_PWM_BANK,
 		counted from A0=0 (A0..A7=0..7, B0..B7=8..15, ...).  The
-		HD-RK3506-EVM backlight is on GPIO0_B4 = RM_IO12, which is
-		in-bank pin 12 (NOT 4 -- 4 would be GPIO0_A4).  Using 4 here
-		routes PWM to RM_IO channel 4 (GPIO0_A4) instead of channel
-		12 (GPIO0_B4), leaving the backlight pad undriven.
+		NV3007 backlight pad is GPIO0_B4 = RM_IO12, which is in-bank
+		pin 12 (NOT 4 -- 4 would be GPIO0_A4).  Using 4 here routes
+		PWM to RM_IO channel 4 (GPIO0_A4) instead of channel 12
+		(GPIO0_B4).
 
 config RK3506_PWM_FUNC
 	int "PWM output RM_IO function number (DTS mux value)"

@@ -218,11 +218,6 @@ CONFIG_IOEXPANDER_NPINS=32
 CONFIG_RK3506_GPIO=y
 
 #---------------------------------------------------------------------------
-# PWM (for backlight)
-#---------------------------------------------------------------------------
-CONFIG_PWM=y
-
-#---------------------------------------------------------------------------
 # Examples / Testing (optional)
 #---------------------------------------------------------------------------
 CONFIG_EXAMPLES_HELLO=y
@@ -503,10 +498,13 @@ CONFIG_KVDB=y
 CONFIG_KVDB_DIRECT=y
 CONFIG_KVDB_FILE=y
 CONFIG_KVDB_PERSIST_PATH="/data/kvdb.db"
-# PWM0 ch2 on RM_IO12 (GPIO0_B4 = J9-29), 100MHz time base, /dev/pwm0 (NV3007 BL)
-CONFIG_RK3506_PWM=y
-CONFIG_EXAMPLES_PWM=y
-CONFIG_EXAMPLES_PWM_DEVPATH="/dev/pwm0"
+# RM_IO12 (GPIO0_B4 = J9-29) belongs to the NV3007 backlight as a plain
+# GPIO output (driven by hd_rk3506_nv3007.c).  The RK3506 PWM0 ch2 driver
+# is therefore disabled: rk3506_pwm_initialize() would re-mux that pad to
+# PWM function 47 and steal it from the backlight GPIO.
+# CONFIG_RK3506_PWM is not set
+# The `pwm` example is gone too: it only drove /dev/pwm0 on that same pad.
+# CONFIG_EXAMPLES_PWM is not set
 # SARADC: /dev/adc0, channels IN2/IN3 (40-pin header, 1.8 V domain),
 # software-triggered single-shot scan, END_INT interrupt delivery.
 CONFIG_ANALOG=y

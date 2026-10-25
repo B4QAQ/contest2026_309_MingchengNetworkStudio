@@ -15,7 +15,8 @@
  *    pwm0_4ch_2 @ 0xFF932000 - the channel wired to RM_IO12
  *    (GPIO0_B4 = J9-29, func 47 -> PWM0_CH2) on the HD-RK3506-EVM
  *    header.  (The SDK iot board also uses pwm0_4ch_2 for the LCD
- *    backlight, period 25000 ns.)
+ *    backlight, period 25000 ns; the HD-RK3506-EVM backlight is a
+ *    plain GPIO instead, see the pin-routing note below.)
  *  - Time base: CLK_PWM0 <- clk_gpll_div_100m = 100 MHz (GPLL
  *    1.2 GHz; parent chain per kernel-6.1/drivers/clk/rockchip/
  *    clk-rk3506.c lines 188-193, 729-731), divider left at /1.
@@ -31,7 +32,9 @@
  * per rk3506-pinctrl-rmio.dtsi rm_io12_pwm0_ch2 = <0 RK_PB4 47>:
  *  1. grf_pmu (0xFF910000) + 0x80 + 4*12 = routing function 47-15=32
  *  2. GPIO0_B4 iomux (ioc_pmu 0xFF950000 + 0x0C) nibble 0 = 7
- * This is the NV3007 backlight line on the J9 expansion header.
+ * This pad is J9-29 on the HD-RK3506-EVM, where it carries the NV3007
+ * backlight.  That driver (hd_rk3506_nv3007.c) owns the pad as a plain
+ * GPIO output, so CONFIG_RK3506_PWM is off on that board.
  *
  * Included Files
  ****************************************************************************/
@@ -320,9 +323,8 @@ int rk3506_pwm_initialize(void)
 
   if (initialized)
     {
-      /* Both the bringup (/dev/pwm0 test target) and the NV3007 panel
-       * backlight call this; the pad/clock setup is idempotent and the
-       * device must be registered only once.
+      /* The pad/clock setup is idempotent and the device must be
+       * registered only once.
        */
 
       return OK;
@@ -369,8 +371,9 @@ int rk3506_pwm_initialize(void)
  *
  * Description:
  *   Return the PWM0 channel-2 lower half (RM_IO12 / GPIO0_B4 = J9-29) so an
- *   in-kernel consumer such as the NV3007 backlight can start/stop it
- *   without going through the /dev/pwm0 character device.
+ *   in-kernel consumer can start/stop it without going through the
+ *   /dev/pwm0 character device.  (No in-tree consumer: the NV3007 backlight
+ *   on this board is a plain GPIO, see hd_rk3506_nv3007.c.)
  *
  ****************************************************************************/
 

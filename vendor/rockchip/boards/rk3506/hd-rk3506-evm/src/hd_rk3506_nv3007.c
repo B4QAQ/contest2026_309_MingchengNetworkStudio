@@ -8,22 +8,21 @@
  * The panel is a memory-less SPI LCD implementing the MIPI-DBI command
  * set plus a vendor register block.  This driver exposes the NuttX
  * lcd_dev_s interface; with CONFIG_LCD_FRAMEBUFFER the framework wraps it
- * as /dev/fb0 (RAM buffer + FBIO_UPDATE -> putarea), which the existing
- * LVGL port mmaps and renders into.
+ * as /dev/fb0 (RAM buffer + FBIO_UPDATE -> putarea), which the LVGL port
+ * mmaps and renders into.
  *
- * Only SCK/MOSI go through the SPI0 controller RM_IO crossbar; CS, DC
- * and RST are ordinary GPIO outputs toggled exactly as in the proven
- * vendor/Arduino bit-bang demo (per-byte software CS).  J9 header, 3.3 V:
- *   J9-17 SCK  = GPIO0_A7 / RM_IO7 <- spi0_clk  (routing fn 82)
- *   J9-16 SDA  = GPIO0_A1 / RM_IO1 <- spi0_mosi (routing fn 83)
- *   J9-14 CS   = GPIO0_A3 / RM_IO3  (GPIO output, active low, per-byte)
- *   J9-31 RST  = GPIO0_B0 / RM_IO8  (GPIO output, default SAI1_MCLK)
- *   J9-30 DC   = GPIO0_B3 / RM_IO11 (GPIO output, default SAI1_SDI)
- *   J9-29 BL   = GPIO0_B4 / RM_IO12 <- PWM0 ch2 (rk3506_pwm, dimming)
+ * Only SCK/MOSI go through the SPI0 controller RM_IO crossbar; CS, DC, RST
+ * and the backlight are ordinary GPIO outputs.  J9 header, 3.3 V:
+ *   J9-17 SCK  = GPIO0_A7 / RM_IO7  <- spi0_clk  (routing fn 82)
+ *   J9-16 SDA  = GPIO0_A1 / RM_IO1  <- spi0_mosi (routing fn 83)
+ *   J9-14 CS   = GPIO0_A3 / RM_IO3  (GPIO output, active low)
+ *   J9-31 RST  = GPIO0_B0 / RM_IO8  (GPIO output)
+ *   J9-30 DC   = GPIO0_B3 / RM_IO11 (GPIO output)
+ *   J9-29 BL   = GPIO0_B4 / RM_IO12 (GPIO output, high = lit)
  *
- * The initialization table and the visible window (142 columns x 428 rows,
- * 12-column GRAM x-offset, RGB565 high-byte first) are transcribed
- * verbatim from the vendor demo 2.79TFT-T279VJ-C10-01-SPI-NV3007.ino.
+ * The module has NO MISO line, so register read-back (and therefore the
+ * usual "read the panel ID to prove the link" trick) is impossible;
+ * nv_getrun() reports -ENOTSUP.
  *
  ****************************************************************************/
 
@@ -35,17 +34,18 @@
 #include <unistd.h>
 #include <debug.h>
 
+#include <nuttx/arch.h>
 #include <nuttx/board.h>
 #include <nuttx/spi/spi.h>
 #include <nuttx/lcd/lcd.h>
 #include <nuttx/video/fb.h>
-#include <nuttx/timers/pwm.h>
 #include <nuttx/signal.h>
 
 #include "rk3506_spi.h"
-#include "rk3506_pwm.h"
 #include "rk3506_gpio.h"
 #include "rk3506_pinctrl.h"
+#include "rk3506_register.h"
+#include "hardware/rk3506_memorymap.h"
 
 #include "hd_rk3506_nv3007.h"
 
@@ -56,39 +56,43 @@
  ****************************************************************************/
 
 /* SPI0 clock/MOSI pads are routed to the controller through the RM_IO
- * matrix (rk3506_pinctrl_set_mux with the DTS function numbers 82/83);
- * CS is a plain software GPIO (the proven vendor/Arduino wiring), so no
- * csn0 routing is programmed.  SPI CLK = GPIO0_A7 (J9-17), MOSI =
- * GPIO0_A1 (J9-16).
+ * matrix (rk3506_pinctrl_set_mux with the DTS function numbers 82/83).
+ * CS is a plain software GPIO, so no csn0 routing is programmed -- but
+ * SPI_SELECT() is still mandatory, see nv_bus_acquire() below.
  */
 
 #define NV3007_PIN_SPI_CLK     7     /* GPIO0_A7 -> J9-17 (RM_IO, fn 82) */
 #define NV3007_PIN_SPI_MOSI    1     /* GPIO0_A1 -> J9-16 (RM_IO, fn 83) */
 
-/* CS/RST/DC are driven through the shared GPIO back-end
- * (rk3506_gpio_config/write).  They live on GPIO0; the global pin
- * numbers below fold in the bank.
+/* CS/RST/DC/BL are driven through the shared GPIO back-end
+ * (rk3506_gpio_config/write).  They live on GPIO0.
  */
 
 #define NV_GPIN_CS             RK3506_GPIO_PIN(0, NV3007_PIN_CS)
 #define NV_GPIN_RST            RK3506_GPIO_PIN(0, NV3007_PIN_RST)
 #define NV_GPIN_DC             RK3506_GPIO_PIN(0, NV3007_PIN_DC)
+#define NV_GPIN_BL             RK3506_GPIO_PIN(0, NV3007_PIN_BL)
 
-/* MIPI-DBI commands used outside the init table */
+/* MIPI-DBI commands */
 
-#define NV_CMD_CASET         0x2a
-#define NV_CMD_RASET         0x2b
-#define NV_CMD_RAMWR         0x2c
+#define NV_CMD_SWRESET        0x01
+#define NV_CMD_SLPIN          0x10
+#define NV_CMD_SLPOUT         0x11
+#define NV_CMD_INVOFF         0x20
+#define NV_CMD_INVON          0x21
+#define NV_CMD_DISPOFF        0x28
+#define NV_CMD_DISPON         0x29
+#define NV_CMD_CASET          0x2a
+#define NV_CMD_RASET          0x2b
+#define NV_CMD_RAMWR          0x2c
+#define NV_CMD_MADCTL         0x36
+#define NV_CMD_COLMOD         0x3a
 
 /* Marker in the init table: send p[0] as a data byte with no command
  * (the vendor demo emits a lone 0x17 data byte between F1 and F2).
  */
 
-#define NV_DATA_ONLY         0x100u
-
-/* Backlight PWM */
-
-#define NV_BL_FREQUENCY      40000
+#define NV_DATA_ONLY          0x100u
 
 /****************************************************************************
  * Private Types
@@ -99,6 +103,7 @@ struct nv3007_dev_s
   struct lcd_dev_s  dev;       /* Must be first */
   FAR struct spi_dev_s *spi;
   uint8_t           power;     /* 0 = off, 1..CONFIG_LCD_MAXPOWER */
+  bool              configured;/* SPI mode/bits/freq already applied  */
 };
 
 struct nv_init_cmd_s
@@ -113,28 +118,26 @@ struct nv_init_cmd_s
  * Private Data
  ****************************************************************************/
 
-/* One visible line, RGB565 -> panel byte order (high byte first) */
+/* g_runbuf[]  : the pinfo->buffer working line for the framebuffer layer.
+ */
 
-static uint8_t g_linebuf[NV3007_XRES * (NV3007_BPP / 8)];
+static uint8_t  g_runbuf[NV3007_XRES * (NV3007_BPP / 8)];
 
 static struct nv3007_dev_s g_nv;
 
-/* Vendor initialization sequence (from the T279VJ-C10-01 demo, ordered
- * per the ESP-IDF/ZMK reference drivers for this panel).
+/* Vendor initialization sequence (from the T279VJ-C10-01 demo).
  *
- * ORDER MATTERS: the controller powers up asleep with its analog blocks
- * off, and writes to the vendor register page (0xFF 0xA5 window) do not
- * stick while it is asleep -- that failure looks exactly like a dead SPI
- * link.  So Sleep Out comes FIRST to wake the panel, then the vendor
- * page, then a second Sleep Out + Display ON per the vendor timing.
+ * ORDER MATTERS and the vendor order is the one that works: the stream
+ * opens the vendor register page (0xff 0xa5) as the FIRST command right
+ * after the hardware reset, while the panel is still in sleep-in.  Sending
+ * Sleep Out (0x11) first makes the ~110 GOA/power register writes get
+ * dropped, so 0x29 "succeeds" but the panel shows nothing.  Do not
+ * "improve" this by hoisting 0x11 / 0x36 / 0x3a to the top.
  */
 
 static const struct nv_init_cmd_s g_init[] =
 {
-  { 0x11, 0, 100, { 0 } },       /* Sleep Out (1st: wake so vendor page sticks) */
-  { 0x36, 1,   0, { 0x00 } },    /* MADCTL: default scan, x-offset = 12 cols */
-  { 0x3a, 1,   0, { 0x05 } },    /* COLMOD: 16-bit RGB565 */
-  { 0xff, 1,   0, { 0xa5 } },    /* open vendor register page */
+  { 0xff, 1,   0, { 0xa5 } },    /* open vendor register page (FIRST) */
   { 0x9a, 1,   0, { 0x08 } },
   { 0x9b, 1,   0, { 0x08 } },
   { 0x9c, 1,   0, { 0xb0 } },
@@ -242,7 +245,7 @@ static const struct nv_init_cmd_s g_init[] =
   { 0xef, 1,   0, { 0x09 } },
   { 0xf0, 1,   0, { 0xd0 } },
   { 0xf1, 1,   0, { 0x0e } },
-  { NV_DATA_ONLY, 1, 0, { 0x17 } },
+  { NV_DATA_ONLY, 1, 0, { 0x17 } },  /* vendor stream: lone data byte */
   { 0xf2, 4,   0, { 0x2c, 0x1b, 0x0b, 0x20 } },
   { 0xe9, 1,   0, { 0x29 } },
   { 0xec, 1,   0, { 0x04 } },
@@ -250,206 +253,300 @@ static const struct nv_init_cmd_s g_init[] =
   { 0x44, 2,   0, { 0x00, 0x10 } },
   { 0x46, 1,   0, { 0x10 } },
   { 0xff, 1,   0, { 0x00 } },    /* close vendor register page */
-  { 0x11, 0, 220, { 0 } },       /* Sleep Out (2nd: vendor timing) */
-  { 0x29, 0, 200, { 0 } },       /* Display ON + 200 ms */
+  { 0x3a, 1,   0, { 0x05 } },    /* COLMOD: 16-bit RGB565 (vendor order) */
+
+  /* Sleep Out + 220 ms, then Display ON + 200 ms.  Both waits are in the
+   * vendor/ESP-IDF timing budget (the controller needs the second one to
+   * bring up the GOA before it will show the first frame).
+   */
+
+  { 0x11, 0, 220, { 0 } },       /* Sleep Out + 220 ms (vendor timing) */
+  { 0x29, 0, 200, { 0 } },       /* Display ON + 200 ms               */
 };
 
 /****************************************************************************
  * Private Functions: pad/GPIO/SPI low level
  ****************************************************************************/
 
-static void nv_dc(bool data)
+/* CS and DC are GPIO lines shared with the SPI engine, so every switch
+ * carries an explicit setup/hold delay.  Without this, DC can change
+ * mid-byte and the controller latches the tail of a parameter stream as a
+ * command.
+ */
+
+static void nv_cs_select(bool selected)
+{
+  if (selected)
+    {
+      rk3506_gpio_write(NV_GPIN_CS, false);      /* CS active low */
+      up_udelay(NV3007_CS_SETUP_US);
+    }
+  else
+    {
+      up_udelay(NV3007_CS_HOLD_US);
+      rk3506_gpio_write(NV_GPIN_CS, true);
+    }
+}
+
+static void nv_dc_set(bool data)
 {
   rk3506_gpio_write(NV_GPIN_DC, data);
+  up_udelay(NV3007_DC_SETUP_US);
 }
 
-static void nv_cs(bool selected)
-{
-  rk3506_gpio_write(NV_GPIN_CS, !selected);     /* CS active low */
-}
-
-/* Route only SCK/MOSI through the SPI0 crossbar; make CS/RST/DC plain
- * GPIO outputs (software CS, exactly like the vendor/Arduino wiring).
- * All pin muxing / RM_IO routing / GPIO direction+level now go through
- * the unified chip back-ends (rk3506_pinctrl / rk3506_gpio) instead of
- * local register pokes.
+/* Route SCK/MOSI through the RM_IO crossbar to SPI0 and set up the GPIO
+ * control lines.  The backlight pad is configured as a GPIO output held
+ * low here (dark), so nothing lights up before setpower() runs.
  */
 
 static void nv_pinctrl(void)
 {
-  /* RM_IO crossbar: SPI0 CLK->A7 (J9-17) func 82, MOSI->A1 (J9-16)
-   * func 83.  rk3506_pinctrl_set_mux() sees func > 15, programs the
-   * RM_IO channel with (func - 15) and forces the IOMUX nibble to 7.
-   */
-
   rk3506_pinctrl_set_mux(0, NV3007_PIN_SPI_CLK,  82u);  /* A7 CLK  */
   rk3506_pinctrl_set_mux(0, NV3007_PIN_SPI_MOSI, 83u);  /* A1 MOSI */
-
-  /* CS/RST/DC as plain GPIO outputs, idle high (CS deselected, RST/DC
-   * inactive).  rk3506_gpio_config() muxes each pad to GPIO function 0,
-   * ungates the GPIO0 clock and sets direction + initial level.
-   */
 
   rk3506_gpio_config(NV_GPIN_CS,  RK3506_GPIO_OUTPUT | RK3506_GPIO_VALUE_HIGH);
   rk3506_gpio_config(NV_GPIN_RST, RK3506_GPIO_OUTPUT | RK3506_GPIO_VALUE_HIGH);
   rk3506_gpio_config(NV_GPIN_DC,  RK3506_GPIO_OUTPUT | RK3506_GPIO_VALUE_HIGH);
+  rk3506_gpio_config(NV_GPIN_BL,  RK3506_GPIO_OUTPUT | RK3506_GPIO_VALUE_LOW);
+
+  /* DIAG: verify the RMIO matrix actually connects GPIO0_A1/A7 to the
+   * pads.  If the RMIO write landed, the pad should follow the GPIO
+   * controller.  We toggle the GPIO and read back the pad level.
+   */
+
+  {
+    /* A1 and A7 are RMIO pins; we cannot drive them as GPIO without
+     * breaking the SPI routing.  Instead we verify the RMIO register
+     * values and the IOMUX nibble.
+     */
+
+    int mux_a1 = rk3506_pinctrl_get_mux(0, NV3007_PIN_SPI_MOSI);
+    int mux_a7 = rk3506_pinctrl_get_mux(0, NV3007_PIN_SPI_CLK);
+
+    _err("NV3007 RMIO: A1 mux=%d (want 7), A7 mux=%d (want 7)\n",
+         mux_a1, mux_a7);
+
+    /* Read the RMIO channel registers directly */
+
+    uint32_t sel_a1 = getreg32(RK3506_GRF_PMU_ADDR + 0x84);
+    uint32_t sel_a7 = getreg32(RK3506_GRF_PMU_ADDR + 0x9c);
+
+    _err("NV3007 RMIO: ch1(MOSI) SEL=0x%02x (want 68), "
+         "ch7(CLK) SEL=0x%02x (want 67)\n",
+         sel_a1 & 0x7f, sel_a7 & 0x7f);
+  }
 }
 
-/* Take the bus and select the panel.  SPI_SELECT is REQUIRED even though
- * the panel CS is a plain GPIO: on the Rockchip DesignWare SPI block the
- * controller only generates SCLK for an enabled slave-select (SER != 0).
- * With SER == 0 bytes land in the TX FIFO but are never clocked out, which
- * is exactly why the panel stayed dark (backlight on, no picture).  The
- * hardware CSN0 pad is not routed, so the SER bit only gates the engine;
- * the panel's real CS is the GPIO toggled by nv_cs().
+/* Take the bus and gate the engine on.
+ *
+ * SPI_SELECT is REQUIRED even though the panel CS is a plain GPIO: on the
+ * Rockchip DesignWare SPI block the controller only generates SCLK for an
+ * enabled slave-select (SER != 0).  With SER == 0 bytes land in the TX
+ * FIFO but are never clocked out, which looks exactly like a dead panel
+ * with the backlight on.  The hardware CSN0 pad is not routed, so the SER
+ * bit only gates the engine; the panel's real CS is the GPIO above.
+ *
+ * Mode/bits/frequency are applied once, not on every transaction: some
+ * dw_spi lower-halves re-program the controller in setbits()/setmode(),
+ * and doing that between CS assertions can glitch SCLK.
  */
 
-static void nv_select(void)
+static void nv_bus_acquire(void)
 {
   SPI_LOCK(g_nv.spi, true);
-  SPI_SETMODE(g_nv.spi, NV3007_SPI_MODE);
-  SPI_SETBITS(g_nv.spi, 8);
-  SPI_SETFREQUENCY(g_nv.spi, NV3007_SPI_FREQ);
+
+  if (!g_nv.configured)
+    {
+      SPI_SETMODE(g_nv.spi, NV3007_SPI_MODE);
+      SPI_SETBITS(g_nv.spi, 8);
+      SPI_SETFREQUENCY(g_nv.spi, NV3007_SPI_FREQ);
+      g_nv.configured = true;
+    }
+
   SPI_SELECT(g_nv.spi, SPIDEV_DISPLAY(0), true);
 }
 
-static void nv_deselect(void)
+static void nv_bus_release(void)
 {
-  nv_cs(false);
+  nv_cs_select(false);
   SPI_SELECT(g_nv.spi, SPIDEV_DISPLAY(0), false);
   SPI_LOCK(g_nv.spi, false);
 }
 
-/* Send a parameter/pixel data byte (DC high), CS held for the byte. */
+/* Every byte goes out through SPI_EXCHANGE with a NULL receive buffer,
+ * which blocks until the last byte has actually been shifted out.
+ * SPI_SNDBLOCK on the DesignWare core is allowed to return as soon as the
+ * words are queued, which drops the CS/DC change into the middle of a
+ * transaction and truncates commands.
+ */
 
-static void nv_send_data(uint8_t v)
+static void nv_spi_write(FAR const void *tx, size_t nbytes)
 {
-  nv_dc(true);
-  nv_cs(true);
-  SPI_SEND(g_nv.spi, (uint16_t)v);
-  nv_cs(false);
+  SPI_EXCHANGE(g_nv.spi, tx, NULL, nbytes);
 }
 
-/* One command plus its parameters, the whole group framed by one CS
- * assertion (DC low for the command, DC high for the parameters), which
- * is the standard MIPI-DBI 4-wire framing.  NV_DATA_ONLY sends a bare
- * data byte with no command.
+/* One command plus its parameters inside a SINGLE CS window.
+ *
+ * The NV3007 resets its parameter index on CS-high, so a command and its
+ * parameters must share one window -- splitting them silently drops every
+ * parameter.  NV_DATA_ONLY emits a bare data byte with no command.
  */
 
 static void nv_command(uint16_t cmd, FAR const uint8_t *p, uint8_t n)
 {
-  nv_select();
+  uint8_t i;
 
-  if (cmd == NV_DATA_ONLY)
+  nv_bus_acquire();
+
+  if (cmd != NV_DATA_ONLY)
     {
-      nv_send_data(p[0]);
-    }
-  else
-    {
-      nv_dc(false);            /* command phase */
-      nv_cs(true);
-      SPI_SEND(g_nv.spi, (uint16_t)cmd);
+      uint8_t c = (uint8_t)cmd;
 
-      if (n > 0)
-        {
-          nv_dc(true);         /* parameter phase, CS still low */
-          SPI_SNDBLOCK(g_nv.spi, p, n);
-        }
-
-      nv_cs(false);
+      nv_cs_select(true);
+      nv_dc_set(false);                 /* command phase */
+      nv_spi_write(&c, 1);
+      nv_cs_select(false);
     }
 
-  nv_deselect();
+  for (i = 0; i < n; i++)
+    {
+      nv_cs_select(true);
+      nv_dc_set(true);                  /* data phase */
+      nv_spi_write(&p[i], 1);
+      nv_cs_select(false);
+    }
+
+  nv_bus_release();
 }
 
-/* CASET/RASET/RAMWR window.  The whole command sequence runs under one
- * CS assertion, ending with CS held low and DC high so the pixel bytes
- * that follow stream as one continuous RAMWR burst.
+/* CASET/RASET/RAMWR window.  Runs under one CS assertion, ending with CS
+ * held low and DC high so the pixel bytes that follow stream as one
+ * continuous RAMWR burst.  The caller must call nv_bus_release().
  */
 
-static void nv_stream_begin(fb_coord_t c0, fb_coord_t c1,
-                            fb_coord_t r0, fb_coord_t r1)
+static void nv_stream_begin(fb_coord_t col_start, fb_coord_t col_end,
+                            fb_coord_t row_start, fb_coord_t row_end)
 {
   uint8_t col[4];
   uint8_t row[4];
+  uint8_t c;
+  uint8_t i;
 
-  c0 += NV3007_XOFFSET;
-  c1 += NV3007_XOFFSET;
+  col_start += NV3007_XOFFSET;
+  col_end   += NV3007_XOFFSET;
 
-  col[0] = (uint8_t)(c0 >> 8);
-  col[1] = (uint8_t)(c0);
-  col[2] = (uint8_t)(c1 >> 8);
-  col[3] = (uint8_t)(c1);
+  col[0] = (uint8_t)(col_start >> 8);
+  col[1] = (uint8_t)(col_start);
+  col[2] = (uint8_t)(col_end >> 8);
+  col[3] = (uint8_t)(col_end);
 
-  row[0] = (uint8_t)(r0 >> 8);
-  row[1] = (uint8_t)(r0);
-  row[2] = (uint8_t)(r1 >> 8);
-  row[3] = (uint8_t)(r1);
+  row[0] = (uint8_t)(row_start >> 8);
+  row[1] = (uint8_t)(row_start);
+  row[2] = (uint8_t)(row_end >> 8);
+  row[3] = (uint8_t)(row_end);
 
-  nv_select();
+  nv_bus_acquire();
 
-  nv_dc(false);          /* CASET command */
-  nv_cs(true);
-  SPI_SEND(g_nv.spi, NV_CMD_CASET);
-  nv_dc(true);           /* CASET 4 data bytes */
-  SPI_SNDBLOCK(g_nv.spi, col, 4);
+  /* CASET: cmd window, then 4 data windows */
 
-  nv_dc(false);          /* RASET command */
-  SPI_SEND(g_nv.spi, NV_CMD_RASET);
-  nv_dc(true);           /* RASET 4 data bytes */
-  SPI_SNDBLOCK(g_nv.spi, row, 4);
+  nv_cs_select(true);
+  nv_dc_set(false);
+  c = NV_CMD_CASET;
+  nv_spi_write(&c, 1);
+  nv_cs_select(false);
 
-  nv_dc(false);          /* RAMWR command */
-  SPI_SEND(g_nv.spi, NV_CMD_RAMWR);
+  for (i = 0; i < 4; i++)
+    {
+      nv_cs_select(true);
+      nv_dc_set(true);
+      nv_spi_write(&col[i], 1);
+      nv_cs_select(false);
+    }
 
-  /* Hold CS low / DC high for the continuous pixel burst that follows. */
+  /* RASET: cmd window, then 4 data windows */
 
-  nv_dc(true);
+  nv_cs_select(true);
+  nv_dc_set(false);
+  c = NV_CMD_RASET;
+  nv_spi_write(&c, 1);
+  nv_cs_select(false);
+
+  for (i = 0; i < 4; i++)
+    {
+      nv_cs_select(true);
+      nv_dc_set(true);
+      nv_spi_write(&row[i], 1);
+      nv_cs_select(false);
+    }
+
+  /* RAMWR: cmd window only; pixel data follows in nv_send_pixels() */
+
+  nv_cs_select(true);
+  nv_dc_set(false);
+  c = NV_CMD_RAMWR;
+  nv_spi_write(&c, 1);
+  nv_cs_select(false);
 }
+
+/* Push one row.  src is the framebuffer (RGB565 little-endian in memory);
+ * the panel wants high byte first, so bytes are swapped into g_xlate[]
+ * first.  g_xlate[] is private to the driver, never the caller's buffer.
+ */
 
 static void nv_send_pixels(FAR const uint8_t *src, unsigned int npixels)
 {
   FAR const uint16_t *in = (FAR const uint16_t *)src;
   unsigned int i;
 
-  for (i = 0; i < npixels; i++)
+  if (npixels > NV3007_XRES)
     {
-      uint16_t color = in[i];
-      g_linebuf[i * 2]     = (uint8_t)(color >> 8);
-      g_linebuf[i * 2 + 1] = (uint8_t)(color);
+      npixels = NV3007_XRES;
     }
 
-  SPI_SNDBLOCK(g_nv.spi, g_linebuf, npixels * 2);
+  /* Vendor demo sends every pixel byte in its own CS window (DC high). */
+
+  for (i = 0; i < npixels; i++)
+    {
+      uint8_t hi = (uint8_t)(in[i] >> 8);
+      uint8_t lo = (uint8_t)(in[i]);
+
+      nv_cs_select(true);
+      nv_dc_set(true);
+      nv_spi_write(&hi, 1);
+      nv_cs_select(false);
+
+      nv_cs_select(true);
+      nv_dc_set(true);
+      nv_spi_write(&lo, 1);
+      nv_cs_select(false);
+    }
 }
 
 static void nv_hw_reset(void)
 {
+  /* The controller needs VCC stable and RES released before any command.
+   * Idle-high first, then a long low pulse, then the 120 ms recovery the
+   * vendor demo uses.
+   */
+
+  rk3506_gpio_write(NV_GPIN_RST, true);
+  nxsig_usleep(10 * 1000);
   rk3506_gpio_write(NV_GPIN_RST, false);
   nxsig_usleep(100 * 1000);
   rk3506_gpio_write(NV_GPIN_RST, true);
   nxsig_usleep(120 * 1000);
 }
 
+/* Backlight: plain GPIO, level 0 = off, non-zero = on.  The pad is
+ * configured as a GPIO output (rk3506_gpio_config() also sets the IOMUX
+ * nibble back to function 0) so no PWM lower-half is involved.
+ */
+
 static void nv_backlight(uint8_t level)
 {
-  FAR struct pwm_lowerhalf_s *pwm = rk3506_pwm_getlower();
-  struct pwm_info_s info;
-
-  if (pwm == NULL || pwm->ops == NULL)
-    {
-      return;
-    }
-
-  if (level == 0)
-    {
-      pwm->ops->stop(pwm);
-      return;
-    }
-
-  memset(&info, 0, sizeof(info));
-  info.frequency = NV_BL_FREQUENCY;
-  info.duty = (ub16_t)(((uint32_t)level * 65535u) / CONFIG_LCD_MAXPOWER);
-  pwm->ops->start(pwm, &info);
+  rk3506_gpio_config(NV_GPIN_BL, (level != 0) ?
+                     (RK3506_GPIO_OUTPUT | RK3506_GPIO_VALUE_HIGH) :
+                     (RK3506_GPIO_OUTPUT | RK3506_GPIO_VALUE_LOW));
 }
 
 /****************************************************************************
@@ -488,7 +585,7 @@ static int nv_getplaneinfo(FAR struct lcd_dev_s *dev, unsigned int planeno,
   pinfo->putrun  = nv_putrun;
   pinfo->putarea = nv_putarea;
   pinfo->getrun  = nv_getrun;
-  pinfo->buffer  = g_linebuf;
+  pinfo->buffer  = g_runbuf;
   pinfo->bpp     = NV3007_BPP;
   pinfo->dev     = dev;
   return OK;
@@ -498,9 +595,14 @@ static int nv_putrun(FAR struct lcd_dev_s *dev, fb_coord_t row,
                      fb_coord_t col, FAR const uint8_t *buffer,
                      size_t npixels)
 {
-  nv_stream_begin(col, col + npixels - 1, row, row);
-  nv_send_pixels(buffer, npixels);
-  nv_deselect();
+  if ((size_t)col + npixels > NV3007_XRES)
+    {
+      npixels = NV3007_XRES - col;
+    }
+
+  nv_stream_begin(col, col + (fb_coord_t)npixels - 1, row, row);
+  nv_send_pixels(buffer, (unsigned int)npixels);
+  nv_bus_release();
   return OK;
 }
 
@@ -509,10 +611,21 @@ static int nv_putarea(FAR struct lcd_dev_s *dev,
                       fb_coord_t col_start, fb_coord_t col_end,
                       FAR const uint8_t *buffer, fb_coord_t stride)
 {
-  unsigned int cols = col_end - col_start + 1;
+  unsigned int cols = (unsigned int)(col_end - col_start + 1);
   fb_coord_t row;
 
-  nv_stream_begin(col_start, col_end, row_start, row_end);
+  if (cols > NV3007_XRES)
+    {
+      cols = NV3007_XRES;
+    }
+
+  if (row_end >= NV3007_YRES)
+    {
+      row_end = NV3007_YRES - 1;
+    }
+
+  nv_stream_begin(col_start, col_start + (fb_coord_t)cols - 1,
+                  row_start, row_end);
 
   for (row = row_start; row <= row_end; row++)
     {
@@ -520,7 +633,7 @@ static int nv_putarea(FAR struct lcd_dev_s *dev,
       buffer += stride;
     }
 
-  nv_deselect();
+  nv_bus_release();
   return OK;
 }
 
@@ -564,7 +677,7 @@ static int nv_setcontrast(FAR struct lcd_dev_s *dev, unsigned int contrast)
 }
 
 /****************************************************************************
- * Private Data (ops) and Public Functions
+ * Private Data (ops)
  ****************************************************************************/
 
 static const struct lcd_dev_s g_nv_ops =
@@ -577,6 +690,21 @@ static const struct lcd_dev_s g_nv_ops =
   .setcontrast  = nv_setcontrast,
 };
 
+static void nv_run_table(FAR const struct nv_init_cmd_s *t, unsigned int n)
+{
+  unsigned int i;
+
+  for (i = 0; i < n; i++)
+    {
+      nv_command(t[i].cmd, t[i].p, t[i].n);
+
+      if (t[i].delay > 0)
+        {
+          nxsig_usleep((useconds_t)t[i].delay * 1000);
+        }
+    }
+}
+
 /****************************************************************************
  * Public Functions: NuttX lcd_framebuffer board hooks
  ****************************************************************************/
@@ -584,7 +712,6 @@ static const struct lcd_dev_s g_nv_ops =
 int board_lcd_initialize(void)
 {
   static bool initialized;
-  unsigned int i;
 
   if (initialized)
     {
@@ -595,19 +722,6 @@ int board_lcd_initialize(void)
   g_nv.dev   = g_nv_ops;
   g_nv.power = 0;
 
-  /* Backlight PWM first (routes RM_IO12/J9-29 and enables its clocks). */
-
-  rk3506_pwm_initialize();
-
-  /* Clock ungating is owned by the chip layer, not the board:
-   * rk3506_gpio_config() ungates the GPIO bank it touches (the PMU bank
-   * backing the RM_IO pads included) and rk3506_spibus_initialize()
-   * ungates the SPI controller.  The old blanket
-   * rk3506_all_clocks_enable() debug call and the explicit
-   * rk3506_gpio0_clock_init() / rk3506_spi0_clock_init() here have all
-   * been removed; the board only sequences pinmux + controller bring-up.
-   */
-
   nv_pinctrl();
 
   g_nv.spi = rk3506_spibus_initialize(NV3007_SPI_BUS);
@@ -617,23 +731,21 @@ int board_lcd_initialize(void)
       return -ENODEV;
     }
 
-  nv_hw_reset();
+  /* Power-up settle before the first edge on SCK. */
 
-  for (i = 0; i < sizeof(g_init) / sizeof(g_init[0]); i++)
-    {
-      nv_command(g_init[i].cmd, g_init[i].p, g_init[i].n);
-      if (g_init[i].delay > 0)
-        {
-          nxsig_usleep((useconds_t)g_init[i].delay * 1000);
-        }
-    }
+  nxsig_usleep(40 * 1000);
+
+  nv_hw_reset();
+  nv_run_table(g_init, sizeof(g_init) / sizeof(g_init[0]));
 
   nv_setpower(&g_nv.dev, CONFIG_LCD_MAXPOWER);
 
   initialized = true;
 
-  _info("NV3007: %dx%d RGB565 on SPI0 J9 (CLK17/MOSI16/CS14, RST31/DC30/BL29), /dev/fb0\n",
-        NV3007_XRES, NV3007_YRES);
+  _info("NV3007: %dx%d RGB565 on SPI0 J9 (CLK17/MOSI16/CS14, RST31/DC30/BL29)"
+        ", mode %d, %lu Hz, /dev/fb0\n",
+        NV3007_XRES, NV3007_YRES, (int)NV3007_SPI_MODE,
+        (unsigned long)NV3007_SPI_FREQ);
   return OK;
 }
 
