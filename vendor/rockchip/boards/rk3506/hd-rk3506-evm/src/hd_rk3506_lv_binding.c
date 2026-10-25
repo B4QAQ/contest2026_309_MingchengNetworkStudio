@@ -564,7 +564,14 @@ int hd_lv_binding_init(JSContext *ctx)
   JSValue lv;
   JSValue proto;
 
+  static const JSClassDef lvobj_class_def =
+  {
+    "LVObj",
+    /* No finalizer: the lv_obj_t* is owned by LVGL, not by JS. */
+  };
+
   JS_NewClassID(&g_lvobj_class_id);
+  JS_NewClass(JS_GetRuntime(ctx), g_lvobj_class_id, &lvobj_class_def);
 
   proto = JS_NewObject(ctx);
   JS_SetClassProto(ctx, g_lvobj_class_id, proto);
