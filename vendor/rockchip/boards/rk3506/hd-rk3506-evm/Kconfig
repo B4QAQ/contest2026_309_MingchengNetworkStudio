@@ -35,6 +35,30 @@ config HD_RK3506_LED_HEARTBEAT
 		default-trigger="heartbeat" in software.  The LED is still
 		reachable as /dev/led0 through the userled lower half.
 
+config HD_RK3506_LV_BUTTONS
+	bool "Two J9 push buttons as the LVGL keypad input (next/ok)"
+	default y
+	depends on GRAPHICS_LVGL
+	---help---
+		Two active-low external push buttons on J9, read in the LVGL
+		timer task with 20 ms software debounce and exposed to LVGL
+		as a keypad on the default group:
+		  "next" GPIO0_C2 (J9-18, CAN1_RX position) -> LV_KEY_NEXT
+		  "ok"   GPIO0_C4 (J9-20, CAN0_RX position) -> LV_KEY_ENTER
+		Both pads use the SoC internal pull-up, so the buttons just
+		short the pad to GND.  The CAN controllers are unused on
+		this board.
+
+config HD_RK3506_BTN_NEXT_PIN
+	int "GPIO0 pin number of the 'next' button (J9-18 = 2)"
+	default 2
+	depends on HD_RK3506_LV_BUTTONS
+
+config HD_RK3506_BTN_OK_PIN
+	int "GPIO0 pin number of the 'ok' button (J9-20 = 4)"
+	default 4
+	depends on HD_RK3506_LV_BUTTONS
+
 config HD_RK3506_NETCFG
 	bool "netcfg network configuration daemon"
 	default n

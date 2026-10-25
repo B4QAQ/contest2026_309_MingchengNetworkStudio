@@ -33,6 +33,9 @@ endif()
 
 if(CONFIG_GRAPHICS_LVGL)
   list(APPEND SRCS hd_rk3506_lv_port_disp.c)
+  if(CONFIG_HD_RK3506_LV_BUTTONS)
+    list(APPEND SRCS hd_rk3506_lv_port_indev.c)
+  endif()
 endif()
 
 if(CONFIG_RK3506_MMC)

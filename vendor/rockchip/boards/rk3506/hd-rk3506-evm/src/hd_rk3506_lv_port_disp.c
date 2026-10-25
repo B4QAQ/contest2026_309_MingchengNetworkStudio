@@ -76,6 +76,10 @@ static lv_display_t     *g_disp       = NULL;
 
 static lv_color_t       *g_render_buf = NULL;
 
+#ifdef CONFIG_HD_RK3506_LV_BUTTONS
+int hd_rk3506_lv_port_indev_init(void);
+#endif
+
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
@@ -327,6 +331,17 @@ int hd_rk3506_lv_port_disp_init(void)
                          LV_DISPLAY_RENDER_MODE_FULL);
   _info("LVGL: flush_cb + buffers set, render mode FULL\n");
 
+  /* Rotate the UI 90 degrees.  The display is created at the panel's
+   * physical resolution (142x428); matrix rotation makes LVGL render the
+   * 428x142 logical screen through a 3x3 transform, so the buffer handed to
+   * the flush callback is already rotated in the panel's native
+   * orientation - the flush/FBIO_UPDATE path is unchanged.
+   * Requires CONFIG_LV_DRAW_TRANSFORM_USE_MATRIX.
+   */
+
+  lv_display_set_rotation(g_disp, LV_DISPLAY_ROTATION_90);
+  lv_display_set_matrix_rotation(g_disp, true);
+
   /* Start the LVGL timer-handler and tick threads. */
 
   pid_t pid;
@@ -351,6 +366,13 @@ int hd_rk3506_lv_port_disp_init(void)
     {
       _info("LVGL: lvgl_timer task pid=%d\n", pid);
     }
+
+#ifdef CONFIG_HD_RK3506_LV_BUTTONS
+  if (hd_rk3506_lv_port_indev_init() < 0)
+    {
+      _warn("LVGL: button input device init failed, display still usable\n");
+    }
+#endif
 
   _info("LVGL: init done OK\n");
   return OK;
