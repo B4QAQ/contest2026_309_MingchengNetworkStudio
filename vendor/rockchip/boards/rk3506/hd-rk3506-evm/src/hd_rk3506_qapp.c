@@ -207,16 +207,12 @@ int qapp_run(const char *path)
 
   lv_obj_add_flag(g_running.prev, LV_OBJ_FLAG_HIDDEN);
 
-  g_running.js = hd_qjs_app_start(path);
-  if (g_running.js == NULL)
-    {
-      _err("qapp: failed to start %s\n", path);
-      lv_obj_remove_flag(g_running.prev, LV_OBJ_FLAG_HIDDEN);
-      lv_obj_delete(g_running.screen);
-      g_running.screen = NULL;
-      g_running.prev   = NULL;
-      return -1;
-    }
+  /* Load the app screen BEFORE starting JS: the app's script calls
+   * lv.screenActive() during evaluation, and it must see the app
+   * screen, not the (now hidden) home screen.
+   */
+
+  lv_screen_load(g_running.screen);
 
   /* ESC on the app screen stops the app. */
 
@@ -227,7 +223,22 @@ int qapp_run(const char *path)
       lv_group_focus_obj(g_running.screen);
     }
 
-  lv_screen_load(g_running.screen);
+  g_running.js = hd_qjs_app_start(path);
+  if (g_running.js == NULL)
+    {
+      _err("qapp: failed to start %s\n", path);
+      if (group != NULL)
+        {
+          lv_group_remove_obj(g_running.screen);
+        }
+
+      lv_obj_remove_flag(g_running.prev, LV_OBJ_FLAG_HIDDEN);
+      lv_screen_load(g_running.prev);
+      lv_obj_delete(g_running.screen);
+      g_running.screen = NULL;
+      g_running.prev   = NULL;
+      return -1;
+    }
 
   /* Pump JS jobs from the LVGL task. */
 

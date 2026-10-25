@@ -54,6 +54,7 @@ struct lvjs_cb_s
 {
   JSContext         *ctx;
   JSValue            func;      /* Dup'd JS function                  */
+  lv_timer_t        *timer;     /* lv_timer if this is a setTimeout   */
   struct lvjs_cb_s  *next;
 };
 
@@ -73,10 +74,11 @@ static struct lvjs_cb_s *lvjs_cb_new(JSContext *ctx, JSValueConst func)
       return NULL;
     }
 
-  cb->ctx  = ctx;
-  cb->func = JS_DupValue(ctx, func);
-  cb->next = g_cbs;
-  g_cbs    = cb;
+  cb->ctx   = ctx;
+  cb->func  = JS_DupValue(ctx, func);
+  cb->timer = NULL;
+  cb->next  = g_cbs;
+  g_cbs     = cb;
   return cb;
 }
 
@@ -89,6 +91,15 @@ static void lvjs_cb_free(struct lvjs_cb_s *cb)
       if (*pp == cb)
         {
           *pp = cb->next;
+          /* Kill the lv_timer first so it can never fire into freed
+           * memory after this.
+           */
+          if (cb->timer != NULL)
+            {
+              lv_timer_delete(cb->timer);
+              cb->timer = NULL;
+            }
+
           JS_FreeValue(cb->ctx, cb->func);
           free(cb);
           return;
@@ -191,7 +202,13 @@ static void lvjs_timeout_trampoline(lv_timer_t *t)
     }
 
   JS_FreeValue(cb->ctx, ret);
-  lv_timer_delete(t);
+
+  /* One-shot timer: clear the back-pointer so lvjs_cb_free does not
+   * try to delete the timer we are running from (it is already being
+   * deleted by LVGL after this callback returns).
+   */
+
+  cb->timer = NULL;
   lvjs_cb_free(cb);
 }
 
@@ -223,6 +240,7 @@ static JSValue lvjs_set_timeout(JSContext *ctx, JSValueConst this_val,
       return JS_ThrowInternalError(ctx, "lv_timer_create failed");
     }
 
+  cb->timer = t;
   lv_timer_set_repeat_count(t, 1);
   return JS_UNDEFINED;
 }
@@ -609,6 +627,15 @@ void hd_lv_binding_cleanup(JSContext *ctx)
       next = cb->next;
       if (cb->ctx == ctx)
         {
+          /* Kill the lv_timer first so it can never fire into freed
+           * memory after this.
+           */
+          if (cb->timer != NULL)
+            {
+              lv_timer_delete(cb->timer);
+              cb->timer = NULL;
+            }
+
           JS_FreeValue(cb->ctx, cb->func);
           free(cb);
         }

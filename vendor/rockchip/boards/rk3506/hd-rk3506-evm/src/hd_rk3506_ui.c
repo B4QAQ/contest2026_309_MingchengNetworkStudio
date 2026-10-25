@@ -501,6 +501,11 @@ static void ui_build_cmd(lv_obj_t *page)
                               LV_PART_ITEMS);
   lv_keyboard_set_textarea(kb, g_cmd_ta);
   lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_TEXT_LOWER);
+  /* The keyboard constructor removes CLICK_FOCUSABLE - without it the
+   * group can never focus the keyboard, so ENTER never enters edit
+   * mode and the keys stay dead.  Put it back.
+   */
+  lv_obj_add_flag(kb, LV_OBJ_FLAG_CLICKABLE);
   lv_group_add_obj(lv_group_get_default(), kb);
 }
 
