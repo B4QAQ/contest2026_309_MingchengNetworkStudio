@@ -930,12 +930,17 @@ static int rk3506_mmc_sendcmd_sync(uint32_t cmd, uint32_t arg)
 
   if ((rintsts & INT_RTO) != 0)
     {
+      _err("MMC: CMD%" PRIu32 " response timeout, RINTSTS=%08" PRIx32 "\n",
+           index, rintsts);
       mmc_putreg(MMC_RINTSTS, INT_ALL);
       return -ETIMEDOUT;
     }
 
   if ((rintsts & (INT_RE | INT_DCRC)) != 0)
     {
+      _err("MMC: CMD%" PRIu32 " response error, RINTSTS=%08" PRIx32
+           " RESP0=%08" PRIx32 "\n",
+           index, rintsts, mmc_getreg(MMC_RESP0));
       mmc_putreg(MMC_RINTSTS, INT_ALL);
       return -EIO;
     }
