@@ -564,7 +564,7 @@ int hd_lv_binding_init(JSContext *ctx)
   JSValue lv;
   JSValue proto;
 
-  JS_NewClassID(JS_GetRuntime(ctx), &g_lvobj_class_id);
+  JS_NewClassID(&g_lvobj_class_id);
 
   proto = JS_NewObject(ctx);
   JS_SetClassProto(ctx, g_lvobj_class_id, proto);

@@ -210,8 +210,7 @@ int qapp_run(const char *path)
   g_running.js = hd_qjs_app_start(path);
   if (g_running.js == NULL)
     {
-      _err("qapp: failed to start %s
-", path);
+      _err("qapp: failed to start %s\n", path);
       lv_obj_remove_flag(g_running.prev, LV_OBJ_FLAG_HIDDEN);
       lv_obj_delete(g_running.screen);
       g_running.screen = NULL;
@@ -234,8 +233,7 @@ int qapp_run(const char *path)
 
   g_running.pump = lv_timer_create(qapp_pump_cb, 33, NULL);
 
-  _info("qapp: %s running
-", path);
+  _info("qapp: %s running\n", path);
   return 0;
 }
 
@@ -283,8 +281,7 @@ void qapp_stop(void)
       g_running.prev = NULL;
     }
 
-  _info("qapp: stopped
-");
+  _info("qapp: stopped\n");
 }
 
 bool qapp_active(void)
