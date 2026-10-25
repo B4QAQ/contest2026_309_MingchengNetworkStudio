@@ -119,4 +119,11 @@ SECTIONS
     .debug_line 0 : { *(.debug_line) }
     .debug_pubnames 0 : { *(.debug_pubnames) }
     .debug_aranges 0 : { *(.debug_aranges) }
+
+    /* A linker build-id note would be orphan-placed at VMA 0 and marked
+     * SHF_ALLOC, making objcopy -O binary pad the image from address 0
+     * (observed: 37 MB nuttx.bin instead of 2.9 MB).  Discard it.
+     */
+
+    /DISCARD/ : { *(.note.gnu.build-id) }
 }

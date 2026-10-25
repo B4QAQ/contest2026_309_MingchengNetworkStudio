@@ -79,6 +79,18 @@ NUTTX_SIZE=$(stat -c %s "$NUTTX_BIN")
 echo "  nuttx.bin 大小 = $NUTTX_SIZE bytes"
 echo ""
 
+# boot_a/boot_b 各 10MB (parameter.txt: 0x5000 扇区 @ 2KB), 镜像须留出
+# FIT 头/对齐余量。历史上 nuttx.bin 曾因链接器 build-id note 被孤儿分配
+# 到 VMA 0 而从地址 0 零填充成 37MB, 这里提前拦截。
+BOOT_SLOT_MAX=$((10 * 1024 * 1024 - 65536))
+if [ "$NUTTX_SIZE" -gt "$BOOT_SLOT_MAX" ]; then
+    echo "错误: nuttx.bin ($NUTTX_SIZE bytes) 超过 boot 槽容量!"
+    echo "  若远大于正常值(约 3MB), 多半是 objcopy 从零地址填充:"
+    echo "  readelf -S 检查 nuttx 是否有 SHF_ALLOC 的 .note.gnu.build-id,"
+    echo "  确认 ld.script 的 /DISCARD/ 规则在, 然后重新编译。"
+    exit 1
+fi
+
 #--------------------------------------------------------------------
 # 2. 准备 nuttx.bin
 #--------------------------------------------------------------------
