@@ -99,6 +99,13 @@ static void ui_style_screen(lv_obj_t *obj)
   lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, 0);
   lv_obj_set_style_pad_all(obj, 3, 0);
   lv_obj_set_style_border_width(obj, 0, 0);
+
+  /* A 428x142 fixed UI must never grow scrollbars - they would steal
+   * pixels from the cards.  Kill scrolling on every container.
+   */
+
+  lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollbar_mode(obj, LV_SCROLLBAR_MODE_OFF);
 }
 
 static void ui_style_card(lv_obj_t *obj, uint32_t accent)
@@ -288,7 +295,7 @@ static lv_obj_t *ui_make_card(lv_obj_t *parent, int x, int y,
                       UI_COL_DIM);
   lv_obj_align(lbl, LV_ALIGN_TOP_LEFT, 0, 0);
 
-  lbl = ui_make_label(card, "-", &lv_font_montserrat_18,
+  lbl = ui_make_label(card, "-", &lv_font_montserrat_14,
                       UI_COL_TEXT);
   lv_obj_align(lbl, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 
