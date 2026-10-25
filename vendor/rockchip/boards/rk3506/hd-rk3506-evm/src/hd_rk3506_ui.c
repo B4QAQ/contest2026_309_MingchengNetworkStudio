@@ -398,6 +398,7 @@ static void ui_menu_cb(lv_event_t *e)
 {
   int idx = (int)(intptr_t)lv_event_get_user_data(e);
 
+  _info("ui_menu_cb: idx=%d\n", idx);
   ui_show_page(idx);
 }
 

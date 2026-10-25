@@ -214,6 +214,8 @@ static bool btn_poll(struct rk3506_btn_s *btn, uint32_t *key,
   return false;
 }
 
+static uint32_t g_held_key = 0;   /* Key whose PRESSED we last reported */
+
 static void rk3506_btn_read(lv_indev_t *indev, lv_indev_data_t *data)
 {
   unsigned int i;
@@ -232,16 +234,42 @@ static void rk3506_btn_read(lv_indev_t *indev, lv_indev_data_t *data)
 
       if (btn_poll(&g_btn[i], &key, &state))
         {
+          if (state == LV_INDEV_STATE_PRESSED)
+            {
+              g_held_key = key;
+            }
+          else
+            {
+              g_held_key = 0;
+            }
+
           data->key   = key;
           data->state = state;
           return;
         }
     }
 
-  /* Idle: keep reporting released with no meaningful key. */
+  /* Between FSM events: while a reported key is still physically held
+   * we must keep reporting PRESSED with that key.  Reporting an idle
+   * RELEASED here would make LVGL see a press-release ~30 ms after the
+   * PRESSED even though the user is still holding the button - and the
+   * encoder release branch keys off data->key (no prev_key fallback like
+   * the keypad branch), so a RELEASED with key=0 silently drops the
+   * CLICKED event.  A sustained PRESSED also lets LVGL's own long-press
+   * timer run, which is what toggles edit mode on editable widgets
+   * (e.g. the keyboard).
+   */
 
-  data->state = LV_INDEV_STATE_RELEASED;
-  data->key   = 0;
+  if (g_held_key != 0)
+    {
+      data->key   = g_held_key;
+      data->state = LV_INDEV_STATE_PRESSED;
+    }
+  else
+    {
+      data->key   = 0;
+      data->state = LV_INDEV_STATE_RELEASED;
+    }
 }
 
 /****************************************************************************
