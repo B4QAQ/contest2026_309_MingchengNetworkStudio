@@ -469,14 +469,24 @@ static void nv_stream_begin(fb_coord_t col_start, fb_coord_t col_end,
   /* Keep CS low, caller will send pixels then call nv_bus_release() */
 }
 
-/* Push one row.  src is the framebuffer (RGB565 little-endian in memory);
- * the panel wants the high byte first, so each 16-bit pixel is emitted
- * hi-then-lo directly from the caller's (read-only) buffer.
+/* Push one run of pixels.  src is the framebuffer (RGB565 little-endian
+ * in memory); the panel wants the high byte first, so byteswap each pixel
+ * into a run buffer and ship the whole run in a single SPI_EXCHANGE.  At
+ * 24 MHz one exchange per byte spent most of the time in per-call setup
+ * and completion polling; one exchange per run is the actual continuous
+ * burst the CS window was designed for.
  */
 
 static void nv_send_pixels(FAR const uint8_t *src, unsigned int npixels)
 {
   FAR const uint16_t *in = (FAR const uint16_t *)src;
+
+  /* Static rather than stack (up to a full 142px run = 284 bytes); all LCD
+   * traffic is serialised by SPI_LOCK in nv_bus_acquire(), so one shared
+   * buffer is safe.
+   */
+
+  static uint8_t out[NV3007_XRES * 2];
   unsigned int i;
 
   if (npixels > NV3007_XRES)
@@ -484,20 +494,17 @@ static void nv_send_pixels(FAR const uint8_t *src, unsigned int npixels)
       npixels = NV3007_XRES;
     }
 
-  /* Continuous CS window for all pixels (matches SDK/Linux behavior).
-   * CS is already low from nv_stream_begin(); DC stays high for data.
-   */
+  /* CS is already low from nv_stream_begin(); DC stays high for data. */
 
   nv_dc_set(true);
 
   for (i = 0; i < npixels; i++)
     {
-      uint8_t hi = (uint8_t)(in[i] >> 8);
-      uint8_t lo = (uint8_t)(in[i]);
-
-      nv_spi_write(&hi, 1);
-      nv_spi_write(&lo, 1);
+      out[i * 2]     = (uint8_t)(in[i] >> 8);
+      out[i * 2 + 1] = (uint8_t)(in[i]);
     }
+
+  nv_spi_write(out, (size_t)npixels * 2);
 }
 
 static void nv_hw_reset(void)

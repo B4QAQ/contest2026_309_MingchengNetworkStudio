@@ -304,18 +304,43 @@ static int rk3506_mmc_wait_bits(uint32_t off, uint32_t mask, uint32_t value,
  * Name: rk3506_mmc_send_ciu_cmd
  *
  * Description:
- *   Send the DesignWare "inform CIU" pseudo-command: START | UPD_CLK with
- *   no index (HAL_MMC_UpdateClockRegister() uses exactly
- *   WRITE_REG(CMD, HAL_BIT(31) | HAL_BIT(21)) and polls START clear).
- *   Required after every CLKENA/CLKSRC/CLKDIV change for it to take effect.
+ *   Send the DesignWare "inform CIU" pseudo-command after a
+ *   CLKENA/CLKSRC/CLKDIV change.  The flag word is exactly
+ *   sdmmc_cmd_bits in Linux dw_mci_setup_bus() (dw_mmc.c:1256) and the
+ *   update command in U-Boot dwmci_set_clk_and_ctrl() (dw_mmc.c:661):
+ *
+ *     START | UPD_CLK | PRV_DAT_WAIT
+ *
+ *   PRV_DAT_WAIT (bit 13) is NOT optional on this controller: it is part
+ *   of the Synopsys clock-change command.  Without it the CIU does not
+ *   consume the update - CMD.START stays set - and the very next normal
+ *   command write is rejected with RINTSTS.HLE (bit 12, "hardware locked
+ *   write to CMD"), which surfaced as "CMD0 timeout RINTSTS=00001000"
+ *   and a dead identification.  (The vendor HAL omits bit 13 in
+ *   HAL_MMC_UpdateClockRegister, but HAL_SDIO is not the path that runs
+ *   on this board; both bootloaders that actually do - U-Boot and Linux -
+ *   set it.)
  *
  ****************************************************************************/
 
 static int rk3506_mmc_send_ciu_cmd(void)
 {
-  mmc_putreg(MMC_CMD, CMD_START | CMD_UPD_CLK);
+  mmc_putreg(MMC_CMD, CMD_START | CMD_UPD_CLK | CMD_PRV_DAT_WAIT);
 
   return rk3506_mmc_wait_bits(MMC_CMD, CMD_START, 0, MMC_RESET_TIMEOUT_MS);
+}
+
+/* Clock-change wrapper that refuses to fail silently: a CIU update whose
+ * START bit never clears leaves the controller locked, and the next CMD
+ * write then fails with HLE for a reason that is otherwise invisible.
+ */
+
+static void rk3506_mmc_ciu_cmd_checked(void)
+{
+  if (rk3506_mmc_send_ciu_cmd() < 0)
+    {
+      _err("MMC: CIU clock update did not complete (no cclk_in?)\n");
+    }
 }
 
 /****************************************************************************
@@ -509,7 +534,7 @@ static void rk3506_mmc_set_clock(uint32_t freq)
       /* Disable the card clock */
 
       mmc_putreg(MMC_CLKENA, 0);
-      rk3506_mmc_send_ciu_cmd();
+      rk3506_mmc_ciu_cmd_checked();
       return;
     }
 
@@ -528,17 +553,21 @@ static void rk3506_mmc_set_clock(uint32_t freq)
 
   mmc_putreg(MMC_CLKENA, 0);
   mmc_putreg(MMC_CLKSRC, 0);
-  rk3506_mmc_send_ciu_cmd();
+  rk3506_mmc_ciu_cmd_checked();
 
   /* Set clock to the desired speed */
 
   mmc_putreg(MMC_CLKDIV, div);
-  rk3506_mmc_send_ciu_cmd();
+  rk3506_mmc_ciu_cmd_checked();
 
-  /* Enable clock (low power mode off: SD, not SDIO) */
+  /* Enable clock.  LOW_PWR lets the controller gate cclk between
+   * transfers (it keeps the card clocked while a command/data is in
+   * flight and drives the 74 init cycles for a CMD_SEND_INIT).  Both
+   * Linux ("only low power if no SDIO") and U-Boot set it for plain SD.
+   */
 
-  mmc_putreg(MMC_CLKENA, CLKENA_CCLK_ENABLE);
-  rk3506_mmc_send_ciu_cmd();
+  mmc_putreg(MMC_CLKENA, CLKENA_CCLK_ENABLE | CLKENA_CCLK_LOW_POWER);
+  rk3506_mmc_ciu_cmd_checked();
 }
 
 /****************************************************************************

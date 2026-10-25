@@ -32,14 +32,22 @@
 #define NV3007_XOFFSET       12
 #define NV3007_BPP           16
 
-/* 4-wire SPI on DesignWare SPI0.  The NV3007 is happy at 40 MHz on a short
- * ribbon; the RK3506 pad is rated 50 MHz.
+/* 4-wire SPI on DesignWare SPI0.
+ *
+ * SPI0's functional clock (CLK_SPI0) is muxed to xin24m (/1) by
+ * rk3506_spi0_clock_init(), so spiclk = 24 MHz.  The DesignWare BAUDR
+ * divider is forced to an even number with a minimum of 2
+ * (rk3506_spi_set_freq), i.e. the fastest serial clock this source can
+ * produce is 24/2 = 12 MHz.  Use exactly 12 MHz so the programmed and
+ * actual rates agree.  The panel is rated well above this (the Linux
+ * panel dtsi runs it at 24 MHz); reaching that would require reparenting
+ * CLK_SPI0 from xin24m to the GPLL divider tree, a separate change.
  */
 
 #define NV3007_SPI_BUS       0     /* rk3506_spibus_initialize() index    */
 
 #ifndef NV3007_SPI_FREQ
-#  define NV3007_SPI_FREQ    1000000
+#  define NV3007_SPI_FREQ    12000000
 #endif
 
 /* SPI mode.  MODE 0 (CPOL=0 / CPHA=0) is the mode verified by the upstream
