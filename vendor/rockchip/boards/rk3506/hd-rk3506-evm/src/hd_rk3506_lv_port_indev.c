@@ -4,12 +4,12 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Two external push buttons on J9, wired to the LVGL default group as a
- * keypad input device:
+ * keypad input device with short/long press discrimination:
  *
- *   "next"  J9-33 = GPIO1_D1  (VO_LCDC_D2 position; RGB LCD not used)
- *           LV_KEY_NEXT  - move focus to the next widget
- *   "ok"    J9-32 = GPIO1_D2  (VO_LCDC_D1 position; RGB LCD not used)
- *           LV_KEY_ENTER - activate the focused widget
+ *   button 1  J9-33 = GPIO1_D1 (VO_LCDC_D2 position; RGB LCD not used)
+ *             short = LV_KEY_PREV (UP)   long = LV_KEY_ENTER (OK)
+ *   button 2  J9-32 = GPIO1_D2 (VO_LCDC_D1 position; RGB LCD not used)
+ *             short = LV_KEY_NEXT (DOWN) long = LV_KEY_ESC   (BACK)
  *
  * Both pins are active low (button shorts the pad to GND) with the SoC
  * internal pull-up enabled, so no external pull resistor is required.
@@ -17,12 +17,15 @@
  * which runs from the existing lv_timer task (~30 Hz): no IRQ or extra
  * thread is involved.
  *
- * Both pads are plain non-RM_IO GPIOs.  The RM_IO pads on J9 (CAN/UART
- * positions, GPIO0_C2/C4 on J9-18/20) were tried first and read back
- * stuck regardless of the pad level - the RM_IO matrix does not pass
- * the pad through to the GPIO block's EXT_PORT - so the buttons live
- * on bank 1 D-group pins instead.  Pin numbering follows the HD board
- * doc formula: global GPIO = bank*32 + linear pin.
+ * Short vs long: a press released before 500 ms reports the short key
+ * on release (PRESSED and RELEASED on two consecutive polls - LVGL
+ * needs both edges); reaching 500 ms while still held reports the long
+ * key immediately, with RELEASED when the finger lifts.  LVGL's keypad
+ * handler takes PREV/NEXT/ENTER/ESC on the PRESSED edge and completes
+ * ENTER's click on the matching RELEASED.
+ *
+ * Both pads are plain non-RM_IO GPIOs.  Pin numbering follows the HD
+ * board doc formula: global GPIO = bank*32 + linear pin.
  *
  ****************************************************************************/
 
@@ -55,8 +58,8 @@
 #  define CONFIG_HD_RK3506_BTN_OK_PIN   58   /* GPIO1_D2 -> J9-32 */
 #endif
 
-#define BTN_NEXT_GPIN            ((uint8_t)CONFIG_HD_RK3506_BTN_NEXT_PIN)
-#define BTN_OK_GPIN              ((uint8_t)CONFIG_HD_RK3506_BTN_OK_PIN)
+#define BTN1_GPIN                ((uint8_t)CONFIG_HD_RK3506_BTN_NEXT_PIN)
+#define BTN2_GPIN                ((uint8_t)CONFIG_HD_RK3506_BTN_OK_PIN)
 
 /* Active low: the pressed level on the pad is 0. */
 
@@ -66,17 +69,40 @@
 
 #define BTN_DEBOUNCE_MS          20
 
+/* Held this long -> long press. */
+
+#define BTN_LONG_MS              500
+
 /****************************************************************************
  * Private Types
  ****************************************************************************/
 
+/* Per-button short/long state machine.  LVGL consumes at most one key
+ * event per poll, so each state emits at most one report and a button
+ * that loses arbitration simply keeps its pending state for the next
+ * poll.
+ */
+
+enum btn_state_e
+{
+  S_IDLE,            /* not pressed, nothing pending                  */
+  S_DOWN,            /* held, deciding short vs long                  */
+  S_SHORT_PRESS,     /* released quickly: emit short PRESSED          */
+  S_SHORT_RELEASE,   /* emit short RELEASED, then idle                */
+  S_LONG_PRESS,      /* long key emitted as PRESSED, still held       */
+  S_LONG_RELEASE     /* emit long RELEASED on release, then idle      */
+};
+
 struct rk3506_btn_s
 {
-  uint8_t  gpin;           /* Packed RK3506 GPIO id                    */
-  uint32_t key;            /* LVGL key code this button produces       */
-  bool     pressed;        /* Debounced state: true while pressed      */
-  bool     raw;            /* Last raw (active-true) sample            */
-  uint32_t change_ms;      /* lv_tick_get() at the first raw change    */
+  uint8_t           gpin;        /* Packed RK3506 GPIO id             */
+  uint32_t          short_key;   /* LVGL key on a short press         */
+  uint32_t          long_key;    /* LVGL key on a long press          */
+  enum btn_state_e  state;
+  bool              pressed;     /* Debounced level                   */
+  bool              raw;         /* Last raw (active-true) sample     */
+  uint32_t          change_ms;   /* lv_tick_get() at first raw change */
+  uint32_t          down_ms;     /* lv_tick_get() at the press edge   */
 };
 
 /****************************************************************************
@@ -84,11 +110,6 @@ struct rk3506_btn_s
  ****************************************************************************/
 
 static struct rk3506_btn_s g_btn[2];
-
-/* Key + state that still needs its LVGL RELEASED report. */
-
-static uint32_t g_release_key;
-static bool     g_release_pending;
 
 /****************************************************************************
  * Private Functions
@@ -123,43 +144,91 @@ static void btn_debounce(struct rk3506_btn_s *btn)
     }
 }
 
+/* Advance one button's FSM; returns true when a report is ready. */
+
+static bool btn_poll(struct rk3506_btn_s *btn, uint32_t *key,
+                     lv_indev_state_t *state)
+{
+  uint32_t now = lv_tick_get();
+
+  switch (btn->state)
+    {
+      case S_IDLE:
+        if (btn->pressed)
+          {
+            btn->down_ms = now;
+            btn->state   = S_DOWN;
+          }
+        break;
+
+      case S_DOWN:
+        if (!btn->pressed)
+          {
+            /* Short press: report PRESSED now, RELEASED next poll. */
+
+            *key       = btn->short_key;
+            *state     = LV_INDEV_STATE_PRESSED;
+            btn->state = S_SHORT_RELEASE;
+            return true;
+          }
+
+        if ((uint32_t)(now - btn->down_ms) >= BTN_LONG_MS)
+          {
+            /* Long press: report the long key immediately. */
+
+            *key       = btn->long_key;
+            *state     = LV_INDEV_STATE_PRESSED;
+            btn->state = S_LONG_RELEASE;
+            return true;
+          }
+        break;
+
+      case S_SHORT_RELEASE:
+        *key       = btn->short_key;
+        *state     = LV_INDEV_STATE_RELEASED;
+        btn->state = S_IDLE;
+        return true;
+
+      case S_LONG_RELEASE:
+        if (!btn->pressed)
+          {
+            *key       = btn->long_key;
+            *state     = LV_INDEV_STATE_RELEASED;
+            btn->state = S_IDLE;
+            return true;
+          }
+        break;
+
+      default:
+        btn->state = S_IDLE;
+        break;
+    }
+
+  return false;
+}
+
 static void rk3506_btn_read(lv_indev_t *indev, lv_indev_data_t *data)
 {
   unsigned int i;
+
+  (void)indev;
 
   for (i = 0; i < sizeof(g_btn) / sizeof(g_btn[0]); i++)
     {
       btn_debounce(&g_btn[i]);
     }
 
-  /* One key at a time; report the first button that is held. */
-
   for (i = 0; i < sizeof(g_btn) / sizeof(g_btn[0]); i++)
     {
-      if (g_btn[i].pressed)
-        {
-          /* Keep reporting PRESSED while held; the matching RELEASED is
-           * sent on the first scan after release.
-           */
+      uint32_t         key;
+      lv_indev_state_t state;
 
-          g_release_pending = true;
-          g_release_key     = g_btn[i].key;
-          data->state       = LV_INDEV_STATE_PRESSED;
-          data->key         = g_btn[i].key;
+      if (btn_poll(&g_btn[i], &key, &state))
+        {
+          data->key   = key;
+          data->state = state;
           return;
         }
-    }
-
-  /* No button held: send exactly one RELEASED for the last key so LVGL
-   * closes the click/long-press state machine.
-   */
-
-  if (g_release_pending)
-    {
-      data->state = LV_INDEV_STATE_RELEASED;
-      data->key   = g_release_key;
-      g_release_pending = false;
-      return;
     }
 
   /* Idle: keep reporting released with no meaningful key. */
@@ -187,19 +256,21 @@ int hd_rk3506_lv_port_indev_init(void)
   lv_indev_t *indev;
   lv_group_t *group;
 
-  g_btn[0].gpin = BTN_NEXT_GPIN;
-  g_btn[0].key  = LV_KEY_NEXT;
-  g_btn[1].gpin = BTN_OK_GPIN;
-  g_btn[1].key  = LV_KEY_ENTER;
+  g_btn[0].gpin      = BTN1_GPIN;
+  g_btn[0].short_key = LV_KEY_PREV;    /* UP   */
+  g_btn[0].long_key  = LV_KEY_ENTER;   /* OK   */
+  g_btn[1].gpin      = BTN2_GPIN;
+  g_btn[1].short_key = LV_KEY_NEXT;    /* DOWN */
+  g_btn[1].long_key  = LV_KEY_ESC;     /* BACK */
 
-  if (rk3506_gpio_config(BTN_NEXT_GPIN,
+  if (rk3506_gpio_config(BTN1_GPIN,
                          RK3506_GPIO_INPUT | RK3506_GPIO_PULL_UP) < 0)
     {
       _err("BTN: GPIO1_D1 (J9-33) input config failed\n");
       return -1;
     }
 
-  if (rk3506_gpio_config(BTN_OK_GPIN,
+  if (rk3506_gpio_config(BTN2_GPIN,
                          RK3506_GPIO_INPUT | RK3506_GPIO_PULL_UP) < 0)
     {
       _err("BTN: GPIO1_D2 (J9-32) input config failed\n");
@@ -230,8 +301,8 @@ int hd_rk3506_lv_port_indev_init(void)
   lv_indev_set_read_cb(indev, rk3506_btn_read);
   lv_indev_set_group(indev, group);
 
-  _info("BTN: keypad indev registered (next=GPIO1_D1/J9-33, "
-        "ok=GPIO1_D2/J9-32, active low)\n");
+  _info("BTN: keypad indev registered "
+        "(btn1=J9-33 short UP long OK, btn2=J9-32 short DOWN long BACK)\n");
   return 0;
 }
 

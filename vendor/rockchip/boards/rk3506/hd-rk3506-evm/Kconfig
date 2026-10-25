@@ -56,19 +56,21 @@ config HD_RK3506_BTN_NEXT_PIN
 	---help---
 		Global GPIO number, bank*32 + linear pin (A=0..7, B=8..15,
 		C=16..23, D=24..31) - the same formula the HD board doc
-		uses.  J9-33 is GPIO1_D1 (VO_LCDC_D2 position; the RGB LCD
-		is unused), i.e. 1*32 + 25 = 57.  Plain non-RM_IO pad: the
-		RM_IO pads on J9 (CAN/UART positions, e.g. GPIO0_C2/C4)
-		read back stuck regardless of the pad level, so both
-		buttons live on plain GPIO pins.
+		uses.  Button 1 on J9-33 is GPIO1_D1 (VO_LCDC_D2 position;
+		the RGB LCD is unused), i.e. 1*32 + 25 = 57.  Short press
+		reports LV_KEY_PREV (UP), long press (>=500 ms) LV_KEY_ENTER
+		(OK).  Plain non-RM_IO pad: the RM_IO pads on J9 read back
+		stuck regardless of the pad level, so both buttons live on
+		plain GPIO pins.
 
 config HD_RK3506_BTN_OK_PIN
 	int "Global GPIO number of the 'ok' button (J9-32 = GPIO1_D2 = 58)"
 	default 58
 	depends on HD_RK3506_LV_BUTTONS
 	---help---
-		J9-32 is GPIO1_D2 (VO_LCDC_D1 position, unused), i.e.
-		1*32 + 26 = 58.  Adjacent to the 'next' button on J9-33.
+		Button 2 on J9-32 is GPIO1_D2 (VO_LCDC_D1 position, unused),
+		i.e. 1*32 + 26 = 58.  Short press reports LV_KEY_NEXT
+		(DOWN), long press LV_KEY_ESC (BACK).
 
 config HD_RK3506_UI
 	bool "hd_ui home screen (428x142 cards + menu UI)"
