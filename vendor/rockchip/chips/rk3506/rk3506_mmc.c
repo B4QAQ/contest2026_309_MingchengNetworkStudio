@@ -764,15 +764,25 @@ static int rk3506_mmc_sendcmd_sync(uint32_t cmd, uint32_t arg)
       blocksize = nbytes;
     }
 
-  /* A command may not be issued while the data FSM is still busy. */
+  /* Only data-transfer commands may need to wait for the card to leave
+   * busy (Linux dw_mci_wait_while_busy keys off SDMMC_CMD_PRV_DAT_WAIT).
+   * Identification commands (CMD0/1/2/3/8/55/ACMD41 ...) carry no data
+   * and must go out regardless of the DATA_BUSY line - gating them here
+   * makes the first CMD0 hang forever while the data0 line reads busy
+   * before the card has ever been initialised.  Bit 9 is the raw data0
+   * busy level (CMSIS MMC_STATUS_DATA_BUSY); bit 10 is the internal data
+   * FSM state and is NOT something either Linux or U-Boot waits on.
+   * On timeout Linux logs "Busy; trying anyway" and still sends.
+   */
 
-  ret = rk3506_mmc_wait_bits(MMC_STATUS,
-                             STATUS_DATA_BUSY | STATUS_MC_BUSY, 0,
-                             MMC_CMD_TIMEOUT_MS);
-  if (ret < 0)
+  if (data)
     {
-      _err("MMC: CMD%" PRIu32 " blocked by busy data FSM\n", index);
-      return ret;
+      ret = rk3506_mmc_wait_bits(MMC_STATUS, STATUS_DATA_BUSY, 0,
+                                 MMC_CMD_TIMEOUT_MS);
+      if (ret < 0)
+        {
+          _warn("MMC: CMD%" PRIu32 " data busy, trying anyway\n", index);
+        }
     }
 
   mmc_putreg(MMC_RINTSTS, INT_ALL);
@@ -799,8 +809,12 @@ static int rk3506_mmc_sendcmd_sync(uint32_t cmd, uint32_t arg)
 
       flags |= CMD_ABORT_STOP;
     }
-  else
+  else if (data)
     {
+      /* Wait for data completion only for actual data commands
+       * (U-Boot dwmci_send_cmd / Linux dw_mci_prepare_command).
+       */
+
       flags |= CMD_PRV_DAT_WAIT;
     }
 

@@ -11,11 +11,15 @@
  * as /dev/fb0 (RAM buffer + FBIO_UPDATE -> putarea), which the LVGL port
  * mmaps and renders into.
  *
- * Only SCK/MOSI go through the SPI0 controller RM_IO crossbar; CS, DC, RST
- * and the backlight are ordinary GPIO outputs.  J9 header, 3.3 V:
- *   J9-17 SCK  = GPIO0_A7 / RM_IO7  <- spi0_clk  (routing fn 82)
- *   J9-16 SDA  = GPIO0_A1 / RM_IO1  <- spi0_mosi (routing fn 83)
- *   J9-14 CS   = GPIO0_A3 / RM_IO3  (GPIO output, active low)
+ * SCK/MOSI go through the SPI0 controller via the RM_IO crossbar; CS, DC,
+ * RST and the backlight are ordinary GPIO outputs.  J9 header, 3.3 V.
+ * The J9 SPI positions are HARD-WIRED to specific RM_IO channels (see the
+ * HD-RK3506-EVM baseboard datasheet J9 table and SDK SPI.md
+ * "CLK=rm_io1, MOSI=rm_io3, MISO=rm_io6, CSN=rm_io7"):
+ *   J9-17 SCK  = GPIO0_A1 / RM_IO1  <- spi0_clk  (routing fn 82)
+ *   J9-16 SDA  = GPIO0_A3 / RM_IO3  <- spi0_mosi (routing fn 83)
+ *   J9-14 CS   = GPIO0_A7 / RM_IO7  (GPIO output, active low; the dts
+ *                                    routes this pad as hw CSN0 fn 85)
  *   J9-31 RST  = GPIO0_B0 / RM_IO8  (GPIO output)
  *   J9-15 DC   = GPIO0_A6 / RM_IO6  (GPIO output)
  *   J9-29 BL   = GPIO0_B4 / RM_IO12 (GPIO output, high = lit)
@@ -61,8 +65,8 @@
  * SPI_SELECT() is still mandatory, see nv_bus_acquire() below.
  */
 
-#define NV3007_PIN_SPI_CLK     7     /* GPIO0_A7 -> J9-17 (RM_IO, fn 82) */
-#define NV3007_PIN_SPI_MOSI    1     /* GPIO0_A1 -> J9-16 (RM_IO, fn 83) */
+#define NV3007_PIN_SPI_CLK     1     /* GPIO0_A1 -> J9-17 (rm_io1, fn 82) */
+#define NV3007_PIN_SPI_MOSI    3     /* GPIO0_A3 -> J9-16 (rm_io3, fn 83) */
 
 /* CS/RST/DC/BL are driven through the shared GPIO back-end
  * (rk3506_gpio_config/write).  They live on GPIO0.
@@ -301,8 +305,8 @@ static void nv_dc_set(bool data)
 
 static void nv_pinctrl(void)
 {
-  rk3506_pinctrl_set_mux(0, NV3007_PIN_SPI_CLK,  82u);  /* A7 CLK  */
-  rk3506_pinctrl_set_mux(0, NV3007_PIN_SPI_MOSI, 83u);  /* A1 MOSI */
+  rk3506_pinctrl_set_mux(0, NV3007_PIN_SPI_CLK,  82u);  /* A1 CLK  */
+  rk3506_pinctrl_set_mux(0, NV3007_PIN_SPI_MOSI, 83u);  /* A3 MOSI */
 
   rk3506_gpio_config(NV_GPIN_CS,  RK3506_GPIO_OUTPUT | RK3506_GPIO_VALUE_HIGH);
   rk3506_gpio_config(NV_GPIN_RST, RK3506_GPIO_OUTPUT | RK3506_GPIO_VALUE_HIGH);
@@ -312,12 +316,13 @@ static void nv_pinctrl(void)
 
 /* Take the bus and gate the engine on.
  *
- * SPI_SELECT is REQUIRED even though the panel CS is a plain GPIO: on the
- * Rockchip DesignWare SPI block the controller only generates SCLK for an
- * enabled slave-select (SER != 0).  With SER == 0 bytes land in the TX
- * FIFO but are never clocked out, which looks exactly like a dead panel
- * with the backlight on.  The hardware CSN0 pad is not routed, so the SER
- * bit only gates the engine; the panel's real CS is the GPIO above.
+ * SPI_SELECT is REQUIRED even though the panel CS is driven as a plain
+ * GPIO on A7: on the Rockchip DesignWare SPI block the controller only
+ * generates SCLK for an enabled slave-select (SER != 0).  With SER == 0
+ * bytes land in the TX FIFO but are never clocked out, which looks
+ * exactly like a dead panel with the backlight on.  A7 is the same pad
+ * the dts routes as hardware CSN0 (rm_io7, fn 85); driving it as a GPIO
+ * gives one CS edge per command, which is what this panel expects.
  *
  * Mode/bits/frequency are applied once, not on every transaction: some
  * dw_spi lower-halves re-program the controller in setbits()/setmode(),
@@ -715,7 +720,7 @@ int board_lcd_initialize(void)
 
   initialized = true;
 
-  _info("NV3007: %dx%d RGB565 on SPI0 J9 (CLK17/MOSI16/CS14, RST31/DC30/BL29)"
+  _info("NV3007: %dx%d RGB565 on SPI0 J9 (CLK17/MOSI16/CS14, RST31/DC15/BL29)"
         ", mode %d, %lu Hz, /dev/fb0\n",
         NV3007_XRES, NV3007_YRES, (int)NV3007_SPI_MODE,
         (unsigned long)NV3007_SPI_FREQ);

@@ -67,12 +67,12 @@
 #  define NV3007_DC_SETUP_US 1
 #endif
 
-/* J9 expansion-header pads, given as the GPIO0 in-bank pin number
- * (== RM_IO matrix physical index).  Only SCK/MOSI go through the SPI0
- * controller; CS/DC/RST/BL are ordinary GPIO outputs:
- *   J9-17 SCK = GPIO0_A7 / RM_IO7  <- spi0_clk  (RMIO fn 82, mux 7)
- *   J9-16 SDA = GPIO0_A1 / RM_IO1  <- spi0_mosi (RMIO fn 83, mux 7)
- *   J9-14 CS  = GPIO0_A3 / RM_IO3  (plain GPIO output, idle high)
+/* J9 expansion-header pads.  The J9 SPI positions are hard-wired to
+ * specific RM_IO channels (baseboard datasheet J9 table; SDK SPI.md:
+ * CLK=rm_io1, MOSI=rm_io3, MISO=rm_io6, CSN=rm_io7):
+ *   J9-17 SCK = GPIO0_A1 / RM_IO1  <- spi0_clk  (RMIO fn 82, mux 7)
+ *   J9-16 SDA = GPIO0_A3 / RM_IO3  <- spi0_mosi (RMIO fn 83, mux 7)
+ *   J9-14 CS  = GPIO0_A7 / RM_IO7  (plain GPIO output, idle high)
  *   J9-31 RST = GPIO0_B0 / RM_IO8  (plain GPIO output)
  *   J9-15 DC  = GPIO0_A6 / RM_IO6  (plain GPIO output)
  *   J9-29 BL  = GPIO0_B4 / RM_IO12 (plain GPIO output, high = lit)
@@ -84,7 +84,7 @@
  * (vanxoak-hd-rk3506-evm-v1.dtsi snps,reset-gpio = <&gpio0 RK_PB3>).
  */
 
-#define NV3007_PIN_CS        3     /* GPIO0_A3 -> J9-14                    */
+#define NV3007_PIN_CS        7     /* GPIO0_A7 -> J9-14                    */
 #define NV3007_PIN_RST       8     /* GPIO0_B0 -> J9-31                    */
 #define NV3007_PIN_DC        6     /* GPIO0_A6 -> J9-15                    */
 #define NV3007_PIN_BL        12    /* GPIO0_B4 -> J9-29                    */

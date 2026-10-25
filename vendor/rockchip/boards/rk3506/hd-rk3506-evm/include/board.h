@@ -45,12 +45,12 @@
 
 /* NV3007 2.79" SPI TFT (J9) */
 
-#define BOARD_NV3007_PIN_CS    3     /* GPIO0_A3 -> J9-14 */
+#define BOARD_NV3007_PIN_CS    7     /* GPIO0_A7 -> J9-14 */
 #define BOARD_NV3007_PIN_RST   8     /* GPIO0_B0 -> J9-31 */
 #define BOARD_NV3007_PIN_DC    6     /* GPIO0_A6 -> J9-15 */
 #define BOARD_NV3007_PIN_BL    12    /* GPIO0_B4 -> J9-29 */
-#define BOARD_NV3007_PIN_CLK   7     /* GPIO0_A7 -> J9-17 (RM_IO, fn 82) */
-#define BOARD_NV3007_PIN_MOSI  1     /* GPIO0_A1 -> J9-16 (RM_IO, fn 83) */
+#define BOARD_NV3007_PIN_CLK   1     /* GPIO0_A1 -> J9-17 (RM_IO1, fn 82) */
+#define BOARD_NV3007_PIN_MOSI  3     /* GPIO0_A3 -> J9-16 (RM_IO3, fn 83) */
 
 /* LED definitions (if available).  Only the green run LED on GPIO1_B3
  * is software-controlled; the red power LED is not CPU-gpio wired.
