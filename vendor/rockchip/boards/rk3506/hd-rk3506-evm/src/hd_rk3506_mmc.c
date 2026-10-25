@@ -34,6 +34,7 @@
 
 #include <nuttx/clock.h>
 #include <nuttx/kthread.h>
+#include <nuttx/signal.h>
 
 #include <debug.h>
 
@@ -132,15 +133,17 @@ int hd_rk3506_mmc_initialize(void)
    */
 
 #ifdef CONFIG_RK3506_MMC_PWREN
+  uint32_t pwren_flags = RK3506_GPIO_OUTPUT
+#ifdef CONFIG_RK3506_MMC_PWREN_ACTIVELOW
+    | RK3506_GPIO_VALUE_LOW    /* active-low enable: drive low = power on */
+#else
+    | RK3506_GPIO_VALUE_HIGH
+#endif
+  ;
+
   ret = rk3506_gpio_config(RK3506_GPIO_PIN(CONFIG_RK3506_MMC_PWREN_BANK,
                                            CONFIG_RK3506_MMC_PWREN_PIN),
-                           RK3506_GPIO_OUTPUT |
-#ifdef CONFIG_RK3506_MMC_PWREN_ACTIVELOW
-                           RK3506_GPIO_VALUE_LOW |
-#else
-                           RK3506_GPIO_VALUE_HIGH |
-#endif
-                           RK3506_GPIO_PULL_DISABLE);
+                           pwren_flags);
   if (ret < 0)
     {
       _err("MMC: SD power switch GPIO config failed: %d\n", ret);

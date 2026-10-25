@@ -25,6 +25,7 @@
 #include <debug.h>
 #include <nuttx/clock.h>
 #include <nuttx/kthread.h>
+#include <nuttx/signal.h>
 #include <nuttx/board.h>
 
 #include "drv/gpio/rk3506_gpio.h"

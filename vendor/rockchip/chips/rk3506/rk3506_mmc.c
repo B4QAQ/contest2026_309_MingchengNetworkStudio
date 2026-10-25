@@ -51,6 +51,8 @@
 
 #include "rk3506_cru.h"
 #include "rk3506_mmc.h"
+#include "rk3506_register.h"
+#include "drv/gpio/rk3506_gpio.h"
 #include "hardware/rk3506_memorymap.h"
 
 #ifdef CONFIG_RK3506_MMC
@@ -282,7 +284,7 @@ static int rk3506_mmc_wait_bits(uint32_t off, uint32_t mask, uint32_t value,
                                 unsigned int timeout_ms)
 {
   clock_t start = clock_systime_ticks();
-  clock_t ticks = MSEC2TICKS(timeout_ms);
+  clock_t ticks = MSEC2TICK(timeout_ms);
 
   for (; ; )
     {
@@ -573,7 +575,7 @@ static int rk3506_mmc_data(bool write)
   tail      = remaining & 3;
 
   start = clock_systime_ticks();
-  ticks = MSEC2TICKS(MMC_DATA_TIMEOUT_MS);
+  ticks = MSEC2TICK(MMC_DATA_TIMEOUT_MS);
 
   for (; ; )
     {
@@ -857,7 +859,7 @@ static int rk3506_mmc_sendcmd_sync(uint32_t cmd, uint32_t arg)
 
   {
     clock_t start = clock_systime_ticks();
-    clock_t ticks = MSEC2TICKS(MMC_CMD_TIMEOUT_MS);
+    clock_t ticks = MSEC2TICK(MMC_CMD_TIMEOUT_MS);
 
     for (; ; )
       {
