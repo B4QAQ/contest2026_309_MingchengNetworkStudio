@@ -77,3 +77,9 @@ netcfg &
 # with the J9 buttons).  The LVGL display/indev are already up from
 # bringup; run detached so NSH stays interactive.
 hd_ui &
+
+# Network ADB daemon (port 5555, wildcard bind): `adb connect <board-ip>`
+# then `adb shell` / `adb push` / `adb pull` from the host.  Started after
+# netcfg so DHCP is at least underway; the listen socket works with no
+# carrier yet.
+adbd &

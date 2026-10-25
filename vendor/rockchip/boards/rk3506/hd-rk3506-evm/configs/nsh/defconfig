@@ -157,6 +157,37 @@ CONFIG_BUILTIN=y
 CONFIG_RAW_BINARY=y
 
 #---------------------------------------------------------------------------
+# Debug / development tooling
+#---------------------------------------------------------------------------
+# ps/top need registered procfs entries and tick-based CPU accounting.
+CONFIG_FS_PROCFS_REGISTER=y
+CONFIG_SCHED_CPULOAD_SYSCLK=y
+CONFIG_SYSTEM_CPULOAD=y
+# Memory peek/poke: mb/mh/mw are bring-up bread and butter; they are
+# disabled by default via NSH_DISABLE_*, re-enable them here.
+# CONFIG_NSH_DISABLE_MB is not set
+# CONFIG_NSH_DISABLE_MH is not set
+# CONFIG_NSH_DISABLE_MW is not set
+# dd as an app (NSH has no builtin dd).
+CONFIG_SYSTEM_DD=y
+# Network ADB daemon (adb shell / push / pull over TCP :5555).
+# rcS starts `adbd &`; the TCP server binds the wildcard address, so it
+# works as soon as DHCP completes.  Shell needs PTYs and parent/child
+# task tracking.
+CONFIG_SCHED_HAVE_PARENT=y
+CONFIG_SCHED_CHILD_STATUS=y
+CONFIG_PSEUDOTERM=y
+CONFIG_LIBC_EXECFUNCS=y
+CONFIG_NET_TCPBACKLOG=y
+CONFIG_SYSTEM_ADBD=y
+CONFIG_ADBD_TCP_SERVER=y
+CONFIG_ADBD_SHELL_SERVICE=y
+CONFIG_ADBD_FILE_SERVICE=y
+CONFIG_ADBD_PRODUCT_NAME="hd_rk3506_evm"
+CONFIG_ADBD_PRODUCT_MODEL="HD-RK3506-EVM"
+CONFIG_ADBD_PRODUCT_DEVICE="rk3506"
+
+#---------------------------------------------------------------------------
 # File Systems
 #---------------------------------------------------------------------------
 CONFIG_FS_ROMFS=y
