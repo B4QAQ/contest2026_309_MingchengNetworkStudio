@@ -49,28 +49,44 @@ config HD_RK3506_LV_BUTTONS
 		short the pad to GND.  The CAN controllers are unused on
 		this board.
 
-config HD_RK3506_BTN_NEXT_PIN
-	int "Global GPIO number of the 'next' button (J9-33 = GPIO1_D1 = 57)"
+config HD_RK3506_BTN_UP_PIN
+	int "Global GPIO number of the UP button (J9-33 = GPIO1_D1 = 57)"
 	default 57
 	depends on HD_RK3506_LV_BUTTONS
 	---help---
 		Global GPIO number, bank*32 + linear pin (A=0..7, B=8..15,
 		C=16..23, D=24..31) - the same formula the HD board doc
-		uses.  Button 1 on J9-33 is GPIO1_D1 (VO_LCDC_D2 position;
-		the RGB LCD is unused), i.e. 1*32 + 25 = 57.  Short press
-		reports LV_KEY_PREV (UP), long press (>=500 ms) LV_KEY_ENTER
-		(OK).  Plain non-RM_IO pad: the RM_IO pads on J9 read back
-		stuck regardless of the pad level, so both buttons live on
-		plain GPIO pins.
+		uses.  UP on J9-33 is GPIO1_D1 (VO_LCDC_D2 position; the
+		RGB LCD is unused), i.e. 1*32 + 25 = 57.  Emits LV_KEY_LEFT
+		(encoder step left: focus prev in navigate mode, cursor
+		left in edit mode).  Plain non-RM_IO pad: the RM_IO pads
+		on J9 read back stuck regardless of the pad level, so all
+		buttons live on plain GPIO pins.
 
-config HD_RK3506_BTN_OK_PIN
-	int "Global GPIO number of the 'ok' button (J9-32 = GPIO1_D2 = 58)"
+config HD_RK3506_BTN_DOWN_PIN
+	int "Global GPIO number of the DOWN button (J9-32 = GPIO1_D2 = 58)"
 	default 58
 	depends on HD_RK3506_LV_BUTTONS
 	---help---
-		Button 2 on J9-32 is GPIO1_D2 (VO_LCDC_D1 position, unused),
-		i.e. 1*32 + 26 = 58.  Short press reports LV_KEY_NEXT
-		(DOWN), long press LV_KEY_ESC (BACK).
+		DOWN on J9-32 is GPIO1_D2 (VO_LCDC_D1 position), i.e.
+		1*32 + 26 = 58.  Emits LV_KEY_RIGHT (encoder step right).
+
+config HD_RK3506_BTN_OK_PIN
+	int "Global GPIO number of the OK button (J9-34 = GPIO1_D0 = 56)"
+	default 56
+	depends on HD_RK3506_LV_BUTTONS
+	---help---
+		OK on J9-34 is GPIO1_D0 (VO_LCDC_D3 position), i.e.
+		1*32 + 24 = 56.  Emits LV_KEY_ENTER (click / edit mode
+		toggle on long press).
+
+config HD_RK3506_BTN_BACK_PIN
+	int "Global GPIO number of the BACK button (J9-35 = GPIO1_C7 = 55)"
+	default 55
+	depends on HD_RK3506_LV_BUTTONS
+	---help---
+		BACK on J9-35 is GPIO1_C7 (VO_LCDC_D4 position), i.e.
+		1*32 + 23 = 55.  Emits LV_KEY_ESC (cancel / back).
 
 config HD_RK3506_UI
 	bool "hd_ui home screen (428x142 cards + menu UI)"
