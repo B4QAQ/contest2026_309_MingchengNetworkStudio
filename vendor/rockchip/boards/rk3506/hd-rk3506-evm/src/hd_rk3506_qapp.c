@@ -38,6 +38,7 @@
 #include <lvgl/lvgl.h>
 
 #include "hd_rk3506_qapp.h"
+#include "hd_rk3506.h"
 #include "hd_rk3506_qjs_rt.h"
 
 #if defined(CONFIG_INTERPRETERS_QUICKJS) && defined(CONFIG_HD_RK3506_UI)
@@ -168,35 +169,19 @@ static void qapp_pump_cb(lv_timer_t *t)
     }
 }
 
-/* LV_EVENT_KEY on the app screen: long BACK (LV_KEY_ESC) stops the
- * app.  The screen is in the default group and focused, and LVGL
- * bubbles KEY events from any focused child up to the screen, so this
- * fires regardless of which widget holds focus.
+/* ESC while an app runs stops the app.  This is registered on the
+ * board's back-key hook rather than as an LV_EVENT_KEY on the app
+ * screen: the LVGL keypad driver delivers ESC only to the focused
+ * object, so once an app's own widgets take group focus the screen
+ * handler would never see the key.  The hook runs from lv_async_call()
+ * in the LVGL timer task, i.e. outside any event dispatch, so
+ * qapp_stop() may delete the screen it was called from.
  */
 
-static void qapp_stop_async(void *user_data)
+static void qapp_back_cb(FAR void *arg)
 {
-  (void)user_data;
+  (void)arg;
   qapp_stop();
-}
-
-static void qapp_key_cb(lv_event_t *e)
-{
-  uint32_t key = lv_event_get_key(e);
-
-  if (key == LV_KEY_ESC)
-    {
-      /* Do NOT call qapp_stop() here: we are inside lv_obj_send_event()
-       * dispatching a key event on the very screen qapp_stop() would
-       * delete.  Deleting an object mid-event leaves the event loop
-       * walking a freed event_dsc list and the indev holding a freed
-       * focus object - the classic jump-to-data abort.  Defer the stop
-       * to the LVGL timer task via lv_async_call(), which runs outside
-       * any event dispatch.
-       */
-
-      lv_async_call(qapp_stop_async, NULL);
-    }
 }
 
 int qapp_run(const char *path)
@@ -229,9 +214,15 @@ int qapp_run(const char *path)
 
   lv_screen_load(g_running.screen);
 
-  /* ESC on the app screen stops the app. */
+  /* ESC while this app runs stops it; the handler shadows the UI's
+   * default back handler until qapp_stop() unregisters it.
+   */
 
-  lv_obj_add_event_cb(g_running.screen, qapp_key_cb, LV_EVENT_KEY, NULL);
+  if (hd_rk3506_back_register(qapp_back_cb, NULL) < 0)
+    {
+      _err("qapp: failed to hook the back key\n");
+    }
+
   if (group != NULL)
     {
       lv_group_add_obj(group, g_running.screen);
@@ -242,6 +233,7 @@ int qapp_run(const char *path)
   if (g_running.js == NULL)
     {
       _err("qapp: failed to start %s\n", path);
+      hd_rk3506_back_unregister(qapp_back_cb);
       lv_obj_remove_flag(g_running.prev, LV_OBJ_FLAG_HIDDEN);
       lv_screen_load(g_running.prev);
       lv_obj_delete(g_running.screen);
@@ -302,6 +294,10 @@ void qapp_stop(void)
       hd_qjs_app_stop(g_running.js);
       g_running.js = NULL;
     }
+
+  /* Hand the back key back to the UI (its "return to home" handler). */
+
+  hd_rk3506_back_unregister(qapp_back_cb);
 
   _info("qapp: stopped\n");
 }

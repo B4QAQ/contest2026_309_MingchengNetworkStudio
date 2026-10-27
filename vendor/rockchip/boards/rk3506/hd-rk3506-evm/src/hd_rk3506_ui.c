@@ -40,10 +40,13 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
+#include <debug.h>
+
 #include <lvgl/lvgl.h>
 
 #include "rk3506_gmac0.h"
 #include "hd_rk3506_qapp.h"
+#include "hd_rk3506.h"
 
 #if defined(CONFIG_GRAPHICS_LVGL) && defined(CONFIG_HD_RK3506_UI)
 
@@ -88,6 +91,7 @@
  ****************************************************************************/
 
 static lv_obj_t *g_pages[UI_NPAGES];
+static int       g_cur_page = UI_PAGE_HOME;
 static lv_obj_t *g_card_lbl[4];     /* value labels of the 4 cards */
 
 static lv_obj_t *g_cmd_result;
@@ -507,6 +511,8 @@ static void ui_show_page(int idx)
 {
   int i;
 
+  g_cur_page = idx;
+
   for (i = 0; i < UI_NPAGES; i++)
     {
       if (i == idx)
@@ -535,6 +541,22 @@ static void ui_menu_cb(lv_event_t *e)
   int idx = (int)(intptr_t)lv_event_get_user_data(e);
 
   ui_show_page(idx);
+}
+
+/* ESC handler installed while no quick app owns the back key: step out
+ * of any menu page back to HOME.  On HOME it does nothing, so a stray
+ * press never blanks the screen.  A running quick app registers its own
+ * handler on top of this one and gets ESC first.
+ */
+
+static void ui_back_cb(FAR void *arg)
+{
+  (void)arg;
+
+  if (g_cur_page != UI_PAGE_HOME)
+    {
+      ui_show_page(UI_PAGE_HOME);
+    }
 }
 
 static lv_obj_t *ui_make_card(lv_obj_t *parent, int x, int y,
@@ -895,6 +917,13 @@ int hd_ui_main(int argc, char *argv[])
   }
 
   lv_timer_create(ui_refresh_cb, UI_REFRESH_MS, NULL);
+
+  /* ESC goes back to HOME from any menu page. */
+
+  if (hd_rk3506_back_register(ui_back_cb, NULL) < 0)
+    {
+      _err("ui: failed to hook the back key\n");
+    }
 
   return 0;
 }

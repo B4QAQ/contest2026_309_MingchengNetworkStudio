@@ -75,7 +75,6 @@
 #include <inttypes.h>
 #include <errno.h>
 #include <string.h>
-#include <syslog.h>
 #include <debug.h>
 
 #include <nuttx/irq.h>
@@ -224,15 +223,6 @@ struct rk3506_rptun_priv_s
    */
 
   bool             handshake_sent;
-
-  /* Diagnostics. */
-
-  bool             ready_seen;    /* INTMUX bit21 observed at start   */
-  uint32_t         n_notify[3];   /* [0]=handshake [1]=q1 [2]=other   */
-  uint32_t         n_kick_post;
-  uint32_t         n_kick_busy;
-  uint32_t         n_irq[2];      /* mbox0, mbox3 */
-  uint32_t         kick_consumed_us; /* A2B_STATUS clear poll, <2000=ok */
 };
 
 /****************************************************************************
@@ -375,13 +365,13 @@ static void rk3506_mcu_clock_enable(void)
  * Description:
  *   READ-ONLY probe of the peer's rpmsg readiness.  The M0 sets INTMUX
  *   group3 bit21 as the last step of its rpmsg init; this function polls
- *   that bit for up to RK3506_READY_TIMEOUT_US.  It never writes INTMUX
- *   and never fails: the M0 is released by U-Boot, not by us, so a not
- *   yet armed peer is only logged, not treated as an error.
+ *   that bit for up to RK3506_READY_TIMEOUT_US so the link-up kick is not
+ *   sent before the peer armed its receive interrupt.  It never writes
+ *   INTMUX and never fails: the M0 is released by U-Boot, not by us.
  *
  ****************************************************************************/
 
-static void rk3506_m0_wait_ready(FAR struct rk3506_rptun_priv_s *priv)
+static void rk3506_m0_wait_ready(void)
 {
   unsigned int waited;
 
@@ -391,96 +381,10 @@ static void rk3506_m0_wait_ready(FAR struct rk3506_rptun_priv_s *priv)
     {
       if (waited >= RK3506_READY_TIMEOUT_US)
         {
-          _warn("rptun: M0 rpmsg not armed yet (INTMUX en3=%08lx); "
-                "first kick may be retried\n",
-                (unsigned long)getreg32(RK3506_INTMUX_EN_GRP3));
           return;
         }
 
       nxsig_usleep(RK3506_READY_STEP_US);
-    }
-
-  priv->ready_seen = true;
-}
-
-/****************************************************************************
- * Name: rk3506_rptun_dump
- *
- * Description:
- *   Dump the A7-readable mailbox / INTMUX / vring state.  Called once
- *   after start and from the rpmsgtest failure path.
- *
- ****************************************************************************/
-
-static void rk3506_rptun_dump(FAR const char *tag)
-{
-  FAR struct rk3506_rptun_priv_s *priv = &g_rk3506_rptun;
-  unsigned long i;
-  unsigned long base;
-  unsigned long va;
-  unsigned long used;
-  unsigned long desc0;
-  unsigned long desc1;
-
-  syslog(LOG_INFO,
-         "rptun[%s]: gates CON5=%08lx CON6=%08lx CON8=%08lx CON11=%08lx\n"
-         "  INTMUX en3=%08lx flag3=%08lx (bit21 = mbox3 into M0)"
-         " ready_seen=%d\n",
-         tag,
-         (unsigned long)getreg32(RK3506_CRU_CLKGATE_CON(5)),
-         (unsigned long)getreg32(RK3506_CRU_CLKGATE_CON(6)),
-         (unsigned long)getreg32(RK3506_CRU_CLKGATE_CON(8)),
-         (unsigned long)getreg32(RK3506_CRU_CLKGATE_CON(11)),
-         (unsigned long)getreg32(RK3506_INTMUX_EN_GRP3),
-         (unsigned long)getreg32(RK3506_INTMUX_FLAG_GRP3),
-         (int)priv->ready_seen);
-
-  for (i = 0; i < 2; i++)
-    {
-      base = (i == 0) ? RK3506_MBOX0_BASE : RK3506_MBOX3_BASE;
-      syslog(LOG_INFO,
-             "rptun[%s]: mbox%lu @%08lx"
-             " a2b(inten %08lx st %08lx cmd %08lx dat %08lx)"
-             " b2a(inten %08lx st %08lx cmd %08lx dat %08lx)"
-             " irqcnt=%lu\n",
-             tag, i * 3, base,
-             (unsigned long)getreg32(base + MBOX_A2B_INTEN),
-             (unsigned long)getreg32(base + MBOX_A2B_STATUS),
-             (unsigned long)getreg32(base + MBOX_A2B_CMD),
-             (unsigned long)getreg32(base + MBOX_A2B_DAT),
-             (unsigned long)getreg32(base + MBOX_B2A_INTEN),
-             (unsigned long)getreg32(base + MBOX_B2A_STATUS),
-             (unsigned long)getreg32(base + MBOX_B2A_CMD),
-             (unsigned long)getreg32(base + MBOX_B2A_DAT),
-             (unsigned long)priv->n_irq[i]);
-    }
-
-  syslog(LOG_INFO,
-         "rptun[%s]: rsc status=0x%02x gfeat=0x%08lx dfeat=0x%08lx\n"
-         "  stats: notify hs=%lu q1=%lu other=%lu kick_post=%lu"
-         " kick_busy=%lu kick_consumed_us=%lu\n",
-         tag, g_rk3506_rsc.rpmsg_vdev.status,
-         (unsigned long)g_rk3506_rsc.rpmsg_vdev.gfeatures,
-         (unsigned long)g_rk3506_rsc.rpmsg_vdev.dfeatures,
-         (unsigned long)priv->n_notify[0],
-         (unsigned long)priv->n_notify[1],
-         (unsigned long)priv->n_notify[2],
-         (unsigned long)priv->n_kick_post,
-         (unsigned long)priv->n_kick_busy,
-         (unsigned long)priv->kick_consumed_us);
-
-  for (i = 0; i < 2; i++)
-    {
-      base = (i == 0) ? RK3506_VRING0_DA : RK3506_VRING1_DA;
-      up_invalidate_dcache((uintptr_t)base, (uintptr_t)base + 0x2000);
-      va   = *(FAR volatile uint16_t *)(base + RK3506_VR_AVAIL_IDX_OFF);
-      used = *(FAR volatile uint16_t *)(base + RK3506_VR_USED_IDX_OFF);
-      desc0 = *(FAR volatile uint32_t *)(base + RK3506_VR_DESC_OFF);
-      desc1 = *(FAR volatile uint32_t *)(base + RK3506_VR_DESC_OFF + 16);
-      syslog(LOG_INFO,
-             "rptun[%s]: vring%lu @0x%08lx avail.idx=%lu used.idx=%lu"
-             " desc[0].da=0x%08lx desc[1].da=0x%08lx\n",
-             tag, i, base, va, used, desc0, desc1);
     }
 }
 
@@ -500,7 +404,6 @@ static void rk3506_mbox_kick(uint32_t reason)
 {
   FAR struct rk3506_rptun_priv_s *priv = &g_rk3506_rptun;
   uint32_t status;
-  uint32_t poll;
   irqstate_t flags = spin_lock_irqsave(&priv->tx_lock);
 
   status = getreg32(RK3506_MBOX3_BASE + MBOX_A2B_STATUS);
@@ -508,27 +411,6 @@ static void rk3506_mbox_kick(uint32_t reason)
     {
       putreg32(RK3506_LINK_ID, RK3506_MBOX3_BASE + MBOX_A2B_CMD);
       putreg32(RK3506_RPMSG_MAGIC, RK3506_MBOX3_BASE + MBOX_A2B_DAT);
-      priv->n_kick_post++;
-
-      /* Read-only diagnostic: poll A2B_STATUS briefly.  The M0 clears it
-       * (w1c) inside its mailbox ISR; if it never clears, the M0 receive
-       * interrupt is not firing even though the kick landed.
-       */
-
-      for (poll = 0; poll < 2000; poll++)
-        {
-          if ((getreg32(RK3506_MBOX3_BASE + MBOX_A2B_STATUS) &
-               MBOX_CHAN0) == 0)
-            {
-              break;
-            }
-        }
-
-      priv->kick_consumed_us = poll;   /* <2000 = M0 consumed it */
-    }
-  else
-    {
-      priv->n_kick_busy++;
     }
 
   spin_unlock_irqrestore(&priv->tx_lock, flags);
@@ -558,13 +440,6 @@ static int rk3506_mbox_isr(int irq, FAR void *context, FAR void *arg)
     }
 
   vqid = (base == RK3506_MBOX3_BASE) ? 1u : 0u;
-  priv->n_irq[vqid]++;
-
-  /* No logging here: this runs in interrupt context on every M0->A7
-   * mailbox message, so a syslog() call would both violate the
-   * keep-ISRs-short rule and flood the console at rpmsg traffic rate.
-   * The n_irq[] counter stays for the rpmsgtest diagnostic to read.
-   */
 
   putreg32(MBOX_CHAN0, base + MBOX_B2A_STATUS);
 
@@ -611,7 +486,6 @@ static int rp_start(FAR struct rptun_dev_s *dev)
     (FAR struct rk3506_rptun_priv_s *)dev;
 
   priv->handshake_sent = false;
-  priv->ready_seen     = false;
 
   /* The M0 was loaded and released by U-Boot.  Open the time-base +
    * mailbox/intmux clocks it needs (U-Boot opened only HCLK_M0/
@@ -626,12 +500,7 @@ static int rp_start(FAR struct rptun_dev_s *dev)
    * its mailbox3 receive interrupt before the link-up kick.
    */
 
-  rk3506_m0_wait_ready(priv);
-
-  /* No automatic register dump here: this runs on every boot and would
-   * print ~10 lines of mailbox/INTMUX/CRU state each time.  The dump
-   * stays available on demand via the public rk3506_rptun_diag() hook.
-   */
+  rk3506_m0_wait_ready();
 
   return OK;
 }
@@ -665,7 +534,6 @@ static int rp_notify(FAR struct rptun_dev_s *dev, uint32_t vqid)
 
   if (vqid == 1u)
     {
-      priv->n_notify[1]++;
       rk3506_mbox_kick(1);
     }
   else if (!priv->handshake_sent &&
@@ -677,7 +545,6 @@ static int rp_notify(FAR struct rptun_dev_s *dev, uint32_t vqid)
        * link-up event (forced onto its tvq).
        */
 
-      priv->n_notify[0]++;
       priv->handshake_sent = true;
       rk3506_mbox_kick(0);
     }
@@ -686,8 +553,6 @@ static int rp_notify(FAR struct rptun_dev_s *dev, uint32_t vqid)
       /* Feature-negotiation ANY while status != DRIVER_OK, and every
        * later vring0 notification, are dropped like the Linux driver.
        */
-
-      priv->n_notify[2]++;
     }
 
   return OK;
@@ -770,11 +635,6 @@ int rk3506_rptun_initialize(void)
     }
 
   return ret;
-}
-
-void rk3506_rptun_diag(void)
-{
-  rk3506_rptun_dump("diag");
 }
 
 #endif /* CONFIG_RK3506_RPTUN */

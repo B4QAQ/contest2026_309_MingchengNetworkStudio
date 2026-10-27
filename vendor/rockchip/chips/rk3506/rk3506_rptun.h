@@ -43,10 +43,6 @@ extern "C"
 
 int rk3506_rptun_initialize(void);
 
-/* Dump all A7-readable M0 mailbox / INTMUX / vring state to syslog. */
-
-void rk3506_rptun_diag(void);
-
 #undef EXTERN
 #if defined(__cplusplus)
 }

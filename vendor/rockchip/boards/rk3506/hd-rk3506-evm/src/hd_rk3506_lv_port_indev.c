@@ -3,18 +3,31 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Five external push buttons on J9, wired to the LVGL default group as a
- * keypad input device:
+ * Four external push buttons on J9:
  *
  *   UP     J9-33 = GPIO1_D1 (VO_LCDC_D2 position)  -> LV_KEY_PREV (focus prev)
  *   DOWN   J9-32 = GPIO1_D2 (VO_LCDC_D1 position)  -> LV_KEY_NEXT (focus next)
  *   OK     J9-34 = GPIO1_D0 (VO_LCDC_D3 position)  -> LV_KEY_ENTER (click)
- *   ESC    J9-35 = GPIO1_C7 (VO_LCDC_D4 position)  -> LV_KEY_ESC  (back)
+ *   ESC    J9-35 = GPIO1_C7 (VO_LCDC_D4 position)  -> back, see below
  *
- * Registered as LV_INDEV_TYPE_KEYPAD: LVGL's keypad driver moves focus
- * on NEXT/PREV and sends ENTER/ESC to the focused object with a
- * matching event (CLICKED / CANCEL).  No short/long press
- * discrimination - each button emits exactly one key on a simple press.
+ * UP/DOWN/OK go through the LVGL keypad driver: it moves focus on
+ * NEXT/PREV and sends ENTER to the focused object (PRESSED/CLICKED).
+ * No short/long press discrimination - each button emits exactly one
+ * key on a simple press.
+ *
+ * ESC is deliberately NOT sent into LVGL.  The keypad driver delivers
+ * ESC with lv_group_send_data(), which hands LV_EVENT_KEY to the
+ * *focused object* only (core/lv_group.c:305) and that event bubbles
+ * (core/lv_obj_event.c:393) only when the object carries
+ * LV_OBJ_FLAG_EVENT_BUBBLE, which is off by default.  So an ESC handler
+ * installed on the screen stops firing the moment a focusable child
+ * (any widget an app creates) takes group focus - exactly the
+ * "back key stops working inside a quick app" symptom.
+ *
+ * Instead ESC travels through hd_rk3506_back_register() handlers, which
+ * are independent of group focus.  It is dispatched from lv_async_call()
+ * so the handler may freely delete the active screen, which is unsafe
+ * from inside indev_read() / an object event dispatch.
  *
  * All pins are active low (button shorts the pad to GND) with the SoC
  * internal pull-up enabled, so no external pull resistor is required.
@@ -31,12 +44,15 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <errno.h>
 
 #include <debug.h>
 
 #include <lvgl/lvgl.h>
 
 #include "drv/gpio/rk3506_gpio.h"
+
+#include "hd_rk3506.h"
 
 #if defined(CONFIG_GRAPHICS_LVGL) && defined(CONFIG_HD_RK3506_LV_BUTTONS)
 
@@ -91,7 +107,7 @@ enum btn_state_e
 struct rk3506_btn_s
 {
   uint8_t           gpin;        /* Packed RK3506 GPIO id             */
-  uint32_t          key;         /* LVGL key this button emits        */
+  uint32_t          key;         /* LVGL key, 0 = back button         */
   enum btn_state_e  state;
   bool              pressed;     /* Debounced level                   */
   bool              raw;         /* Last raw (active-true) sample     */
@@ -107,8 +123,22 @@ static struct rk3506_btn_s g_btn[] =
   { CONFIG_HD_RK3506_BTN_UP_PIN,   LV_KEY_PREV,  S_IDLE, false, false, 0 },
   { CONFIG_HD_RK3506_BTN_DOWN_PIN, LV_KEY_NEXT,  S_IDLE, false, false, 0 },
   { CONFIG_HD_RK3506_BTN_OK_PIN,   LV_KEY_ENTER, S_IDLE, false, false, 0 },
-  { CONFIG_HD_RK3506_BTN_ESC_PIN,  LV_KEY_ESC,   S_IDLE, false, false, 0 },
+  { CONFIG_HD_RK3506_BTN_ESC_PIN,  0,            S_IDLE, false, false, 0 },
 };
+
+/* Back-key handler stack.  The last registration wins, so a running
+ * quick app shadows the UI's default "return to home" handler and
+ * simply unregisters itself when it stops.
+ */
+
+#define BTN_BACK_MAX_HANDLERS    4
+
+static hd_rk3506_back_handler_t g_back_cb[BTN_BACK_MAX_HANDLERS];
+static FAR void                *g_back_arg[BTN_BACK_MAX_HANDLERS];
+
+/* Set while a back action is queued, so holding ESC fires it once. */
+
+static bool g_back_pending;
 
 /****************************************************************************
  * Private Functions
@@ -143,6 +173,47 @@ static void btn_debounce(struct rk3506_btn_s *btn)
     }
 }
 
+/* Runs from the LVGL timer task outside any event dispatch, where a
+ * handler is free to delete the active screen.
+ */
+
+static void btn_back_async(FAR void *arg)
+{
+  hd_rk3506_back_handler_t cb = NULL;
+  FAR void *cbarg = NULL;
+  int i;
+
+  (void)arg;
+
+  g_back_pending = false;
+
+  for (i = BTN_BACK_MAX_HANDLERS - 1; i >= 0; i--)
+    {
+      if (g_back_cb[i] != NULL)
+        {
+          cb    = g_back_cb[i];
+          cbarg = g_back_arg[i];
+          break;
+        }
+    }
+
+  if (cb != NULL)
+    {
+      cb(cbarg);
+    }
+}
+
+static void btn_back_fire(void)
+{
+  if (g_back_pending)
+    {
+      return;
+    }
+
+  g_back_pending = true;
+  lv_async_call(btn_back_async, NULL);
+}
+
 /* Advance one button's FSM; returns true when a report is ready. */
 
 static bool btn_poll(struct rk3506_btn_s *btn, uint32_t *key,
@@ -158,17 +229,32 @@ static bool btn_poll(struct rk3506_btn_s *btn, uint32_t *key,
         break;
 
       case S_DOWN:
-        *key       = btn->key;
-        *state     = LV_INDEV_STATE_PRESSED;
         btn->state = S_UP;
+
+        if (btn->key == 0)
+          {
+            /* Back button: bypass LVGL entirely. */
+
+            btn_back_fire();
+            break;
+          }
+
+        *key   = btn->key;
+        *state = LV_INDEV_STATE_PRESSED;
         return true;
 
       case S_UP:
         if (!btn->pressed)
           {
-            *key       = btn->key;
-            *state     = LV_INDEV_STATE_RELEASED;
             btn->state = S_IDLE;
+
+            if (btn->key == 0)
+              {
+                break;
+              }
+
+            *key   = btn->key;
+            *state = LV_INDEV_STATE_RELEASED;
             return true;
           }
         break;
@@ -219,10 +305,69 @@ static void rk3506_btn_read(lv_indev_t *indev, lv_indev_data_t *data)
  ****************************************************************************/
 
 /****************************************************************************
+ * Name: hd_rk3506_back_register
+ *
+ * Description:
+ *   Push a handler for the ESC button.  The most recently registered
+ *   handler runs first and the earlier ones stay as fallbacks, so a
+ *   quick app can take the back key over while it runs and hand it back
+ *   by calling hd_rk3506_back_unregister() when it stops.  Handlers run
+ *   from the LVGL timer task, outside any event dispatch.
+ *
+ * Returned Value:
+ *   OK, or -ENOMEM when every slot is taken.
+ *
+ ****************************************************************************/
+
+int hd_rk3506_back_register(hd_rk3506_back_handler_t cb, FAR void *arg)
+{
+  int i;
+
+  if (cb == NULL)
+    {
+      return -EINVAL;
+    }
+
+  for (i = 0; i < BTN_BACK_MAX_HANDLERS; i++)
+    {
+      if (g_back_cb[i] == NULL)
+        {
+          g_back_cb[i]  = cb;
+          g_back_arg[i] = arg;
+          return OK;
+        }
+    }
+
+  return -ENOMEM;
+}
+
+/****************************************************************************
+ * Name: hd_rk3506_back_unregister
+ *
+ * Description:
+ *   Remove a handler installed by hd_rk3506_back_register().
+ *
+ ****************************************************************************/
+
+void hd_rk3506_back_unregister(hd_rk3506_back_handler_t cb)
+{
+  int i;
+
+  for (i = 0; i < BTN_BACK_MAX_HANDLERS; i++)
+    {
+      if (g_back_cb[i] == cb)
+        {
+          g_back_cb[i]  = NULL;
+          g_back_arg[i] = NULL;
+        }
+    }
+}
+
+/****************************************************************************
  * Name: hd_rk3506_lv_port_indev_init
  *
  * Description:
- *   Configure the five J9 button pins and register an LVGL keypad input
+ *   Configure the four J9 button pins and register an LVGL keypad input
  *   device bound to the LVGL default group.  Must run after the display
  *   is created (hd_rk3506_lv_port_disp_init()).
  *
@@ -269,8 +414,8 @@ int hd_rk3506_lv_port_indev_init(void)
   lv_indev_set_read_cb(indev, rk3506_btn_read);
   lv_indev_set_group(indev, group);
 
-  _info("BTN: keypad indev registered "
-        "(UP=J9-33 DOWN=J9-32 OK=J9-34 ESC=J9-35)\n");
+  _info("BTN: keypad indev + back key registered "
+        "(UP=J9-33 DOWN=J9-32 OK=J9-34 ESC=J9-35 back)\n");
   return 0;
 }
 

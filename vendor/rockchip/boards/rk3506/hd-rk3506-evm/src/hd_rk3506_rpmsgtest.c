@@ -43,10 +43,6 @@
 #define RPMSGTEST_EXPECTED    "Rockchip rpmsg linux test!"
 #define RPMSGTEST_EXPECTED_LEN 26
 
-/* Provided by chips/rk3506/rk3506_rptun.c (same final image). */
-
-extern void rk3506_rptun_diag(void);
-
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
@@ -101,7 +97,6 @@ int main(int argc, FAR char *argv[])
   if (n != (ssize_t)strlen(RPMSGTEST_PING))
     {
       fprintf(stderr, "rpmsgtest: write failed: %d\n", errno);
-      rk3506_rptun_diag();
       goto out_close;
     }
 
@@ -112,7 +107,6 @@ int main(int argc, FAR char *argv[])
     {
       fprintf(stderr, "rpmsgtest: %s\n",
               ret == 0 ? "timeout waiting for M0 message" : "poll failed");
-      rk3506_rptun_diag();
       goto out_close;
     }
 
@@ -120,7 +114,6 @@ int main(int argc, FAR char *argv[])
   if (n <= 0)
     {
       fprintf(stderr, "rpmsgtest: read failed: %d\n", errno);
-      rk3506_rptun_diag();
       goto out_close;
     }
 

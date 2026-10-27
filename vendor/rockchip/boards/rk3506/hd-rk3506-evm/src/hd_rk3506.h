@@ -40,6 +40,15 @@ int hd_rk3506_bringup(void);
 
 #ifdef CONFIG_GRAPHICS_LVGL
 int hd_rk3506_lv_port_disp_init(void);
+
+/* ESC button handlers (see hd_rk3506_lv_port_indev.c for why the back
+ * key is dispatched here instead of through the LVGL group focus).
+ */
+
+typedef CODE void (*hd_rk3506_back_handler_t)(FAR void *arg);
+
+int hd_rk3506_back_register(hd_rk3506_back_handler_t cb, FAR void *arg);
+void hd_rk3506_back_unregister(hd_rk3506_back_handler_t cb);
 #endif
 
 #ifdef CONFIG_IOEXPANDER
