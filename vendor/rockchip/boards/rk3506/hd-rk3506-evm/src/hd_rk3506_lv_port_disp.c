@@ -119,39 +119,92 @@ static void rk3506_disp_flush(lv_display_t *disp,
   size_t bpp         = (g_video.fmt == FB_FMT_RGB16_565) ? 2 : 1;
   int32_t fb_h       = (int32_t)g_video.yres;   /* physical panel height */
 
-  for (int32_t y = 0; y < h; y++)
+  if (bpp == 2)
     {
-      uint8_t *dst = fb + (size_t)(area->y1 + y) * bpp
-                   + (size_t)(fb_h - 1 - area->x1) * g_plane.stride;
+      /* Block transpose: process 8x8 tiles so the source reads are
+       * cache-friendly (8 consecutive rows fit in L1), then write each
+       * transposed tile to the framebuffer.  A source row (x varies)
+       * becomes a framebuffer column (stride apart); a source column
+       * (y varies) becomes a framebuffer row (bpp apart, contiguous).
+       * So we read rows and write columns of the tile.
+       */
 
-      if (bpp == 2)
+      const uint16_t *s16 = (const uint16_t *)src;
+
+      for (int32_t y0 = 0; y0 < h; y0 += 8)
         {
-          const uint16_t *s = (const uint16_t *)src;
+          int32_t ylim = (y0 + 8 <= h) ? 8 : (h - y0);
 
-          for (int32_t x = 0; x < w; x++)
+          for (int32_t x0 = 0; x0 < w; x0 += 8)
             {
-              *(uint16_t *)dst = s[x];
-              dst -= g_plane.stride;
+              int32_t xlim = (x0 + 8 <= w) ? 8 : (w - x0);
+
+              /* Read the 8x8 tile from source (contiguous rows). */
+
+              uint16_t blk[8][8];
+
+              for (int32_t dy = 0; dy < ylim; dy++)
+                {
+                  const uint16_t *row = s16 +
+                    (size_t)(y0 + dy) * w + x0;
+
+                  for (int32_t dx = 0; dx < xlim; dx++)
+                    {
+                      blk[dy][dx] = row[dx];
+                    }
+                }
+
+              /* Write transposed: for each source column dx, the
+               * framebuffer address is
+               *   fb + (fb_h - 1 - (x0+dx)) * stride + (y0+dy) * bpp
+               * so dy walks contiguous bytes (bpp apart).
+               */
+
+              for (int32_t dx = 0; dx < xlim; dx++)
+                {
+                  uint8_t *dst = fb +
+                    (size_t)(fb_h - 1 - (area->x1 + x0 + dx)) *
+                    g_plane.stride +
+                    (size_t)(area->y1 + y0) * bpp;
+
+                  for (int32_t dy = 0; dy < ylim; dy++)
+                    {
+                      *(uint16_t *)dst = blk[dy][dx];
+                      dst += bpp;
+                    }
+                }
             }
         }
-      else
+    }
+  else
+    {
+      for (int32_t y = 0; y < h; y++)
         {
+          uint8_t *dst = fb + (size_t)(area->y1 + y) * bpp
+                       + (size_t)(fb_h - 1 - area->x1) * g_plane.stride;
+
           for (int32_t x = 0; x < w; x++)
             {
               *dst = src[x];
               dst -= g_plane.stride;
             }
-        }
 
-      src += (size_t)w * bpp;
+          src += (size_t)w * bpp;
+        }
     }
 
 #ifdef CONFIG_FB_UPDATE
+  /* Update only the transposed bounding box of the dirty area.  The
+   * transpose maps logical (x,y) to fb (fb_x=y, fb_y=fb_h-1-x), so the
+   * dirty rectangle's corners swap and invert.
+   */
+
   struct fb_area_s upd;
-  upd.x = 0;
-  upd.y = 0;
-  upd.w = g_video.xres;      /* physical fb width  */
-  upd.h = g_video.yres;      /* physical fb height */
+
+  upd.x = area->y1;
+  upd.y = fb_h - 1 - area->x2;
+  upd.w = area->y2 - area->y1 + 1;
+  upd.h = area->x2 - area->x1 + 1;
   (void)ioctl(g_fb_fd, FBIO_UPDATE, &upd);
 #endif
 
@@ -356,10 +409,17 @@ int hd_rk3506_lv_port_disp_init(void)
   _info("LVGL: lv_display_create ok disp=%p\n", g_disp);
 
   lv_display_set_flush_cb(g_disp, rk3506_disp_flush);
+  /* PARTIAL mode: LVGL renders only the dirty (changed) areas into
+   * the render buffer and flushes each one.  The flush callback still
+   * transposes into the full framebuffer, but only the changed rows
+   * are touched - a blinking cursor or a ticking label costs a few
+   * hundred pixels instead of the full 60776-pixel frame.
+   */
+
   lv_display_set_buffers(g_disp, g_render_buf, NULL,
                          buf_pixels * sizeof(lv_color_t),
-                         LV_DISPLAY_RENDER_MODE_FULL);
-  _info("LVGL: flush_cb + buffers set, render mode FULL\n");
+                         LV_DISPLAY_RENDER_MODE_PARTIAL);
+  _info("LVGL: flush_cb + buffers set, render mode PARTIAL\n");
 
   /* Start the LVGL timer-handler and tick threads. */
 

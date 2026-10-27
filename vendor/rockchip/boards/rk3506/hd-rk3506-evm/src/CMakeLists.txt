@@ -61,22 +61,6 @@ if(CONFIG_HD_RK3506_UI)
     hd_rk3506_lv_binding.c)
 endif()
 
-# btn: one-shot raw pad-level readout for the two J9 buttons
-# (hardware bring-up diagnostic for the keypad indev).
-if(CONFIG_HD_RK3506_LV_BUTTONS)
-  nuttx_add_application(
-    NAME
-    btn
-    STACKSIZE
-    2048
-    PRIORITY
-    100
-    INCLUDE_DIRECTORIES
-    ${NUTTX_CHIP_ABS_DIR}
-    SRCS
-    hd_rk3506_btndbg.c)
-endif()
-
 if(CONFIG_RK3506_MMC)
   list(APPEND SRCS hd_rk3506_mmc.c)
 endif()

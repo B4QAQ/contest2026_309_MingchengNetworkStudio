@@ -64,10 +64,9 @@
 
 #define UI_PAGE_HOME    0
 #define UI_PAGE_CMD     1
-#define UI_PAGE_TEST    2
+#define UI_PAGE_APPS    2
 #define UI_PAGE_INFO    3
-#define UI_PAGE_APPS    4
-#define UI_NPAGES       5
+#define UI_NPAGES       4
 
 /* Palette */
 
@@ -92,11 +91,117 @@ static lv_obj_t *g_pages[UI_NPAGES];
 static lv_obj_t *g_card_lbl[4];     /* value labels of the 4 cards */
 
 static lv_obj_t *g_cmd_result;
-static lv_obj_t *g_test_lbl[4];
+
 static lv_obj_t *g_info_uptime;
 static lv_obj_t *g_apps_list;
 
-static void ui_apps_fill(void);
+static void ui_apps_fill(void)
+{
+  int i;
+
+  lv_obj_clean(g_apps_list);
+  g_apps_count = qapp_list(g_apps, QAPP_MAX);
+
+  if (g_apps_count == 0)
+    {
+      lv_obj_t *lbl = ui_make_label(g_apps_list,
+                                    "no apps - adb push / qapp install",
+                                    &lv_font_montserrat_12, UI_COL_DIM);
+      lv_obj_set_pos(lbl, 0, 0);
+      return;
+    }
+
+  for (i = 0; i < g_apps_count; i++)
+    {
+      lv_obj_t *card;
+      lv_obj_t *icon;
+      lv_obj_t *name;
+      lv_obj_t *btn;
+      lv_obj_t *lbl;
+      int y = i * 36;
+
+      /* Card container */
+
+      card = lv_obj_create(g_apps_list);
+      lv_obj_set_size(card, UI_CONTENT_W, 32);
+      lv_obj_set_pos(card, 0, y);
+      lv_obj_set_style_bg_color(card, lv_color_hex(UI_COL_CARD), 0);
+      lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+      lv_obj_set_style_radius(card, 6, 0);
+      lv_obj_set_style_border_width(card, 1, 0);
+      lv_obj_set_style_border_color(card, lv_color_hex(UI_COL_CARD_BR),
+                                    0);
+      lv_obj_set_style_pad_all(card, 2, 0);
+      lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+      /* App icon: colored circle with first letter */
+
+      icon = lv_obj_create(card);
+      lv_obj_set_size(icon, 26, 26);
+      lv_obj_set_pos(icon, 2, 1);
+      lv_obj_set_style_radius(icon, LV_RADIUS_CIRCLE, 0);
+      lv_obj_set_style_bg_color(icon,
+                                lv_color_hex(g_apps[i].builtin ?
+                                             UI_COL_ACCENT2 :
+                                             UI_COL_ACCENT1),
+                                0);
+      lv_obj_set_style_bg_opa(icon, LV_OPA_COVER, 0);
+      lv_obj_set_style_border_width(icon, 0, 0);
+      lv_obj_remove_flag(icon, LV_OBJ_FLAG_SCROLLABLE);
+
+      lbl = lv_label_create(icon);
+      {
+        char letter[2] = { g_apps[i].name[0], '\0' };
+
+        /* Uppercase the first letter for the icon */
+
+        if (letter[0] >= 'a' && letter[0] <= 'z')
+          {
+            letter[0] -= 32;
+          }
+
+        lv_label_set_text(lbl, letter);
+      }
+      lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+      lv_obj_center(lbl);
+
+      /* App name */
+
+      name = ui_make_label(card, g_apps[i].name, &lv_font_montserrat_12,
+                           g_apps[i].builtin ? UI_COL_DIM : UI_COL_TEXT);
+      lv_obj_set_pos(name, 34, 8);
+
+      /* Run button */
+
+      btn = lv_button_create(card);
+      lv_obj_set_size(btn, 40, 24);
+      lv_obj_set_pos(btn, UI_CONTENT_W - 96, 2);
+      ui_style_button(btn);
+      lv_obj_add_event_cb(btn, ui_apps_run_cb, LV_EVENT_CLICKED,
+                          (void *)(intptr_t)i);
+      lbl = lv_label_create(btn);
+      lv_label_set_text(lbl, LV_SYMBOL_PLAY);
+      lv_obj_center(lbl);
+      lv_group_add_obj(lv_group_get_default(), btn);
+
+      /* Delete button (user apps only) */
+
+      if (!g_apps[i].builtin)
+        {
+          btn = lv_button_create(card);
+          lv_obj_set_size(btn, 40, 24);
+          lv_obj_set_pos(btn, UI_CONTENT_W - 50, 2);
+          ui_style_button(btn);
+          lv_obj_add_event_cb(btn, ui_apps_del_cb, LV_EVENT_CLICKED,
+                              (void *)(intptr_t)i);
+          lbl = lv_label_create(btn);
+          lv_label_set_text(lbl, LV_SYMBOL_TRASH);
+          lv_obj_center(lbl);
+          lv_group_add_obj(lv_group_get_default(), btn);
+        }
+    }
+}
+
 static void ui_build_apps(lv_obj_t *page);
 
 /****************************************************************************
@@ -440,40 +545,146 @@ static void ui_build_home(lv_obj_t *page)
  * buttons cannot drive one.
  */
 
-struct ui_preset_cmd_s
+/* Terminal page: preset NSH commands + hardware tests in one
+ * scrollable list.  Commands run via system(); tests check hardware
+ * directly and report PASS/FAIL.
+ */
+
+enum ui_term_entry_type_e
 {
-  const char *label;
-  const char *cmd;
+  UI_TERM_CMD,       /* Run an NSH command via system()             */
+  UI_TERM_TEST       /* Run a hardware test, report PASS/FAIL       */
 };
 
-static const struct ui_preset_cmd_s g_preset_cmds[] =
+struct ui_term_entry_s
 {
-  { "free",      "free"      },
-  { "ps",        "ps"        },
-  { "mount",     "mount"     },
-  { "ifconfig",  "ifconfig"  },
-  { "ping gw",   "ping -c 3 192.168.10.1" },
-  { "cpuload",   "cpuload"   },
-  { "ls /data",  "ls /data"  },
-  { "date",      "date"      },
+  const char                 *label;
+  enum ui_term_entry_type_e   type;
+  const char                 *cmd;      /* UI_TERM_CMD only          */
+  int                       (*test)(void); /* UI_TERM_TEST: 0=PASS   */
 };
 
-static void ui_preset_run_cb(lv_event_t *e)
+/* Hardware test helpers - return 0 on PASS, -1 on FAIL. */
+
+static int ui_test_sd(void)
+{
+  return access("/dev/mmcsd0", F_OK);
+}
+
+static int ui_test_usb(void)
+{
+  return access("/dev/sda", F_OK);
+}
+
+static int ui_test_net(void)
+{
+  char buf[48];
+
+  ui_fmt_ip(buf, sizeof(buf));
+  return strcmp(buf, "no link") != 0 ? 0 : -1;
+}
+
+static int ui_test_rpmsg(void)
+{
+  return access("/dev/rpmsg/mcu", F_OK) == 0 ||
+         access("/dev/rpmsg-rpmsg-mcu0-echo", F_OK) == 0 ? 0 : -1;
+}
+
+static int ui_test_nand(void)
+{
+  return access("/dev/mtdblock0", F_OK);
+}
+
+static int ui_test_rtc(void)
+{
+  struct tm tm;
+  time_t t = time(NULL);
+
+  /* PASS if the clock is past 2024 (NTP synced). */
+
+  if (t == (time_t)-1)
+    {
+      return -1;
+    }
+
+  gmtime_r(&t, &tm);
+  return tm.tm_year >= 124 ? 0 : -1;  /* 124 = 2024 */
+}
+
+static int ui_test_i2c(void)
+{
+  /* I2C0 is used by the GT911 touch (may be absent) - just check the
+   * bus device exists.
+   */
+
+  return access("/dev/i2c0", F_OK);
+}
+
+static int ui_test_spi(void)
+{
+  /* SPI0 is the NV3007 panel - if the fb device exists, SPI works. */
+
+  return access("/dev/fb0", F_OK);
+}
+
+static const struct ui_term_entry_s g_term_entries[] =
+{
+  /* NSH commands */
+
+  { "free",        UI_TERM_CMD,  "free",                    NULL },
+  { "ps",          UI_TERM_CMD,  "ps",                      NULL },
+  { "mount",       UI_TERM_CMD,  "mount",                   NULL },
+  { "ifconfig",    UI_TERM_CMD,  "ifconfig",                NULL },
+  { "ping gw",     UI_TERM_CMD,  "ping -c 3 192.168.10.1",  NULL },
+  { "cpuload",     UI_TERM_CMD,  "cpuload",                 NULL },
+  { "ls /data",    UI_TERM_CMD,  "ls /data",                NULL },
+  { "date",        UI_TERM_CMD,  "date",                    NULL },
+
+  /* Hardware tests */
+
+  { "test: SD card",   UI_TERM_TEST, NULL, ui_test_sd    },
+  { "test: USB disk",  UI_TERM_TEST, NULL, ui_test_usb   },
+  { "test: Network",   UI_TERM_TEST, NULL, ui_test_net   },
+  { "test: M0 rpmsg",  UI_TERM_TEST, NULL, ui_test_rpmsg },
+  { "test: SPI NAND",  UI_TERM_TEST, NULL, ui_test_nand  },
+  { "test: RTC/NTP",   UI_TERM_TEST, NULL, ui_test_rtc   },
+  { "test: I2C bus",   UI_TERM_TEST, NULL, ui_test_i2c   },
+  { "test: SPI panel", UI_TERM_TEST, NULL, ui_test_spi   },
+};
+
+static void ui_term_run_cb(lv_event_t *e)
 {
   int idx = (int)(intptr_t)lv_event_get_user_data(e);
-  char buf[48];
-  int ret;
+  char buf[64];
 
-  if (idx < 0 || idx >= (int)(sizeof(g_preset_cmds) /
-                             sizeof(g_preset_cmds[0])))
+  if (idx < 0 || idx >= (int)(sizeof(g_term_entries) /
+                             sizeof(g_term_entries[0])))
     {
       return;
     }
 
-  ret = system(g_preset_cmds[idx].cmd);
-  snprintf(buf, sizeof(buf), "%s -> exit=%d", g_preset_cmds[idx].label,
-           ret);
+  const struct ui_term_entry_s *ent = &g_term_entries[idx];
+
+  if (ent->type == UI_TERM_CMD)
+    {
+      int ret = system(ent->cmd);
+
+      snprintf(buf, sizeof(buf), "%s -> exit=%d", ent->label, ret);
+    }
+  else
+    {
+      int ret = ent->test();
+
+      snprintf(buf, sizeof(buf), "%s -> %s", ent->label,
+               ret == 0 ? "PASS" : "FAIL");
+    }
+
   lv_label_set_text(g_cmd_result, buf);
+  lv_obj_set_style_text_color(g_cmd_result,
+                              lv_color_hex(ent->type == UI_TERM_CMD ||
+                                           strstr(buf, "PASS") != NULL ?
+                                           UI_COL_ACCENT1 : 0xff6060),
+                              0);
 }
 
 static void ui_build_cmd(lv_obj_t *page)
@@ -481,7 +692,7 @@ static void ui_build_cmd(lv_obj_t *page)
   lv_obj_t *cont;
   unsigned int i;
 
-  /* Scrollable container for the preset command buttons. */
+  /* Scrollable container for the command + test buttons. */
 
   cont = lv_obj_create(page);
   lv_obj_set_size(cont, UI_CONTENT_W, 96);
@@ -494,17 +705,30 @@ static void ui_build_cmd(lv_obj_t *page)
                         LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_scroll_dir(cont, LV_DIR_VER);
 
-  for (i = 0; i < sizeof(g_preset_cmds) / sizeof(g_preset_cmds[0]); i++)
+  for (i = 0; i < sizeof(g_term_entries) / sizeof(g_term_entries[0]);
+       i++)
     {
       lv_obj_t *btn = lv_button_create(cont);
       lv_obj_t *lbl;
 
       lv_obj_set_size(btn, UI_CONTENT_W - 12, 26);
       ui_style_button(btn);
-      lv_obj_add_event_cb(btn, ui_preset_run_cb, LV_EVENT_CLICKED,
+
+      /* Test entries get a slightly different accent so they stand out
+       * from plain commands.
+       */
+
+      if (g_term_entries[i].type == UI_TERM_TEST)
+        {
+          lv_obj_set_style_border_color(btn, lv_color_hex(UI_COL_ACCENT2),
+                                        0);
+          lv_obj_set_style_border_width(btn, 1, 0);
+        }
+
+      lv_obj_add_event_cb(btn, ui_term_run_cb, LV_EVENT_CLICKED,
                           (void *)(intptr_t)i);
       lbl = lv_label_create(btn);
-      lv_label_set_text(lbl, g_preset_cmds[i].label);
+      lv_label_set_text(lbl, g_term_entries[i].label);
       lv_obj_set_style_text_font(lbl, &lv_font_montserrat_12, 0);
       lv_obj_center(lbl);
       lv_group_add_obj(lv_group_get_default(), btn);
@@ -515,94 +739,6 @@ static void ui_build_cmd(lv_obj_t *page)
   g_cmd_result = ui_make_label(page, "", &lv_font_montserrat_12,
                                UI_COL_DIM);
   lv_obj_set_pos(g_cmd_result, 0, 100);
-}
-
-static void ui_test_run_cb(lv_event_t *e)
-{
-  int idx = (int)(intptr_t)lv_event_get_user_data(e);
-  const char *result = "FAIL";
-
-  switch (idx)
-    {
-      case 0:   /* SD card */
-        if (access("/dev/mmcsd0", F_OK) == 0)
-          {
-            result = "PASS";
-          }
-        break;
-
-      case 1:   /* USB disk */
-        if (access("/dev/sda", F_OK) == 0)
-          {
-            result = "PASS";
-          }
-        break;
-
-      case 2:   /* network: eth0 has an IP */
-          {
-            char buf[48];
-
-            ui_fmt_ip(buf, sizeof(buf));
-            if (strcmp(buf, "no link") != 0)
-              {
-                result = "PASS";
-              }
-          }
-        break;
-
-      case 3:   /* M0 rpmsg link */
-        if (access("/dev/rpmsg/mcu", F_OK) == 0 ||
-            access("/dev/rpmsg-rpmsg-mcu0-echo", F_OK) == 0)
-          {
-            result = "PASS";
-          }
-        break;
-
-      default:
-        break;
-    }
-
-  lv_label_set_text(g_test_lbl[idx], result);
-  lv_obj_set_style_text_color(g_test_lbl[idx],
-                              lv_color_hex(result[0] == 'P' ?
-                                           UI_COL_ACCENT1 : 0xff6060),
-                              0);
-}
-
-static const char * const g_test_names[4] =
-{
-  "SD card", "USB disk", "Network", "M0 rpmsg"
-};
-
-static void ui_build_test(lv_obj_t *page)
-{
-  lv_obj_t *note;
-  int i;
-
-  for (i = 0; i < 4; i++)
-    {
-      lv_obj_t *btn = lv_button_create(page);
-      lv_obj_t *lbl;
-
-      lv_obj_set_size(btn, 96, 30);
-      lv_obj_set_pos(btn, (i % 2) * 170, (i / 2) * 40);
-      ui_style_button(btn);
-      lv_obj_add_event_cb(btn, ui_test_run_cb, LV_EVENT_CLICKED,
-                          (void *)(intptr_t)i);
-      lbl = lv_label_create(btn);
-      lv_label_set_text(lbl, g_test_names[i]);
-      lv_obj_center(lbl);
-      lv_group_add_obj(lv_group_get_default(), btn);
-
-      g_test_lbl[i] = ui_make_label(page, "-", &lv_font_montserrat_12,
-                                    UI_COL_DIM);
-      lv_obj_set_pos(g_test_lbl[i], (i % 2) * 170 + 104,
-                     (i / 2) * 40 + 8);
-    }
-
-  note = ui_make_label(page, "NEXT moves, ENTER runs",
-                       &lv_font_montserrat_12, UI_COL_DIM);
-  lv_obj_set_pos(note, 0, 84);
 }
 
 static void ui_build_info(lv_obj_t *page)
@@ -721,7 +857,7 @@ static void ui_build_apps(lv_obj_t *page)
   lv_obj_set_style_bg_opa(g_apps_list, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(g_apps_list, 0, 0);
   lv_obj_set_style_pad_all(g_apps_list, 0, 0);
-  lv_obj_remove_flag(g_apps_list, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scroll_dir(g_apps_list, LV_DIR_VER);
 }
 
 /****************************************************************************
@@ -734,9 +870,8 @@ int hd_ui_main(int argc, char *argv[])
     {
       LV_SYMBOL_HOME,
       LV_SYMBOL_KEYBOARD,
-      LV_SYMBOL_OK,
-      LV_SYMBOL_LIST,
-      LV_SYMBOL_PLAY
+      LV_SYMBOL_PLAY,
+      LV_SYMBOL_LIST
     };
 
   lv_obj_t *scr;
@@ -798,7 +933,6 @@ int hd_ui_main(int argc, char *argv[])
 
   ui_build_home(g_pages[UI_PAGE_HOME]);
   ui_build_cmd(g_pages[UI_PAGE_CMD]);
-  ui_build_test(g_pages[UI_PAGE_TEST]);
   ui_build_info(g_pages[UI_PAGE_INFO]);
   ui_build_apps(g_pages[UI_PAGE_APPS]);
 
