@@ -95,6 +95,37 @@ static lv_obj_t *g_cmd_result;
 static lv_obj_t *g_info_uptime;
 static lv_obj_t *g_apps_list;
 
+/* Forward declarations for helpers used by ui_apps_fill. */
+
+static void ui_style_button(lv_obj_t *btn);
+static lv_obj_t *ui_make_label(lv_obj_t *parent, const char *text,
+                               const lv_font_t *font, uint32_t color);
+static void ui_apps_fill(void);
+
+static struct qapp_info_s g_apps[QAPP_MAX];
+static int                g_apps_count;
+
+static void ui_apps_run_cb(lv_event_t *e)
+{
+  int idx = (int)(intptr_t)lv_event_get_user_data(e);
+
+  if (idx >= 0 && idx < g_apps_count)
+    {
+      qapp_run(g_apps[idx].path);
+    }
+}
+
+static void ui_apps_del_cb(lv_event_t *e)
+{
+  int idx = (int)(intptr_t)lv_event_get_user_data(e);
+
+  if (idx >= 0 && idx < g_apps_count && !g_apps[idx].builtin)
+    {
+      qapp_delete(g_apps[idx].name);
+      ui_apps_fill();
+    }
+}
+
 static void ui_apps_fill(void)
 {
   int i;
@@ -756,93 +787,6 @@ static void ui_build_info(lv_obj_t *page)
   g_info_uptime = ui_make_label(page, "", &lv_font_montserrat_12,
                                 UI_COL_DIM);
   lv_obj_set_pos(g_info_uptime, 0, 100);
-}
-
-/****************************************************************************
- * Apps page: list installed quick apps, Run / Del per row.  The list is
- * rebuilt every time the page is shown (ui_apps_fill from ui_show_page).
- * Buttons carry the app index in user data; the path/name is looked up
- * from the snapshot taken at fill time so a stale row can never run the
- * wrong file.
- ****************************************************************************/
-
-static struct qapp_info_s g_apps[QAPP_MAX];
-static int                g_apps_count;
-
-static void ui_apps_run_cb(lv_event_t *e)
-{
-  int idx = (int)(intptr_t)lv_event_get_user_data(e);
-
-  if (idx >= 0 && idx < g_apps_count)
-    {
-      qapp_run(g_apps[idx].path);
-    }
-}
-
-static void ui_apps_del_cb(lv_event_t *e)
-{
-  int idx = (int)(intptr_t)lv_event_get_user_data(e);
-
-  if (idx >= 0 && idx < g_apps_count && !g_apps[idx].builtin)
-    {
-      qapp_delete(g_apps[idx].name);
-      ui_apps_fill();
-    }
-}
-
-static void ui_apps_fill(void)
-{
-  int i;
-
-  lv_obj_clean(g_apps_list);
-  g_apps_count = qapp_list(g_apps, QAPP_MAX);
-
-  if (g_apps_count == 0)
-    {
-      lv_obj_t *lbl = ui_make_label(g_apps_list,
-                                    "no apps - adb push / qapp install",
-                                    &lv_font_montserrat_12, UI_COL_DIM);
-      lv_obj_set_pos(lbl, 0, 0);
-      return;
-    }
-
-  for (i = 0; i < g_apps_count; i++)
-    {
-      lv_obj_t *name;
-      lv_obj_t *btn;
-      lv_obj_t *lbl;
-      int y = i * 30;
-
-      name = ui_make_label(g_apps_list, g_apps[i].name,
-                           &lv_font_montserrat_12,
-                           g_apps[i].builtin ? UI_COL_DIM : UI_COL_TEXT);
-      lv_obj_set_pos(name, 0, y + 6);
-
-      btn = lv_button_create(g_apps_list);
-      lv_obj_set_size(btn, 44, 26);
-      lv_obj_set_pos(btn, UI_CONTENT_W - 96, y);
-      ui_style_button(btn);
-      lv_obj_add_event_cb(btn, ui_apps_run_cb, LV_EVENT_CLICKED,
-                          (void *)(intptr_t)i);
-      lbl = lv_label_create(btn);
-      lv_label_set_text(lbl, LV_SYMBOL_PLAY);
-      lv_obj_center(lbl);
-      lv_group_add_obj(lv_group_get_default(), btn);
-
-      if (!g_apps[i].builtin)
-        {
-          btn = lv_button_create(g_apps_list);
-          lv_obj_set_size(btn, 44, 26);
-          lv_obj_set_pos(btn, UI_CONTENT_W - 48, y);
-          ui_style_button(btn);
-          lv_obj_add_event_cb(btn, ui_apps_del_cb, LV_EVENT_CLICKED,
-                              (void *)(intptr_t)i);
-          lbl = lv_label_create(btn);
-          lv_label_set_text(lbl, LV_SYMBOL_TRASH);
-          lv_obj_center(lbl);
-          lv_group_add_obj(lv_group_get_default(), btn);
-        }
-    }
 }
 
 static void ui_build_apps(lv_obj_t *page)
