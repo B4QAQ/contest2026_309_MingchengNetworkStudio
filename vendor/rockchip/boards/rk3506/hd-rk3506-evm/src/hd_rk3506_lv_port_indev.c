@@ -8,17 +8,13 @@
  *
  *   UP     J9-33 = GPIO1_D1 (VO_LCDC_D2 position)  -> LV_KEY_PREV (focus prev)
  *   DOWN   J9-32 = GPIO1_D2 (VO_LCDC_D1 position)  -> LV_KEY_NEXT (focus next)
- *   LEFT   J9-34 = GPIO1_D0 (VO_LCDC_D3 position)  -> LV_KEY_LEFT (to object)
- *   RIGHT  J9-35 = GPIO1_C7 (VO_LCDC_D4 position)  -> LV_KEY_RIGHT (to object)
- *   OK     J9-36 = GPIO1_C6 (VO_LCDC_D5 position)  -> LV_KEY_ENTER
- *          long press (>=500 ms)                   -> LV_KEY_ESC (BACK)
+ *   OK     J9-34 = GPIO1_D0 (VO_LCDC_D3 position)  -> LV_KEY_ENTER (click)
+ *   ESC    J9-35 = GPIO1_C7 (VO_LCDC_D4 position)  -> LV_KEY_ESC  (back)
  *
  * Registered as LV_INDEV_TYPE_KEYPAD: LVGL's keypad driver moves focus
- * on NEXT/PREV, sends ENTER/ESC to the focused object with a matching
- * event, and forwards UP/DOWN/LEFT/RIGHT unchanged via
- * lv_group_send_data().  A buttonmatrix (e.g. lv_keyboard) moves its
- * internal selection on LEFT/RIGHT/UP/DOWN without needing edit mode -
- * ENTER then clicks the selected button via LV_EVENT_CLICKED.
+ * on NEXT/PREV and sends ENTER/ESC to the focused object with a
+ * matching event (CLICKED / CANCEL).  No short/long press
+ * discrimination - each button emits exactly one key on a simple press.
  *
  * All pins are active low (button shorts the pad to GND) with the SoC
  * internal pull-up enabled, so no external pull resistor is required.
@@ -60,16 +56,12 @@
 #  define CONFIG_HD_RK3506_BTN_DOWN_PIN  58   /* GPIO1_D2 -> J9-32 */
 #endif
 
-#ifndef CONFIG_HD_RK3506_BTN_LEFT_PIN
-#  define CONFIG_HD_RK3506_BTN_LEFT_PIN  56   /* GPIO1_D0 -> J9-34 */
-#endif
-
-#ifndef CONFIG_HD_RK3506_BTN_RIGHT_PIN
-#  define CONFIG_HD_RK3506_BTN_RIGHT_PIN 55   /* GPIO1_C7 -> J9-35 */
-#endif
-
 #ifndef CONFIG_HD_RK3506_BTN_OK_PIN
-#  define CONFIG_HD_RK3506_BTN_OK_PIN    54   /* GPIO1_C6 -> J9-36 */
+#  define CONFIG_HD_RK3506_BTN_OK_PIN    56   /* GPIO1_D0 -> J9-34 */
+#endif
+
+#ifndef CONFIG_HD_RK3506_BTN_ESC_PIN
+#  define CONFIG_HD_RK3506_BTN_ESC_PIN   55   /* GPIO1_C7 -> J9-35 */
 #endif
 
 /* Active low: the pressed level on the pad is 0. */
@@ -79,10 +71,6 @@
 /* Raw input must be stable for this long before it is accepted. */
 
 #define BTN_DEBOUNCE_MS          20
-
-/* Held this long -> long press (OK only). */
-
-#define BTN_LONG_MS              500
 
 /****************************************************************************
  * Private Types
@@ -96,23 +84,18 @@
 enum btn_state_e
 {
   S_IDLE,            /* not pressed, nothing pending                  */
-  S_DOWN,            /* held, deciding short vs long (OK only)        */
-  S_SHORT_PRESS,     /* released quickly: emit short PRESSED          */
-  S_SHORT_RELEASE,   /* emit short RELEASED, then idle                */
-  S_LONG_PRESS,      /* long key emitted as PRESSED, still held       */
-  S_LONG_RELEASE     /* emit long RELEASED on release, then idle      */
+  S_DOWN,            /* pressed, emit PRESSED next poll               */
+  S_UP               /* released, emit RELEASED next poll             */
 };
 
 struct rk3506_btn_s
 {
   uint8_t           gpin;        /* Packed RK3506 GPIO id             */
-  uint32_t          short_key;   /* LVGL key on a short press         */
-  uint32_t          long_key;    /* LVGL key on a long press (0=none) */
+  uint32_t          key;         /* LVGL key this button emits        */
   enum btn_state_e  state;
   bool              pressed;     /* Debounced level                   */
   bool              raw;         /* Last raw (active-true) sample     */
   uint32_t          change_ms;   /* lv_tick_get() at first raw change */
-  uint32_t          down_ms;     /* lv_tick_get() at the press edge   */
 };
 
 /****************************************************************************
@@ -121,11 +104,10 @@ struct rk3506_btn_s
 
 static struct rk3506_btn_s g_btn[] =
 {
-  { CONFIG_HD_RK3506_BTN_UP_PIN,    LV_KEY_PREV,  0,          S_IDLE, false, false, 0, 0 },
-  { CONFIG_HD_RK3506_BTN_DOWN_PIN,  LV_KEY_NEXT,  0,          S_IDLE, false, false, 0, 0 },
-  { CONFIG_HD_RK3506_BTN_LEFT_PIN,  LV_KEY_LEFT,  0,          S_IDLE, false, false, 0, 0 },
-  { CONFIG_HD_RK3506_BTN_RIGHT_PIN, LV_KEY_RIGHT, 0,          S_IDLE, false, false, 0, 0 },
-  { CONFIG_HD_RK3506_BTN_OK_PIN,    LV_KEY_ENTER, LV_KEY_ESC, S_IDLE, false, false, 0, 0 },
+  { CONFIG_HD_RK3506_BTN_UP_PIN,   LV_KEY_PREV,  S_IDLE, false, false, 0 },
+  { CONFIG_HD_RK3506_BTN_DOWN_PIN, LV_KEY_NEXT,  S_IDLE, false, false, 0 },
+  { CONFIG_HD_RK3506_BTN_OK_PIN,   LV_KEY_ENTER, S_IDLE, false, false, 0 },
+  { CONFIG_HD_RK3506_BTN_ESC_PIN,  LV_KEY_ESC,   S_IDLE, false, false, 0 },
 };
 
 /****************************************************************************
@@ -166,51 +148,25 @@ static void btn_debounce(struct rk3506_btn_s *btn)
 static bool btn_poll(struct rk3506_btn_s *btn, uint32_t *key,
                      lv_indev_state_t *state)
 {
-  uint32_t now = lv_tick_get();
-
   switch (btn->state)
     {
       case S_IDLE:
         if (btn->pressed)
           {
-            btn->down_ms = now;
-            btn->state   = S_DOWN;
+            btn->state = S_DOWN;
           }
         break;
 
       case S_DOWN:
-        if (!btn->pressed)
-          {
-            /* Short press: report PRESSED now, RELEASED next poll. */
-
-            *key       = btn->short_key;
-            *state     = LV_INDEV_STATE_PRESSED;
-            btn->state = S_SHORT_RELEASE;
-            return true;
-          }
-
-          /* Long press: only if this button has a long key (OK). */
-
-          if (btn->long_key != 0 &&
-              (uint32_t)(now - btn->down_ms) >= BTN_LONG_MS)
-            {
-              *key       = btn->long_key;
-              *state     = LV_INDEV_STATE_PRESSED;
-              btn->state = S_LONG_RELEASE;
-              return true;
-            }
-        break;
-
-      case S_SHORT_RELEASE:
-        *key       = btn->short_key;
-        *state     = LV_INDEV_STATE_RELEASED;
-        btn->state = S_IDLE;
+        *key       = btn->key;
+        *state     = LV_INDEV_STATE_PRESSED;
+        btn->state = S_UP;
         return true;
 
-      case S_LONG_RELEASE:
+      case S_UP:
         if (!btn->pressed)
           {
-            *key       = btn->long_key;
+            *key       = btn->key;
             *state     = LV_INDEV_STATE_RELEASED;
             btn->state = S_IDLE;
             return true;
@@ -314,7 +270,7 @@ int hd_rk3506_lv_port_indev_init(void)
   lv_indev_set_group(indev, group);
 
   _info("BTN: keypad indev registered "
-        "(UP=J9-33 DOWN=J9-32 LEFT=J9-34 RIGHT=J9-35 OK=J9-36)\n");
+        "(UP=J9-33 DOWN=J9-32 OK=J9-34 ESC=J9-35)\n");
   return 0;
 }
 

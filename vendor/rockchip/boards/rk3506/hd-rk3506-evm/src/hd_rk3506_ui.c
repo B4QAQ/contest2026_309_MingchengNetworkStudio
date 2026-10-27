@@ -90,7 +90,7 @@
 
 static lv_obj_t *g_pages[UI_NPAGES];
 static lv_obj_t *g_card_lbl[4];     /* value labels of the 4 cards */
-static lv_obj_t *g_cmd_ta;
+
 static lv_obj_t *g_cmd_result;
 static lv_obj_t *g_test_lbl[4];
 static lv_obj_t *g_info_uptime;
@@ -435,78 +435,86 @@ static void ui_build_home(lv_obj_t *page)
                                "USB", UI_COL_ACCENT3);
 }
 
-static void ui_cmd_run_cb(lv_event_t *e)
+/* Preset command list: each row is a focusable button that runs a
+ * fixed NSH command via system().  No on-screen keyboard - the four
+ * buttons cannot drive one.
+ */
+
+struct ui_preset_cmd_s
 {
-  const char *cmd = lv_textarea_get_text(g_cmd_ta);
+  const char *label;
+  const char *cmd;
+};
+
+static const struct ui_preset_cmd_s g_preset_cmds[] =
+{
+  { "free",      "free"      },
+  { "ps",        "ps"        },
+  { "mount",     "mount"     },
+  { "ifconfig",  "ifconfig"  },
+  { "ping gw",   "ping -c 3 192.168.10.1" },
+  { "cpuload",   "cpuload"   },
+  { "ls /data",  "ls /data"  },
+  { "date",      "date"      },
+};
+
+static void ui_preset_run_cb(lv_event_t *e)
+{
+  int idx = (int)(intptr_t)lv_event_get_user_data(e);
   char buf[48];
   int ret;
 
-  (void)e;
-
-  if (cmd == NULL || cmd[0] == '\0')
+  if (idx < 0 || idx >= (int)(sizeof(g_preset_cmds) /
+                             sizeof(g_preset_cmds[0])))
     {
       return;
     }
 
-  ret = system(cmd);
-  snprintf(buf, sizeof(buf), "exit=%d", ret);
+  ret = system(g_preset_cmds[idx].cmd);
+  snprintf(buf, sizeof(buf), "%s -> exit=%d", g_preset_cmds[idx].label,
+           ret);
   lv_label_set_text(g_cmd_result, buf);
 }
 
 static void ui_build_cmd(lv_obj_t *page)
 {
-  lv_obj_t *kb;
-  lv_obj_t *btn;
-  lv_obj_t *lbl;
+  lv_obj_t *cont;
+  unsigned int i;
 
-  g_cmd_ta = lv_textarea_create(page);
-  lv_obj_set_size(g_cmd_ta, UI_CONTENT_W - 64, 30);
-  lv_obj_set_pos(g_cmd_ta, 0, 0);
-  lv_textarea_set_one_line(g_cmd_ta, true);
-  lv_textarea_set_placeholder_text(g_cmd_ta, "nsh cmd...");
-  lv_obj_set_style_bg_color(g_cmd_ta, lv_color_hex(UI_COL_CARD), 0);
-  lv_obj_set_style_text_color(g_cmd_ta, lv_color_hex(UI_COL_TEXT), 0);
-  lv_obj_set_style_radius(g_cmd_ta, 6, 0);
-  lv_obj_set_style_border_width(g_cmd_ta, 1, 0);
-  lv_obj_set_style_border_color(g_cmd_ta, lv_color_hex(UI_COL_CARD_BR),
-                                0);
-  lv_group_add_obj(lv_group_get_default(), g_cmd_ta);
+  /* Scrollable container for the preset command buttons. */
 
-  btn = lv_button_create(page);
-  lv_obj_set_size(btn, 56, 30);
-  lv_obj_set_pos(btn, UI_CONTENT_W - 58, 0);
-  ui_style_button(btn);
-  lv_obj_add_event_cb(btn, ui_cmd_run_cb, LV_EVENT_CLICKED, NULL);
-  lbl = lv_label_create(btn);
-  lv_label_set_text(lbl, "Run");
-  lv_obj_center(lbl);
-  lv_group_add_obj(lv_group_get_default(), btn);
+  cont = lv_obj_create(page);
+  lv_obj_set_size(cont, UI_CONTENT_W, 96);
+  lv_obj_set_pos(cont, 0, 0);
+  lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(cont, 0, 0);
+  lv_obj_set_style_pad_all(cont, 2, 0);
+  lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(cont, LV_FLEX_ALIGN_START,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_scroll_dir(cont, LV_DIR_VER);
+
+  for (i = 0; i < sizeof(g_preset_cmds) / sizeof(g_preset_cmds[0]); i++)
+    {
+      lv_obj_t *btn = lv_button_create(cont);
+      lv_obj_t *lbl;
+
+      lv_obj_set_size(btn, UI_CONTENT_W - 12, 26);
+      ui_style_button(btn);
+      lv_obj_add_event_cb(btn, ui_preset_run_cb, LV_EVENT_CLICKED,
+                          (void *)(intptr_t)i);
+      lbl = lv_label_create(btn);
+      lv_label_set_text(lbl, g_preset_cmds[i].label);
+      lv_obj_set_style_text_font(lbl, &lv_font_montserrat_12, 0);
+      lv_obj_center(lbl);
+      lv_group_add_obj(lv_group_get_default(), btn);
+    }
+
+  /* Result line at the bottom. */
 
   g_cmd_result = ui_make_label(page, "", &lv_font_montserrat_12,
                                UI_COL_DIM);
-  lv_obj_set_pos(g_cmd_result, 0, 32);
-
-  kb = lv_keyboard_create(page);
-  lv_obj_set_size(kb, UI_CONTENT_W, 96);
-  /* The keyboard constructor aligns itself BOTTOM_MID which would push
-   * it past the visible area on this 142 px-tall page; anchor it right
-   * under the result line instead.
-   */
-  lv_obj_align(kb, LV_ALIGN_TOP_LEFT, 0, 40);
-  lv_obj_set_style_text_font(kb, &lv_font_montserrat_12, 0);
-  lv_obj_set_style_bg_color(kb, lv_color_hex(UI_COL_BG), 0);
-  lv_obj_set_style_bg_color(kb, lv_color_hex(UI_COL_BTN),
-                            LV_PART_ITEMS);
-  lv_obj_set_style_text_color(kb, lv_color_hex(UI_COL_TEXT),
-                              LV_PART_ITEMS);
-  lv_keyboard_set_textarea(kb, g_cmd_ta);
-  lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_TEXT_LOWER);
-  /* The keyboard constructor removes CLICK_FOCUSABLE - without it the
-   * group can never focus the keyboard, so ENTER never enters edit
-   * mode and the keys stay dead.  Put it back.
-   */
-  lv_obj_add_flag(kb, LV_OBJ_FLAG_CLICKABLE);
-  lv_group_add_obj(lv_group_get_default(), kb);
+  lv_obj_set_pos(g_cmd_result, 0, 100);
 }
 
 static void ui_test_run_cb(lv_event_t *e)
