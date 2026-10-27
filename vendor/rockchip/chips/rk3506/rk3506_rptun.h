@@ -28,9 +28,11 @@ extern "C"
  *
  * Description:
  *   Register the RK3506 bus-M0 rptun device.  The lower half is the
- *   rpmsg master: it loads the embedded M0 firmware into the M0 SRAM and
- *   releases the core (ops start callback), and services the mailbox0/
- *   mailbox3 kick interrupts.  With is_autostart = true the rptun core
+ *   rpmsg master: U-Boot already loaded the M0 firmware FIT into DRAM
+ *   0x03a00000 and released the core before NuttX started, so start()
+ *   only ungates the clocks U-Boot leaves closed and probes the peer for
+ *   readiness; the driver then services the mailbox0/mailbox3 kick
+ *   interrupts.  With is_autostart = true the rptun core
  *   spawns its worker thread from rptun_initialize() and the rpmsg
  *   virtio device exposes /dev/rpmsg/mcu once probed.
  *

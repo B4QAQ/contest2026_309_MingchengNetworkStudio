@@ -7,7 +7,7 @@
 #include "hal_base.h"
 
 /********************* Private MACRO Definition ******************************/
-//#define TEST_DEMO
+#define TEST_DEMO
 
 /********************* Private Structure Definition **************************/
 
@@ -16,7 +16,7 @@
 /********************* Private Function Definition ***************************/
 
 /********************* Public Function Definition ****************************/
-static struct UART_REG *pUart = UART4;
+static struct UART_REG *pUart = UART1;
 
 #ifdef __GNUC__
 __USED int _write(int fd, char *ptr, int len)
@@ -61,7 +61,7 @@ int fputc(int ch, FILE *f)
 int main(void)
 {
     struct HAL_UART_CONFIG hal_uart_config = {
-        .baudRate = UART_BR_1500000,
+        .baudRate = UART_BR_115200,
         .dataBit = UART_DATA_8B,
         .stopBit = UART_ONE_STOPBIT,
         .parity = UART_PARITY_DISABLE,
@@ -76,14 +76,14 @@ int main(void)
     /* INTMUX Init */
     HAL_INTMUX_Init();
 
-    /* UART Init */
-    HAL_PINCTRL_SetRMIO(GPIO_BANK1,
-                        GPIO_PIN_C2,
-                        RMIO_UART4_TX);
-    HAL_PINCTRL_SetRMIO(GPIO_BANK1,
-                        GPIO_PIN_C3,
-                        RMIO_UART4_RX);
-    HAL_UART_Init(&g_uart4Dev, &hal_uart_config);
+    /* UART Init: M0 调试串口 = UART1（GPIO0_C0=RX / GPIO0_C1=TX，GPIO_BANK0，115200） */
+    HAL_PINCTRL_SetRMIO(GPIO_BANK0,
+                        GPIO_PIN_C1,
+                        RMIO_UART1_TX);
+    HAL_PINCTRL_SetRMIO(GPIO_BANK0,
+                        GPIO_PIN_C0,
+                        RMIO_UART1_RX);
+    HAL_UART_Init(&g_uart1Dev, &hal_uart_config);
 
     HAL_DBG("Hello RK3506 mcu\n");
 

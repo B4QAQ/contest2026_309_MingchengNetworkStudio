@@ -49,13 +49,13 @@ CONFIG_FLASH_START=0x02080000
 CONFIG_FLASH_VSTART=0x02080000
 CONFIG_FLASH_SIZE=0x00800000
 # Physical DRAM is 0x00000000-0x08000000 (128MB total); NuttX runs from
-# 0x02080000. The AMP/rpmsg shared window was removed, so RAM now extends
-# up to the OP-TEE secure region base 0x07c00000 (rk35-family TEE occupies
-# the top 4 MiB 0x07c00000-0x08000000; the OP-TEE core constants cluster
-# at 0x07f00000/0x07ff0000). Usable length = 0x07c00000-0x02080000 =
-# 0x05B80000 (~91.5 MiB). The L1 page table is placed at
-# RAM_START+RAM_SIZE-0x4000 = 0x07bfc000, still below the TEE region.
-CONFIG_RAM_SIZE=95944704
+# 0x02080000 and STOPS at 0x03a00000, where the M0 firmware window begins.
+# The four 1 MiB AMP windows live at 0x03a00000 (M0 image), 0x03b00000
+# (amp-shmem), 0x03c00000 (rpmsg vrings + M0 pool) and 0x03d00000 (A7
+# carveout); the mm heap must never be handed those addresses.
+# Usable length = 0x03a00000 - 0x02080000 = 0x01980000 (25.5 MiB).
+# The L1 page table is placed at RAM_START+RAM_SIZE-0x4000 = 0x039fc000.
+CONFIG_RAM_SIZE=26738688
 CONFIG_SPINLOCK=y
 CONFIG_SYSTEM_TIME64=y
 
@@ -785,6 +785,7 @@ CONFIG_RK3506_GMAC0_PHY_RESET_PIN=11
 # AMP: A7 rptun master <-> bus Cortex-M0 rpmsg-lite firmware.
 # The 2 MiB window 0x03c00000..0x03e00000 is outside NuttX RAM (see
 # RAM_SIZE above); vrings live at +0x00000, master carveout at +0x100000.
+# The M0 image window 0x03a00000..0x03b00000 is also outside NuttX RAM.
 # OPENAMP_CACHE is mandatory: both sides cache the shared window.
 #---------------------------------------------------------------------------
 CONFIG_RK3506_RPTUN=y

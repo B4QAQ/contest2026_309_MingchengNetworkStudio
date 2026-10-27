@@ -8,14 +8,19 @@
  * The A7 is the rpmsg master (virtio driver).  The M0 runs the unmodified
  * SDK rpmsg-lite test firmware (HAL project rk3506-mcu, master id 0,
  * remote id 3).  Under the SDK AMP flow the M0 firmware is packaged into
- * the standalone FIT image amp/amp.img (load=0xfff84000) burned into the
- * "amp" GPT partition, and U-Boot loads + releases the core in
+ * the standalone FIT image amp/amp.img (load=0x03a00000, DRAM) burned
+ * into the "amp" GPT partition, and U-Boot loads + releases the core in
  * board_late_init() -> amp_cpus_on() -> fit_standalone_release()
  * (u-boot arch/arm/mach-rockchip/rk3506/rk3506.c) before the kernel runs.
+ * The 32 KiB M0 SRAM window is too small for a HAL firmware with a
+ * console + rpmsg, so the image runs from the 1 MiB DRAM window
+ * 0x03a00000-0x03b00000 - which is why the NuttX heap must stop below
+ * that address (see the board ld.script).
  *
  * M0 LIFE CYCLE BELONGS TO U-BOOT, NOT TO THIS FILE.  This lower half
- * therefore NEVER resets the M0, NEVER copies firmware into its SRAM and
- * NEVER re-issues the SIP_MCU_CFG release SMC: doing any of those after
+ * therefore NEVER resets the M0, NEVER copies firmware into its load
+ * window and NEVER re-issues the SIP_MCU_CFG release SMC: doing any of
+ * those after
  * U-Boot has already released a running M0 either destroys the peer state
  * or drives the TEE through an unendorsed second MCU_CODE_START from a
  * non-POR reset topology.  This file only:
@@ -116,13 +121,14 @@
 
 #define RK3506_GATE_CON8_STCLK_M0   (1u << 2)
 
-/* CON11: the M0 debug UART clock.  The M0 firmware was switched from UART4
- * (PCLK_UART4 bit8 / SCLK_UART4 bit13) to UART2 (PCLK_UART2 bit6 /
- * SCLK_UART2 bit11, clk-rk3506.c GATE/COMPOSITE) because UART2 is brought
- * out on J9 pin26 TX / pin25 RX while UART4 is not.
+/* CON11: the M0 debug UART clock (UART1).  PCLK_UART1 is bit5 and
+ * SCLK_UART1 is bit10 of CLKGATE_CON11 (kernel-6.1 clk-rk3506.c: GATE
+ * "pclk_uart1" @CON11/5, COMPOSITE "sclk_uart1" @CON11/10).  The M0
+ * firmware prints on UART1 with the pads remapped by RM_IO to
+ * GPIO0_C0 (RX) / GPIO0_C1 (TX), matching the validated Linux AMP flow.
  */
 
-#define RK3506_GATE_CON11_UART2     ((1u << 6) | (1u << 11))
+#define RK3506_GATE_CON11_UART1     ((1u << 5) | (1u << 10))
 
 /* Mailbox v2 registers (rockchip-mailbox.c reg_a2b table).  Controller
  * bases come from hardware/rk3506_memorymap.h (RK3506_MAILBOX0/3_ADDR).
@@ -360,7 +366,7 @@ static void rk3506_mcu_clock_enable(void)
   rk3506_cru_gate(5,  RK3506_GATE_CON5_M0,        true);
   rk3506_cru_gate(6,  RK3506_GATE_CON6_M0,        true);
   rk3506_cru_gate(8,  RK3506_GATE_CON8_STCLK_M0,  true);
-  rk3506_cru_gate(11, RK3506_GATE_CON11_UART2,    true);
+  rk3506_cru_gate(11, RK3506_GATE_CON11_UART1,    true);
 }
 
 /****************************************************************************

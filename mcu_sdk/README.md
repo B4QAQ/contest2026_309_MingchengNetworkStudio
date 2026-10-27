@@ -6,7 +6,7 @@
 
 - 上游：`rk3506_linux6.1_sdk_v1.2.0_iot_evm/hal/`
 - 只复制了 `hal/`（CMSIS + HAL 驱动 + rpmsg-lite + rk3506-mcu 工程 + mkimage），未复制 SDK 其余部分（kernel/u-boot/prebuilts 等，M0 编译用不到）。
-- 内容是**只读参考**：M0 工程的改动（打开 `TEST_DEMO`/`RPMSG_LINUX_TEST`、把调试串口从 UART4 移到 J9 UART2）都在 `../build_mcu_fw.sh` 里以 sed/awk 补丁形式打到 `.mcu_build/` 临时副本上，**不改本目录源码**。
+- **本目录是可直接编辑的源码树**（不再是只读参考）：M0 工程需要的改动已经直接提交在这里，`build_mcu_fw.sh` 只负责编译和打包，不再用 sed/awk 打补丁。
 
 ## 目录
 
@@ -14,28 +14,51 @@
 - `hal/lib/hal/src|inc/` — HAL 驱动（mailbox / intmux / uart / timer / pinctrl ...）
 - `hal/lib/bsp/RK3506/` — `g_uart0..5Dev` 等设备实例
 - `hal/middleware/rpmsg-lite/` — rpmsg-lite + RK3506 平台适配
-- `hal/project/rk3506-mcu/` — M0 固件工程（`src/main.c`、`src/test_demo.c`、`GCC/` 编译脚本）
+- `hal/project/rk3506-mcu/` — M0 固件工程（`src/main.c`、`src/test_demo.c`、`GCC/` 编译脚本、`Image/amp.its`）
 - `hal/tools/mkimage` — 打包 amp.img 用的 mkimage
 
 ## 构建
 
 ```bash
-cd <openvela 根>
-bash nand_firmware/build_mcu_fw.sh     # 自动用 ./mcu_sdk，无需 RK3506_SDK_DIR
+cd <仓库根>
+bash openvela/nand_firmware/build_mcu_fw.sh
 ```
 
-产物：`nand_firmware/amp/amp.img`（U-Boot 从 GPT 的 `amp` 分区读出并放行 M0 的 standalone FIT）+ `nand_firmware/amp/mcu.bin`（原始 M0 镜像）。
+脚本会先自检下面「当前 M0 固件配置」的 5 项是否都还在（缺一个就报错退出），然后编译并打包。
 
-## 当前 M0 固件改动（相对上游）
+产物：
+- `nand_firmware/amp/amp.img` — U-Boot 从 GPT 的 `amp` 分区读出并放行 M0 的 standalone FIT（load=0x03a00000）
+- `nand_firmware/amp/mcu.bin` — 原始 M0 镜像
 
-在 `build_mcu_fw.sh` 中以补丁形式应用，**不直接改本目录**：
+## 当前 M0 固件配置（相对上游，已提交在本目录）
 
-1. `main.c`: `//#define TEST_DEMO` → `#define TEST_DEMO`
-2. `test_demo.c`: `//#define RPMSG_LINUX_TEST` → `#define RPMSG_LINUX_TEST`
-3. `main.c`: 调试串口 UART4 → **UART2**（`pUart`、`g_uart2Dev`、RM_IO 改 `BANK0/PIN_A2=TX / PIN_A0=RX`）
-   - 目的：UART4 在核心板邮票孔 pin100/101（未引出），UART2 在底板 J9 pin26(TX)/pin25(RX)，可接 USB-TTL 看 M0 日志（1500000 8N1）。
-   - 配套：A7 侧 `vendor/rockchip/chips/rk3506/rk3506_rptun.c` 的 `rk3506_mcu_clock_enable()` 把 CRU `CLKGATE_CON11` 从 UART4(b8/b13) 改为 UART2(b6/b11) 开门。
+对齐 Linux SDK 已验证的 AMP 方案（见仓库根 `AMP_RK3506_LINUX_SDK_NOTES.md`）：
 
-## 已知问题（求助点）
+1. **`main.c`**: `TEST_DEMO` 打开
+2. **`test_demo.c`**: `RPMSG_LINUX_TEST` 打开（MASTER_ID=0 / REMOTE_ID=3，端点 `rpmsg-mcu0-test` ept 0x4003）
+3. **`main.c`**: 调试串口 **UART1**（`pUart = UART1`、`g_uart1Dev`、RM_IO `BANK0/PIN_C1=TX / PIN_C0=RX`），115200 8N1
+4. **`GCC/Makefile`**: `LINKER_SCRIPT := gcc_bus_m0_ddr.ld`
+5. **`GCC/gcc_bus_m0_ddr.ld`**: `RAM ORIGIN = 0x03a00000, LENGTH = 1MB`（DRAM，不是 32KB 的 SRAM）
 
-**M0 UART2 串口烧录后无输出**（连 `Hello RK3506 mcu` 都没有）。A7 侧 rpmsg 现象：M0 武装了 mailbox3（INTMUX en3 bit21=1）、A7 的 kick 被 M0 消费（A2B_STATUS 被清），但 M0 不回 B2A、virtqueue 不前进、`rpmsgtest` 超时。怀疑 M0 未真正执行 / 卡在 rpmsg init / UART2 时钟或引脚未配对。相关诊断代码在 `vendor/rockchip/chips/rk3506/rk3506_rptun.c`（`rk3506_rptun_dump`、`kick_consumed_us`、B2A IRQ 日志）。
+配套的 A7 侧配置：
+- `vendor/rockchip/chips/rk3506/rk3506_rptun.c` 的 `rk3506_mcu_clock_enable()` 打开 UART1 时钟（CRU `CLKGATE_CON11` bit5=PCLK / bit10=SCLK）
+- 板级 `scripts/ld.script` 的 RAM 结束于 0x03a00000，把 0x03a00000-0x03e00000 四个 1MiB 窗口全部让给 AMP
+
+## 为什么用 DRAM 而不是 SRAM
+
+M0 的 SRAM 只有 32 KiB，`TestDemo.bin` 已经 27 KB，加上栈/rpmsg 缓冲后没有余量，加任何应用都会栈溢出。
+DRAM 方案在 M0 加载窗口 1 MiB，与 Linux SDK 的验证结果一致。
+
+三处地址必须一致（改动时同时改）：
+| 出处 | 字段 | 值 |
+|---|---|---|
+| `Image/amp.its` | `load` | `0x03a00000` |
+| `GCC/gcc_bus_m0_ddr.ld` | `RAM ORIGIN` | `0x03a00000` |
+| 板级 `scripts/ld.script` | RAM 结束地址 | `0x03a00000`（即 NuttX 堆不越过） |
+
+`arm-none-eabi-readelf -h TestDemo.elf` 的 Entry point 应在 `0x03a0xxxx`（Thumb 态带 bit0 属正常）。
+
+## 调试串口接线
+
+M0 打印走 **UART1**，引脚由 RM_IO 映射到 **GPIO0_C1 (TX) / GPIO0_C0 (RX)**，115200 8N1。
+接 USB-TTL 时 TX/RX 交叉，GND 共地。

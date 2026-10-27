@@ -10,7 +10,7 @@
 /********************* Private MACRO Definition ******************************/
 //#define GPIO_TEST
 //#define GPIO_VIRTUAL_MODEL_TEST
-//#define RPMSG_LINUX_TEST
+#define RPMSG_LINUX_TEST
 //#define SYSTICK_TEST
 //#define TIMER_TEST
 //#define TIMER_INTMUX_TEST

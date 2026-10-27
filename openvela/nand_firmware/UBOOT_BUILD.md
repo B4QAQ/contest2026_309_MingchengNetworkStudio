@@ -24,7 +24,7 @@ WS=/home/b4qaq/project/uboot_build
 mkdir -p $WS && cp -a $SDK/u-boot $WS/u-boot
 ln -sfn $SDK/rkbin $WS/rkbin
 
-# 2. AB + AMP fragment (Rockchip 官方 AB 参考配置的最小集 + AMP 支持)
+# 2. AB fragment (Rockchip 官方 AB 参考配置的最小集)
 cat > $WS/u-boot/configs/vanxoak_ab.config <<'EOF'
 CONFIG_ANDROID_AB=y
 CONFIG_AVB_LIBAVB=y
@@ -32,31 +32,43 @@ CONFIG_AVB_LIBAVB_AB=y
 CONFIG_AVB_LIBAVB_ATX=y
 CONFIG_AVB_LIBAVB_USER=y
 CONFIG_RK_AVB_LIBAVB_USER=y
-CONFIG_AMP=y
-CONFIG_ROCKCHIP_AMP=y
 EOF
 
-# 3. 构建 + FIT 打包 (fragment 顺序: defconfig -> tb -> ab)
+# AMP fragment: 直接用 SDK 的 rk3506-amp-mcu.config (merge-only 两行)
+cp $SDK/u-boot/configs/rk3506-amp-mcu.config $WS/u-boot/configs/
+
+# 3. 构建 + FIT 打包
+#    注意: 绝对不要加 rk3506_tb !
+#    rk3506_tb.config 含 CONFIG_SPL_KERNEL_BOOT=y —— SPL 会直接跳内核，
+#    绕过完整 U-Boot 的 board_late_init -> amp_cpus_on()，M0 因此永不被
+#    加载放行。这正是 v9 "M0 收 kick 不回 B2A" 的主根因（见
+#    AMP_RK3506_LINUX_SDK_NOTES.md §2）。
 TC=$SDK/prebuilts/gcc/linux-x86/arm/gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf/bin/arm-none-linux-gnueabihf-
 cd $WS/u-boot
 PATH=$WS/u-boot/scripts/dtc:$PATH \
-  ./make.sh CROSS_COMPILE=$TC rk3506 rk3506_tb vanxoak_ab --spl-new
+  ./make.sh CROSS_COMPILE=$TC rk3506 vanxoak_ab rk3506-amp-mcu --spl-new
 
 # 4. 产物
 ls -la fit/uboot.itb   # -> 拷到 openvela/nand_firmware/uboot.itb
 ```
 
-### 为什么加 CONFIG_AMP / CONFIG_ROCKCHIP_AMP (v8m)
+### 为什么必须加 CONFIG_AMP / CONFIG_ROCKCHIP_AMP，且不能带 thunderboot
 
-M0 固件改由 U-Boot 加载放行（SDK 流程）：M0 固件打包成 standalone
-FIT（`amp/amp.img`，load=0xfff84000）烧在独立的 `amp` GPT 分区。
+M0 固件由 U-Boot 加载放行（SDK 流程）：M0 固件打包成 standalone
+FIT（`amp/amp.img`，load=0x03a00000 DRAM）烧在独立的 `amp` GPT 分区。
 U-Boot 在 `board_late_init` 里 `amp_cpus_on()`
 （`drivers/cpu/rockchip_amp.c`）读出该分区，`boot_get_loadable`
-在 M0 复位态拷入 SRAM，再调 `fit_standalone_release()`
+在 M0 复位态拷入 DRAM 加载窗口，再调 `fit_standalone_release()`
 （`arch/arm/mach-rockchip/rk3506/rk3506.c`，SMC TCM 映射 →
 CRU_GATE_CON5 → GRF_SOC_CON36 → PMU_INT_MASK_CON）放行。
 NuttX 不再内嵌/拷贝/启动 M0。`amp/amp.img` 由
-`nand_firmware/build_mcu_fw.sh` 从 SDK HAL 的 TestDemo.bin 生成。
+`nand_firmware/build_mcu_fw.sh` 从 `mcu_sdk/hal` 编译并打包。
+
+**thunderboot（`rk3506_tb` fragment）与 AMP 互斥**：
+`rk3506_tb.config` 打开 `CONFIG_SPL_KERNEL_BOOT=y`，SPL 直接跳到内核，
+完整 U-Boot 的 `board_late_init` 根本不会执行，`amp_cpus_on()` 也就不放行
+M0 —— 表现为 M0 串口全程无输出、mailbox kick 被"消费"但 M0 不回 B2A。
+v6 ~ v9 一直带 `rk3506_tb`，这是 M0 从未跑起来的根因。
 
 ## 踩过的坑
 

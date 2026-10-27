@@ -303,8 +303,8 @@ cp -f "$OUTPUT_DIR/MiniLoaderAll.bin" "$WORK_DIR/Image/"
 cp -f "$PARAM_FILE" "$WORK_DIR/Image/parameter.txt"
 cp -f "$OUTPUT_DIR/uboot.img" "$WORK_DIR/Image/"
 
-# amp.img: M0 固件 standalone FIT (nand_firmware/amp/amp.img,
-# 由 build_mcu_fw.sh 用 RK3506_SDK_DIR 生成).  U-Boot 在 board_late_init
+# amp.img: M0 固件 standalone FIT (nand_firmware/amp/amp.img, 由 build_mcu_fw.sh
+# 从 mcu_sdk/hal 编译并打包, load=0x03a00000 DRAM).  U-Boot 在 board_late_init
 # 的 amp_cpus_on() 从 "amp" GPT 分区读出它并 fit_standalone_release() 放行 M0.
 AMP_IMG="${AMP_IMG:-$NUTTX_DIR/nand_firmware/amp/amp.img}"
 if [ -f "$AMP_IMG" ]; then
@@ -312,7 +312,7 @@ if [ -f "$AMP_IMG" ]; then
     echo "  -> amp.img $(stat -c %s "$AMP_IMG") bytes (M0 standalone FIT)"
 else
     echo "  警告: 未找到 amp.img ($AMP_IMG), amp 分区将为空, U-Boot 不加载 M0!"
-    echo "        先运行: RK3506_SDK_DIR=<sdk> bash nand_firmware/build_mcu_fw.sh"
+    echo "        先运行: bash nand_firmware/build_mcu_fw.sh"
 fi
 
 # boot_a/boot_b 内容: 优先用 boot.fit (FIT external-data 镜像)
