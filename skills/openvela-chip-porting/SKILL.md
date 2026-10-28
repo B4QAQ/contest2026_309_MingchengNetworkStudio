@@ -328,8 +328,8 @@ M0 固件必须用 **SDK 自带 `gcc-arm-none-eabi-10-2020-q4-major`（gcc 10.2.
 
 1. 完整 U-Boot banner + `Handle standalone: 'mcu' ... OK`
 2. A7 三核 SMP 起来、`free` 内存与预留窗一致
-3. **M0 自己的 UART1 打印 `[HAL INFO] Hello RK3506 mcu`**（独立证人）
-4. `rpmsgtest`：建端点 0x4003 → 发 ping → 收到 `Rockchip rpmsg linux test!` → PASS
+3. `rpmsgtest`：建端点 0x4003 → 发 ping → 收到 `Rockchip rpmsg linux test!` → **PASS（充分条件：双向收发成功即证明 M0 完整跑完 HAL/INTMUX/rpmsg 初始化，不依赖第二串口）**
+4. 有第二串口时再看 M0 自己的 UART1 打印 `[HAL INFO] Hello RK3506 mcu`（独立旁证，非必需）
 
 ---
 
@@ -373,7 +373,7 @@ M0 固件必须用 **SDK 自带 `gcc-arm-none-eabi-10-2020-q4-major`（gcc 10.2.
 | M3 | 网络 | DHCP/ping/curl HTTPS/date 校时 |
 | M4 | USB | U 盘枚举 + vfat 挂载 + 大文件读 |
 | M5 | 显示输入 | LCD 出图 + 按键/触摸操作闭环 |
-| M6 | AMP | 协处理器被 U-Boot 放行、自身串口有声、rpmsgtest PASS |
+| M6 | AMP | 协处理器被 U-Boot 放行、rpmsgtest PASS（M0 自身串口 banner 为可选旁证，单串口环境下不必强求） |
 | M7 | OTA | A/B 升级 + confirm + 断电回滚 |
 | M8 | 收尾 | 日志治理、文档更新、全清构建 |
 

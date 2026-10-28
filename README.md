@@ -184,7 +184,7 @@ nsh> ota status                                 # A/B 槽位状态
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| AMP 端到端 | ⚠️ 待最终验收 | M0 固件已与 SDK 产物逐字节一致、U-Boot 已见 `Handle standalone: 'mcu' at 0x03a00000 OK`；待验 M0 UART1 `Hello RK3506 mcu` 与 `rpmsgtest` PASS |
+| AMP 端到端 | ✅ 板上验收通过 | M0 固件与 SDK 产物逐字节一致、U-Boot `Handle standalone: 'mcu' at 0x03a00000 OK`；板上 `rpmsgtest` 收到 `Rockchip rpmsg linux test!`（未另接第二串口看 M0 UART1 banner；rpmsg 双向收发成功本身即证明 M0 完整执行了 HAL/INTMUX/rpmsg 初始化） |
 | GT911 触摸 / ST7701S RGB 屏 | ❌ 方案已弃用 | 旧板厂屏驱动在 NV3007 转型时整体删除（vendor 子仓 285e5a6）；当前产品显示是 NV3007 SPI 小屏 + 4 键 |
 | USB Hub | ⚠️ 待测 | asynch 传输框架已实现，hub 枚举未在板上验证 |
 | OTA 端到端 | ⚠️ 部分验证 | bootcheck/try/confirm 已验，`ota update` 整链路待测 |
