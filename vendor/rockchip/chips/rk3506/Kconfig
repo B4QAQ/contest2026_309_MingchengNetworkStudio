@@ -638,4 +638,34 @@ config RK3506_USBHOST_OTG0
 
 endmenu # "Rockchip RK3506 Peripheral Selection"
 
+#
+# DRAM layout (128 MiB, 0x00000000..0x08000000):
+#
+#   0x02080000  NuttX image + primary heap (RAM_SIZE, ends 0x03a00000)
+#   0x03a00000  AMP windows x4 (M0 image/shmem/vrings/A7 carveout)
+#   0x03e00000  Second heap region (HEAP2, default 62 MiB)
+#   0x07c00000  Top 4 MiB kept free as U-Boot relocation margin
+#
+# The whole DDR is identity-mapped cached by rk3506_start.c; HEAP2 only
+# hands the upper window to the memory manager via umm_addregion().
+#
+
+config RK3506_HEAP2_BASE
+	hex "Second heap region base (upper DRAM window)"
+	default 0x03e00000
+	depends on MM_REGIONS > 1
+	---help---
+		Physical base of the non-contiguous second heap region.
+		Must start right after the four 1 MiB AMP windows
+		(0x03a00000..0x03e00000); the MMU identity maps it cached.
+
+config RK3506_HEAP2_SIZE
+	int "Second heap region size (bytes)"
+	default 65011712
+	depends on MM_REGIONS > 1
+	---help---
+		Size of the second heap region.  Default 62 MiB
+		(0x03e00000), ending at 0x07c00000 and leaving the top
+		4 MiB of DDR free as a U-Boot relocation margin.
+
 endif # ARCH_CHIP_RK3506

@@ -66,7 +66,8 @@
    - `CONFIG_INIT_ENTRYPOINT="nsh_main"`
    - `CONFIG_ARCH_CHIP_CUSTOM=y`
    - `CONFIG_RAM_START=0x02080000`
-   - `CONFIG_RAM_SIZE=26738688`（0x1980000，25.5 MiB；**v10 起**主核 heap 结束于 0x03a00000，其后四个 1MB 窗口让给 M0 代码/rpmsg 共享区。早期文档里的 134217728 是全 DDR 物理大小，不是主核可用 RAM）
+   - `CONFIG_RAM_SIZE=26738688`（0x1980000，25.5 MiB；**v10 起**主堆区结束于 0x03a00000，其后四个 1MB 窗口让给 M0 代码/rpmsg 共享区。早期文档里的 134217728 是全 DDR 物理大小，不是主核可用 RAM）
+   - `CONFIG_MM_REGIONS=2`（v10 起）：`rk3506_allocateheap.c` 的 `arm_addregion()` 把 AMP 窗口之上的高位 DDR 加成**第二堆区**：`RK3506_HEAP2_BASE=0x03e00000`、`RK3506_HEAP2_SIZE=0x03e00000`（62 MiB，终于 0x07c00000，顶部留 4 MiB 给 U-Boot 重定位余量）。两块非连续堆区合计纳管 ~87.5 MiB（镜像占用后 `free` 预计总量 ~84 MiB，以板上实测为准）。整块 DDR 已由 `rk3506_start.c` identity 映射为 cached，加堆区不需要再动 MMU
 
 ### 3.3 路径处理
 
@@ -202,7 +203,7 @@
 | M0 固件基线       | `bash nand_firmware/build_mcu_fw.sh` | entry 0x03a00141、向量 `00fcaf034101a003`、mcu.bin 27504B、amp.img 32256B |
 | 打包              | 见 3.5                        | `update.img` 生成                                                         |
 | 启动 NSH          | 烧录后重启                    | `nsh>` 提示符                                                            |
-| 内存检测          | `nsh> free`                   | heap 区间 0x02080000–0x03a00000，可用约 25.5 MiB                          |
+| 内存检测          | `nsh> free`                   | 两块堆区：主区 0x02080000–0x03a00000（25.5 MiB）+ 高区 0x03e00000–0x07c00000（62 MiB），合计纳管 ~87.5 MiB（镜像占用后 free 实测总量待板上确认）；中间 4 个 1 MiB AMP 窗口不入堆 |
 | 文件系统          | `nsh> mount`                  | `/etc`（romfs）、`/data`（littlefs，首启 autoformat）均挂载               |
 | 进程列表          | `nsh> ps`                     | NSH + `hd_ui` 等进程                                                      |
 | 小屏 UI / 四键    | 开机自启 `hd_ui`              | NV3007 显示 428×142 横屏 UI；UP/DOWN/OK 可操作；ESC 在子页回 HOME、快应用内退出 |

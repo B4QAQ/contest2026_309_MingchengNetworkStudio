@@ -28,34 +28,53 @@
 
 #include <sys/types.h>
 #include <stdint.h>
-#include <debug.h>
 
 #include <nuttx/mm/mm.h>
-#include <nuttx/arch.h>
 
 #include "arm_internal.h"
 #include "chip.h"
+
+/****************************************************************************
+ * Pre-processor Definitions
+ ****************************************************************************/
+
+/* Defaults for the non-contiguous second heap region (see RK3506_HEAP2_*
+ * Kconfig).  The window starts right after the four 1 MiB AMP carveouts
+ * (0x03a00000..0x03e00000) and leaves the top 4 MiB of the 128 MiB DDR
+ * unused as a U-Boot relocation margin.
+ */
+
+#ifndef CONFIG_RK3506_HEAP2_BASE
+#  define RK3506_HEAP2_BASE   0x03e00000u
+#else
+#  define RK3506_HEAP2_BASE   CONFIG_RK3506_HEAP2_BASE
+#endif
+
+#ifndef CONFIG_RK3506_HEAP2_SIZE
+#  define RK3506_HEAP2_SIZE   0x03e00000u   /* 62 MiB, ends at 0x07c00000 */
+#else
+#  define RK3506_HEAP2_SIZE   CONFIG_RK3506_HEAP2_SIZE
+#endif
 
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
 
 /****************************************************************************
- * Name: arm_allocateheap
+ * Name: arm_addregion
  *
  * Description:
- *   This function is called by arm_addrenv_init() to allocate the heap.
- *   For the RK3506 in flat build mode, the heap is automatically allocated
- *   by the common ARM code from the end of BSS to the top of usable RAM.
+ *   Add the upper DRAM window as a second heap region.  The primary heap
+ *   (g_idle_topstack..CONFIG_RAM_END, ending at 0x03a00000) is created by
+ *   the common ARM flat-build code; this region covers
+ *   RK3506_HEAP2_BASE..RK3506_HEAP2_BASE + RK3506_HEAP2_SIZE.  The whole
+ *   window is already identity-mapped cached by rk3506_start.c.
  *
  ****************************************************************************/
 
-void arm_allocateheap(void)
+#if CONFIG_MM_REGIONS > 1
+void arm_addregion(void)
 {
-  /* For flat build, the common ARM code handles heap allocation.
-   * No additional regions need to be added.
-   *
-   * If multiple memory regions are available, call umm_addregion()
-   * to add additional heap regions.
-   */
+  umm_addregion((FAR void *)RK3506_HEAP2_BASE, RK3506_HEAP2_SIZE);
 }
+#endif

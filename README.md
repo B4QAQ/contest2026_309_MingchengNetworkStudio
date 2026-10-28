@@ -115,7 +115,7 @@ nsh> ota confirm
 ### 4.5 功能验证
 
 ```bash
-nsh> free                                       # 约 25.5 MiB 堆（0x02080000..0x03a00000）
+nsh> free                                       # 两块堆区：主区 25.5 MiB + 高区 62 MiB，合计纳管 ~87.5 MiB
 nsh> ping 192.168.10.1
 nsh> curl https://stdl.b4qaq.cn/fwtb/info.json # HTTPS
 nsh> mount -t vfat /dev/sda /mnt/usb            # U 盘
@@ -146,7 +146,7 @@ nsh> ota status                                 # A/B 槽位状态
 
 ### 6.1 异构 AMP（A7 SMP + M0）
 
-- M0 固件 **link/load 在 DRAM 0x03a00000（1MB）**，rpmsg 共享窗 0x03c00000（2MB）；NuttX 堆收缩到 0x03a00000 让出四个 1MB no-map 预留窗
+- M0 固件 **link/load 在 DRAM 0x03a00000（1MB）**，rpmsg 共享窗 0x03c00000（2MB）；NuttX 主堆区结束于 0x03a00000，精确让出四个 1MB AMP 窗口，再在窗口之上 0x03e00000 开第二堆区（62 MiB，`MM_REGIONS=2` + `umm_addregion`），128MB DDR 合计纳管 ~87.5 MiB（顶部留 4 MiB 给 U-Boot 重定位余量，低位 TEE/boot 暂存不可用）
 - U-Boot：`rk3506` defconfig + `vanxoak_ab` + `rk3506-amp-mcu`（**不含** thunderboot `rk3506_tb`），FIT standalone `fit_standalone_release()` 经 SIP 调用放行 M0
 - NuttX 侧 `rk3506_rptun.c`：只开时钟 + 只读 INTMUX 就绪探测 + mailbox/vring 协议，不碰 M0 复位/拷贝/放行
 - 邮箱：M0 kernel id 3、link-id 0x03；A7→M0 走 mailbox3 A2B，M0→A7 走 mailbox0 B2A（电平中断，w1c）
@@ -170,7 +170,7 @@ nsh> ota status                                 # A/B 槽位状态
 ## 七、已完成功能
 
 - [x] NSH 控制台（UART0，115200，Ctrl+C / 256 列命令行）
-- [x] 3×A7 SMP、GIC、generic timer、25.5 MiB 堆
+- [x] 3×A7 SMP、GIC、generic timer、双堆区 ~87.5 MiB（主区 25.5 + 高区 62，AMP 窗口精确避让）
 - [x] UART / I2C / SPI1 / FSPI / GMAC0 / USB Host / MMC / SARADC / TSADC / PWM / WDT / RNG
 - [x] SPI NAND：dhara + littlefs /data、ROMFS /etc、tmpfs /tmp、FAT U 盘
 - [x] 网络：DHCP / DNS / NTP / ping / iperf / curl HTTPS

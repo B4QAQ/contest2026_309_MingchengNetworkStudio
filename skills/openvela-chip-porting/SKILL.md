@@ -285,10 +285,13 @@ sudo upgrade_tool uf nand_firmware/update.img   # 分区布局变更后必须整
 ```
 M0 代码/数据：  DRAM 0x03a00000, 1MB（M0 自己的 linker script ORIGIN 与 FIT load 地址一致）
 rpmsg 共享窗：  0x03c00000, 2MB（两个 vring + 缓冲，no-map）
-主核 NuttX：    0x02080000–0x03a00000（heap 不得越过）
+主核 NuttX：    0x02080000–0x03a00000（主堆区不得越过）
+高位第二堆区：  0x03e00000–0x07c00000（62MiB，见下）
 ```
 
 M0 GCC 工程里 rpmsg 窗的 `LINUX_RPMSG` ORIGIN 要和主核资源表地址逐一对齐。
+
+**AMP 窗口之上的 DDR 不要浪费**：主堆区因镜像紧跟其后、且必须连续，不能跨过中间 4MB 窗口；但窗口之上到 DDR 顶部仍是可缓存普通内存（启动时 `mmu_l1_map_regions` 已整段 identity 映射）。用 `CONFIG_MM_REGIONS=2` + `arm_addregion()` 里 `umm_addregion()` 加为非连续第二堆区即可，无需动 MMU。约束：顶部留 U-Boot 重定位/栈余量（本例留 4MiB），低位 0–0x02080000 是 TEE 常驻 + U-Boot bootm 暂存区（fdt/Image/ramdisk），热重启风险高，不要回收。
 
 ### 12.2 启动链：谁放行协处理器
 
@@ -361,6 +364,7 @@ M0 固件必须用 **SDK 自带 `gcc-arm-none-eabi-10-2020-q4-major`（gcc 10.2.
 | 10 | 陈旧寄存器 | 邮箱等块温复位不复位；选只有对端会写且 POR=0 的位当握手信号 |
 | 11 | LVGL ESC | KEY 事件只给焦点对象且默认不冒泡，返回键要板级截获 |
 | 12 | RM_IO pad | 不能当普通 GPIO 接按键 |
+| 13 | AMP 内存 | 主堆不能跨中间窗口，但窗口之上的 DDR 用 MM_REGIONS=2 + umm_addregion 回收，别浪费 |
 
 ---
 

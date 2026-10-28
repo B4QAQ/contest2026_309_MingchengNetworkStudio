@@ -48,14 +48,19 @@ CONFIG_RAM_VSTART=0x02080000
 CONFIG_FLASH_START=0x02080000
 CONFIG_FLASH_VSTART=0x02080000
 CONFIG_FLASH_SIZE=0x00800000
-# Physical DRAM is 0x00000000-0x08000000 (128MB total); NuttX runs from
-# 0x02080000 and STOPS at 0x03a00000, where the M0 firmware window begins.
-# The four 1 MiB AMP windows live at 0x03a00000 (M0 image), 0x03b00000
-# (amp-shmem), 0x03c00000 (rpmsg vrings + M0 pool) and 0x03d00000 (A7
-# carveout); the mm heap must never be handed those addresses.
-# Usable length = 0x03a00000 - 0x02080000 = 0x01980000 (25.5 MiB).
-# The L1 page table is placed at RAM_START+RAM_SIZE-0x4000 = 0x039fc000.
+# Physical DRAM is 0x00000000-0x08000000 (128MB total); NuttX image runs
+# from 0x02080000 and the PRIMARY heap stops at 0x03a00000, where the M0
+# firmware window begins.  The four 1 MiB AMP windows live at 0x03a00000
+# (M0 image), 0x03b00000 (amp-shmem), 0x03c00000 (rpmsg vrings + M0 pool)
+# and 0x03d00000 (A7 carveout); the mm heap must never be handed those
+# addresses.  Primary length = 0x03a00000 - 0x02080000 = 0x01980000 (25.5
+# MiB); the L1 page table sits at RAM_START+RAM_SIZE-0x4000 = 0x039fc000.
+# MM_REGIONS=2 adds a SECOND, non-contiguous heap region in the upper DDR
+# window: 0x03e00000..0x07c00000 (62 MiB; RK3506_HEAP2_*), keeping the top
+# 4 MiB free as U-Boot relocation margin.  Total managed heap window is
+# then ~87.5 MiB.  rk3506_start.c identity-maps the whole DDR cached.
 CONFIG_RAM_SIZE=26738688
+CONFIG_MM_REGIONS=2
 CONFIG_SPINLOCK=y
 CONFIG_SYSTEM_TIME64=y
 
