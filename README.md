@@ -132,7 +132,7 @@ nsh> ota status                                 # A/B 槽位状态
 ### 5.1 协作模式
 
 - **AI 负责**：代码实现、寄存器/协议级根因分析、文档
-- **选手负责**：硬件接线、烧录、板上验证、方案拍板
+- **选手负责**：硬件接线、烧录、板上验证、方案拍板，疑难问题方案指导
 
 规范与全部决策记录见 `AGENTS.md`（每条结论附版本号、源码位置和被否决方案）。
 
@@ -140,12 +140,14 @@ nsh> ota status                                 # A/B 槽位状态
 
 完整对话记录在 `logs/B4QAQ/`，随比赛日志归集工具自动入仓（只入 openvela 工作区内的会话）。
 
-### 5.3 代表性 AI 贡献
+### 5.3 代表性攻关与分工
 
-1. **AMP 启动链根因**：M0 不启动表面在邮箱协议层，实际根因有两层——U-Boot 误带 `rk3506_tb` fragment（`CONFIG_SPL_KERNEL_BOOT=y` 使 SPL 直跳内核，`amp_cpus_on()` 从不执行）；M0 固件误用 gcc 13.4 编译（Reset_Handler 从 0x3a00141 漂到 0x3a00171）。逐一通过板上日志、SDK 源码比对和产物逐字节比对定位
-2. **USB bulk 传输卡死**：枚举正常但 bulk 死，根因是 DWC2 RX FIFO 默认 128 words 小于 HS bulk 所需 ~131 words，核心静默不发 token；提到 SDK 值 512/256/224
-3. **rpmsg 时钟门控写反**：Rockchip 门控是 SET_TO_DISABLE 语义，写 `WE|1` 实为关时钟，导致自己把 PCLK_MAILBOX 关死
-4. **TLS/网络连环问题**：无电池 RTC 的证书未来时间、DHCP 不带 option 6、curl threaded resolver 自检失败的误导报错，逐一从源码定位
+本项目所有架构/方案决策均由选手拍板（见 `AGENTS.md` §3.6），AI 只在选定方向上做实现、源码/寄存器级验证和文档，不自行决定技术路线。几个代表性过程：
+
+1. **AMP 异构（最艰难的一战）**：经历 v8→v9→v10 多轮失败。"M0 生命周期改由 U-Boot 从 `amp` 分区放行、NuttX 只跑协议不碰 M0"（方案 A）是选手在多轮分歧中坚持定的方向；在方向被否、排查停滞时也是选手推动继续。AI 的工作是按此读 U-Boot/SDK 源码逐寄存器核对、板上日志取证，最终在该方向下定位到 U-Boot 误带 `rk3506_tb` fragment（`CONFIG_SPL_KERNEL_BOOT=y` 使 SPL 直跳内核、`amp_cpus_on()` 从不执行）和 gcc 13.4 导致 entry 漂移（0x3a00141→0x3a00171）两个根因
+2. **TLS/网络连环问题**：排查方向由选手推动并拍板每个改法；AI 负责从源码定位无电池 RTC 的证书未来时间、DHCP 不带 option 6、curl threaded resolver 误导报错等具体机理并落地修复
+3. **USB bulk 传输卡死**：AI 在源码比对中定位的代码级根因——DWC2 RX FIFO 默认 128 words 小于 HS bulk 所需 ~131 words，核心静默不发 token；按 SDK 值改为 512/256/224
+4. **rpmsg 时钟门控写反**：AI 定位的代码级错误——Rockchip 门控是 SET_TO_DISABLE 语义，写 `WE|1` 实为关时钟，等于自己把 PCLK_MAILBOX 关死
 
 ---
 
