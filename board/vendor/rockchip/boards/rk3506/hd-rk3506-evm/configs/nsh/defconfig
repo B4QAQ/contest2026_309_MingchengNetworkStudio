@@ -49,14 +49,13 @@ CONFIG_FLASH_START=0x02080000
 CONFIG_FLASH_VSTART=0x02080000
 CONFIG_FLASH_SIZE=0x00800000
 # Physical DRAM is 0x00000000-0x08000000 (128MB total); NuttX runs from
-# 0x02080000. RAM must now END at 0x03c00000: the MCU's rpmsg shared
-# window (2 MiB at pa 0x03c00000, identity to the MCU's LINUX_RPMSG
-# linker region) lives inside DRAM and the mm heap would otherwise
-# allocate over it. Usable length = 0x03c00000 - 0x02080000 = 0x01B80000
-# (27.5 MiB). The L1 page table sits at RAM_START+RAM_SIZE-0x4000
-# (chip.h); keep RAM_SIZE below the DRAM top with margin.
-CONFIG_RAM_SIZE=28835840
-CONFIG_RK3506_RPTUN=y
+# 0x02080000 and STOPS at 0x03a00000, where the M0 firmware window begins.
+# The four 1 MiB AMP windows live at 0x03a00000 (M0 image), 0x03b00000
+# (amp-shmem), 0x03c00000 (rpmsg vrings + M0 pool) and 0x03d00000 (A7
+# carveout); the mm heap must never be handed those addresses.
+# Usable length = 0x03a00000 - 0x02080000 = 0x01980000 (25.5 MiB).
+# The L1 page table is placed at RAM_START+RAM_SIZE-0x4000 = 0x039fc000.
+CONFIG_RAM_SIZE=26738688
 CONFIG_SPINLOCK=y
 CONFIG_SYSTEM_TIME64=y
 
@@ -94,6 +93,36 @@ CONFIG_UART0_2STOP=0
 CONFIG_UART0_RXBUFSIZE=256
 CONFIG_UART0_TXBUFSIZE=256
 
+# UART1: J9 RM_IO16/17 (GPIO1_B0/B1), 115200 8N1
+
+CONFIG_RK3506_UART1=y
+CONFIG_UART1_BAUD=115200
+CONFIG_UART1_BITS=8
+CONFIG_UART1_PARITY=0
+CONFIG_UART1_2STOP=0
+CONFIG_UART1_RXBUFSIZE=256
+CONFIG_UART1_TXBUFSIZE=256
+
+# UART2: J9 RM_IO0/2 (GPIO0_A0/A2), M0 debug console, 1500000 8N1
+
+CONFIG_RK3506_UART2=y
+CONFIG_UART2_BAUD=1500000
+CONFIG_UART2_BITS=8
+CONFIG_UART2_PARITY=0
+CONFIG_UART2_2STOP=0
+CONFIG_UART2_RXBUFSIZE=256
+CONFIG_UART2_TXBUFSIZE=256
+
+# UART3: J9 RM_IO15/14 (GPIO0_B7/B6), 115200 8N1
+
+CONFIG_RK3506_UART3=y
+CONFIG_UART3_BAUD=115200
+CONFIG_UART3_BITS=8
+CONFIG_UART3_PARITY=0
+CONFIG_UART3_2STOP=0
+CONFIG_UART3_RXBUFSIZE=256
+CONFIG_UART3_TXBUFSIZE=256
+
 #---------------------------------------------------------------------------
 # Debug
 #---------------------------------------------------------------------------
@@ -102,6 +131,8 @@ CONFIG_DEBUG_FEATURES=y
 CONFIG_DEBUG_FULLOPT=y
 CONFIG_DEBUG_SYMBOLS=y
 CONFIG_DEBUG_SCHED_ERROR=y
+CONFIG_DEBUG_FS=y
+CONFIG_DEBUG_FS_ERROR=y
 CONFIG_DEBUG_USB=y
 CONFIG_DEBUG_USB_ERROR=y
 
@@ -126,6 +157,47 @@ CONFIG_BUILTIN=y
 CONFIG_RAW_BINARY=y
 
 #---------------------------------------------------------------------------
+# Debug / development tooling
+#---------------------------------------------------------------------------
+# ps/top need registered procfs entries and tick-based CPU accounting.
+CONFIG_FS_PROCFS_REGISTER=y
+CONFIG_SCHED_CPULOAD_SYSCLK=y
+CONFIG_SYSTEM_CPULOAD=y
+# Memory peek/poke: mb/mh/mw are bring-up bread and butter; they are
+# disabled by default via NSH_DISABLE_*, re-enable them here.
+# CONFIG_NSH_DISABLE_MB is not set
+# CONFIG_NSH_DISABLE_MH is not set
+# CONFIG_NSH_DISABLE_MW is not set
+# dd as an app (NSH has no builtin dd).
+CONFIG_SYSTEM_DD=y
+# Network ADB daemon (adb shell / push / pull over TCP :5555).
+# rcS starts `adbd &`; the TCP server binds the wildcard address, so it
+# works as soon as DHCP completes.  Shell needs PTYs and parent/child
+# task tracking.  LIBC_PRINT_EXTENSION: microADB's log shim formats
+# through %pV; without the extension every adbd message degrades to a
+# bare va_list pointer.
+CONFIG_SCHED_HAVE_PARENT=y
+CONFIG_SCHED_CHILD_STATUS=y
+CONFIG_PSEUDOTERM=y
+CONFIG_LIBC_EXECFUNCS=y
+CONFIG_LIBC_PRINT_EXTENSION=y
+CONFIG_NET_TCPBACKLOG=y
+CONFIG_SYSTEM_ADBD=y
+CONFIG_ADBD_TCP_SERVER=y
+CONFIG_ADBD_SHELL_SERVICE=y
+CONFIG_ADBD_FILE_SERVICE=y
+CONFIG_ADBD_PRODUCT_NAME="hd_rk3506_evm"
+CONFIG_ADBD_PRODUCT_MODEL="HD-RK3506-EVM"
+CONFIG_ADBD_PRODUCT_DEVICE="rk3506"
+# Cumulative per-netdev byte counters (GMAC RX/TX); the hd_ui network
+# card samples them 1 Hz to show live throughput.  NET_STATISTICS gates
+# the global /proc/net/stat stack stats, NETDEV_STATISTICS (needs
+# ARCH_HAVE_NETDEV_STATISTICS, selected by RK3506_GMAC0) grows
+# net_driver_s.d_statistics which the driver getter reads.
+CONFIG_NET_STATISTICS=y
+CONFIG_NETDEV_STATISTICS=y
+
+#---------------------------------------------------------------------------
 # File Systems
 #---------------------------------------------------------------------------
 CONFIG_FS_ROMFS=y
@@ -136,23 +208,25 @@ CONFIG_ETC_ROMFS=y
 CONFIG_DISABLE_ENVIRON=n
 
 #---------------------------------------------------------------------------
-# Display: VOP Framebuffer (480x854 RGB565 for ST7701S)
+# Display: NV3007 2.79" SPI TFT (142x428 RGB565) -> /dev/fb0
+# LCD lower-half + lcd_framebuffer bridge + FB char device (/dev/fb0).
 #---------------------------------------------------------------------------
-CONFIG_VIDEO_FB=y
 CONFIG_DRIVERS_VIDEO=y
+CONFIG_VIDEO_FB=y
+CONFIG_FB_UPDATE=y
+CONFIG_LCD=y
+CONFIG_LCD_MAXPOWER=255
 CONFIG_LCD_FRAMEBUFFER=y
-CONFIG_RK3506_VOP=y
-# CONFIG_LCD_ST7701S is not set
+CONFIG_LCD_NV3007=y
+CONFIG_SPI_EXCHANGE=y
 
 #---------------------------------------------------------------------------
-# Input: GT911 Touchscreen (I2C0, addr 0x5D)
+# Input (USB HID kbd/mouse; no touchscreen on this panel)
 #---------------------------------------------------------------------------
 CONFIG_INPUT=y
-CONFIG_INPUT_TOUCHSCREEN=y
-CONFIG_INPUT_GT911=y
 
 #---------------------------------------------------------------------------
-# I2C (for GT911 touch)
+# I2C (available for peripherals; GT911 touch removed)
 #---------------------------------------------------------------------------
 CONFIG_I2C=y
 CONFIG_RK3506_I2C=y
@@ -163,7 +237,14 @@ CONFIG_RK3506_I2C=y
 CONFIG_GRAPHICS_LVGL=y
 CONFIG_LV_USE_NUTTX=y
 CONFIG_LV_USE_NUTTX_LCD=y
-CONFIG_LV_USE_NUTTX_TOUCHSCREEN=y
+# Landscape UI on the physically-portrait 142x428 panel: LVGL renders
+# 428x142 and the flush callback transposes into the panel-native fb,
+# so no panel MADCTL and no LVGL matrix rotation are involved.
+# Two J9 push buttons (J9-18 GPIO0_C2 = LV_KEY_NEXT,
+# J9-20 GPIO0_C4 = LV_KEY_ENTER), active low to GND.
+CONFIG_HD_RK3506_LV_BUTTONS=y
+# 428x142 home screen UI (status cards + menu), auto-started by rcS.
+CONFIG_HD_RK3506_UI=y
 CONFIG_LV_USE_CLIB_MALLOC=y
 CONFIG_LV_USE_CLIB_STRING=y
 CONFIG_LV_USE_CLIB_SPRINTF=y
@@ -212,11 +293,10 @@ CONFIG_SPI=y
 # GPIO
 #---------------------------------------------------------------------------
 CONFIG_DEV_GPIO=y
-
-#---------------------------------------------------------------------------
-# PWM (for backlight)
-#---------------------------------------------------------------------------
-CONFIG_PWM=y
+CONFIG_GPIO_LOWER_HALF=y
+CONFIG_IOEXPANDER=y
+CONFIG_IOEXPANDER_NPINS=32
+CONFIG_RK3506_GPIO=y
 
 #---------------------------------------------------------------------------
 # Examples / Testing (optional)
@@ -232,7 +312,13 @@ CONFIG_EXAMPLES_LVGL_HOMEPAGE=y
 #---------------------------------------------------------------------------
 CONFIG_INTERPRETERS_MINIBASIC=y
 CONFIG_INTERPRETERS_QUICKJS=y
-CONFIG_INTERPRETERS_QUICKJS_MINI=y
+# Full interpreter (official qjs.c + quickjs-libc): std/os modules,
+# file I/O from JS - required by the /data/apps quick-app system.
+CONFIG_INTERPRETERS_QUICKJS_FULL=y
+# Full qjs + quickjs-libc needs far more stack than the 8 KiB default
+# (deep parser recursion, repl.c line editing); 32 KiB is the usual
+# upstream-full-interpreter setting.
+CONFIG_INTERPRETERS_QUICKJS_STACKSIZE=32768
 CONFIG_INTERPRETERS_LUA=y
 
 #---------------------------------------------------------------------------
@@ -482,19 +568,6 @@ CONFIG_SYSTEM_NTPC=y
 # eth0 link-up via the GMAC0 SIOCMIINOTIFY signal (started from rcS).
 CONFIG_HD_RK3506_NETCFG=y
 
-#---------------------------------------------------------------------------
-# AMP: A7<->M0 rpmsg link (rptun master + virtio rpmsg + rpmsg char)
-#   - RK3506_RPTUN: mailbox0/3 lower half; boots the M0 via SIP and
-#     exposes /dev/rptun/mcu and then /dev/rpmsg/mcu
-#   - DRIVERS_VIRTIO_RPMSG: probes the master rpmsg virtio device
-#   - OPENAMP_CACHE: cache maintenance for the shared memory window
-#   - RPMSG_CHAR: user-space endpoints via RPMSG_CREATE_EPT_IOCTL
-#   - HD_RK3506_RPMSGTEST: nsh> rpmsgtest acceptance command
-#---------------------------------------------------------------------------
-CONFIG_DRIVERS_VIRTIO_RPMSG=y
-CONFIG_OPENAMP_CACHE=y
-CONFIG_RPMSG_CHAR=y
-CONFIG_HD_RK3506_RPMSGTEST=y
 # /data on the SPI NAND: FSPI MTD upper half + userdata partition +
 # dhara mapping (wear/bad-block) + SmartFS.  mksmartfs formats on
 # first boot from rcS.
@@ -512,10 +585,13 @@ CONFIG_KVDB=y
 CONFIG_KVDB_DIRECT=y
 CONFIG_KVDB_FILE=y
 CONFIG_KVDB_PERSIST_PATH="/data/kvdb.db"
-# PWM0 channel 2 on RM_IO10 (GPIO0_B2), 100 MHz time base, /dev/pwm0
-CONFIG_RK3506_PWM=y
-CONFIG_EXAMPLES_PWM=y
-CONFIG_EXAMPLES_PWM_DEVPATH="/dev/pwm0"
+# RM_IO12 (GPIO0_B4 = J9-29) belongs to the NV3007 backlight as a plain
+# GPIO output (driven by hd_rk3506_nv3007.c).  The RK3506 PWM0 ch2 driver
+# is therefore disabled: rk3506_pwm_initialize() would re-mux that pad to
+# PWM function 47 and steal it from the backlight GPIO.
+# CONFIG_RK3506_PWM is not set
+# The `pwm` example is gone too: it only drove /dev/pwm0 on that same pad.
+# CONFIG_EXAMPLES_PWM is not set
 # SARADC: /dev/adc0, channels IN2/IN3 (40-pin header, 1.8 V domain),
 # software-triggered single-shot scan, END_INT interrupt delivery.
 CONFIG_ANALOG=y
@@ -533,6 +609,9 @@ CONFIG_CANUTILS_LIBCANUTILS=y
 CONFIG_CANUTILS_CANDUMP=y
 CONFIG_CANUTILS_CANSEND=y
 CONFIG_RK3506_CAN=y
+# Bench self-test only: keeps the single-node cansend/candump acceptance
+# test working without a second CAN node.  Remove for real-bus testing.
+CONFIG_RK3506_CAN_LOOPBACK=y
 # DesignWare watchdogs /dev/watchdog0-1 (wtdog example for acceptance)
 CONFIG_WATCHDOG=y
 CONFIG_EXAMPLES_WATCHDOG=y
@@ -571,14 +650,58 @@ CONFIG_NETUTILS_NTPCLIENT=y
 CONFIG_NETUTILS_IPERF=y
 
 #---------------------------------------------------------------------------
+# LED (green run LED on GPIO1_B3, active low; software heartbeat,
+# registered as /dev/led0 through the userled lower half)
+#---------------------------------------------------------------------------
+CONFIG_BOARD_CUSTOM_LEDS=y
+# ARCH_LEDS defaults y once ARCH_HAVE_LEDS is selected, but this custom
+# board provides no board_autoled_* hooks; the run LED is driven through
+# the userled lower half instead, so it must be disabled explicitly.
+# CONFIG_ARCH_LEDS is not set
+CONFIG_USERLED=y
+CONFIG_USERLED_LOWER=y
+CONFIG_HD_RK3506_LED_HEARTBEAT=y
+
+#---------------------------------------------------------------------------
+# RNG (hardware random number generator)
+#---------------------------------------------------------------------------
+CONFIG_RK3506_RNG=y
+CONFIG_DEV_URANDOM=y
+
+#---------------------------------------------------------------------------
+# TSADC (CPU temperature sensor)
+#---------------------------------------------------------------------------
+CONFIG_SENSORS=y
+CONFIG_RK3506_TSADC=y
+
+#---------------------------------------------------------------------------
+# MMC/SD: TF socket on the DesignWare MSHC (0xFF480000, IRQ 86).
+# CONFIG_MMCSD_SDIO needs ARCH_HAVE_SDIO (selected by
+# ARCH_CHIP_RK3506 in nuttx/arch/arm/Kconfig).
+#---------------------------------------------------------------------------
+CONFIG_MMCSD=y
+CONFIG_MMCSD_SDIO=y
+CONFIG_MMCSD_HAVE_CARDDETECT=y
+CONFIG_RK3506_MMC=y
+CONFIG_RK3506_MMC_MAXFREQ=50000000
+# No GPIO power switch on this board: the SD rail is the always-on
+# vcc3v3_stb regulator (vanxoak-hd-rk3506-evm-v1.dtsi vmmc-supply).
+# CONFIG_RK3506_MMC_PWREN is not set
+# Card detect = GPIO3_A6 active low with internal pull-up
+# (vanxoak-hd-rk3506-evm-v1.dtsi cd_gpio: <3 RK_PA6 RK_FUNC_GPIO pcfg_pull_up>)
+CONFIG_RK3506_MMC_CD_GPIO=y
+CONFIG_RK3506_MMC_CD_BANK=3
+CONFIG_RK3506_MMC_CD_PIN=6
+CONFIG_RK3506_MMC_CD_ACTIVELOW=y
+CONFIG_RK3506_MMC_HOTPLUG=y
+CONFIG_RK3506_MMC_POLL_MS=500
+
+#---------------------------------------------------------------------------
 # USB Host stack (framework + Mass Storage Class + Hub).  The RK3506 EHCI
 # host controller is a separate ~1500 line driver that still needs to be
 # written; turning this on lets the NSH `msconn` / `umon` / `usbdev` / ...
 # commands register and the framework probe be exercised.
 #---------------------------------------------------------------------------
-CONFIG_USBHOST=y
-CONFIG_USBHOST_MSC=y
-CONFIG_USBHOST_HUB=y
 CONFIG_USBHOST_TRACE_NRECORDS=128
 
 #---------------------------------------------------------------------------
@@ -643,7 +766,10 @@ CONFIG_GD5F_SPIMODE=0
 
 #---------------------------------------------------------------------------
 # GMAC0 Ethernet (eth0) - Synopsys DWMAC 4.20a @ 0xFF4C8000, IRQ66.
-# PHY: YT8512B RMII @ MDIO addr 0, reset GPIO4_A2 active low; RMII
+# PHY: YT8512B RMII @ MDIO addr 0, reset GPIO0_B3 active low
+# (vanxoak-hd-rk3506-evm-v1.dtsi:
+#  snps,reset-gpio = <&gpio0 RK_PB3 GPIO_ACTIVE_LOW>,
+#  snps,reset-delays-us = <0 20000 100000>); RMII
 # REF_CLK direction = INPUT (the PHY's crystal-locked 50 MHz feeds
 # GPIO2_B2), per the HD-RK3506-EVM board doc GMAC.md:
 #   clock_in_out = "input"  ->  CONFIG_RK3506_GMAC0_EXTCLK=y
@@ -652,3 +778,18 @@ CONFIG_GD5F_SPIMODE=0
 #---------------------------------------------------------------------------
 CONFIG_RK3506_GMAC0=y
 CONFIG_RK3506_GMAC0_EXTCLK=y
+CONFIG_RK3506_GMAC0_PHY_RESET_BANK=0
+CONFIG_RK3506_GMAC0_PHY_RESET_PIN=11
+
+#---------------------------------------------------------------------------
+# AMP: A7 rptun master <-> bus Cortex-M0 rpmsg-lite firmware.
+# The 2 MiB window 0x03c00000..0x03e00000 is outside NuttX RAM (see
+# RAM_SIZE above); vrings live at +0x00000, master carveout at +0x100000.
+# The M0 image window 0x03a00000..0x03b00000 is also outside NuttX RAM.
+# OPENAMP_CACHE is mandatory: both sides cache the shared window.
+#---------------------------------------------------------------------------
+CONFIG_RK3506_RPTUN=y
+CONFIG_DRIVERS_VIRTIO_RPMSG=y
+CONFIG_OPENAMP_CACHE=y
+CONFIG_RPMSG_CHAR=y
+CONFIG_HD_RK3506_RPMSGTEST=y

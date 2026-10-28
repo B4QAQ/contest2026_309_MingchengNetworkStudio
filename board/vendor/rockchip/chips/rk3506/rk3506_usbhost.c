@@ -65,6 +65,7 @@
 
 #include "arm_internal.h"
 #include "rk3506_usbhost.h"
+#include "rk3506_cru.h"
 #include "hardware/rk3506_dwc2.h"
 #include "hardware/rk3506_memorymap.h"
 
@@ -109,7 +110,11 @@
 #define RK3506_USBPHY_OTG1_TUNE    0x0430  /* OTG1 (host) port tuning */
 #define RK3506_USBPHY_OTG1_LSSEL   0x0494  /* OTG1 linestate select */
 
-#define RK3506_CRU_CLKGATE_CON(n)  (RK3506_CRU_ADDR + (n) * 4 + 0x800u)
+/* CRU gate bits for the USB clocks (clk-rk3506.c); the CLKGATE_CON
+ * layout and the HIWORD_UPDATE store live in rk3506_cru.h /
+ * rk3506_cru_gate().
+ */
+
 #define RK3506_CON1_REF_USBPHY     (1u << 4)   /* CLK_REF_USBPHY_TOP (24M) */
 #define RK3506_CON7_OTG0_BITS      (7u << 5)   /* hclk_otg0 + pmu + adp */
 #define RK3506_CON7_OTG1_BITS      (0xfu << 8) /* hclk_otg1 + pmu + adp + pclk_usbphy */
@@ -217,6 +222,10 @@ struct rk3506_chan_s
   volatile uint16_t inflight;  /* Number of Tx bytes "in-flight" */
   volatile uint32_t progress;  /* ISR activity counter (NAK/ACK/RX events) */
   uint8_t          *buffer;    /* Transfer buffer pointer */
+#ifdef CONFIG_USBHOST_ASYNCH
+  usbhost_asynch_t  callback;  /* Asynchronous transfer completion callback */
+  FAR void         *cbarg;     /* Argument passed with the callback */
+#endif
 };
 
 /* Control endpoint container (two channels: IN + OUT) */
@@ -343,6 +352,22 @@ static int rk3506_out_setup(struct rk3506_usbhost_s *priv, int chidx);
 static ssize_t rk3506_out_transfer(struct rk3506_usbhost_s *priv,
                                    int chidx, uint8_t *buffer,
                                    size_t buflen);
+
+/* Asynchronous transfers (CONFIG_USBHOST_ASYNCH, selected by USB HUB).
+ * in_next/out_next run from the channel-halt ISR and either re-arm the
+ * channel (multi-chunk / NAK retry) or invoke the class callback, exactly
+ * like the DesignWare OTG reference host driver (stm32_otgfshost.c).
+ */
+
+#ifdef CONFIG_USBHOST_ASYNCH
+static void rk3506_in_next(struct rk3506_usbhost_s *priv,
+                           struct rk3506_chan_s *chan);
+static void rk3506_out_next(struct rk3506_usbhost_s *priv,
+                            struct rk3506_chan_s *chan);
+static int rk3506_asynch(struct usbhost_driver_s *drvr, usbhost_ep_t ep,
+                         uint8_t *buffer, size_t buflen,
+                         usbhost_asynch_t callback, FAR void *arg);
+#endif
 
 /* Interrupt handling */
 
@@ -721,6 +746,39 @@ static int rk3506_chan_waitsetup(struct rk3506_usbhost_s *priv,
 }
 
 /****************************************************************************
+ * Name: rk3506_chan_asynchsetup
+ *
+ * Description:
+ *   Arm the asynchronous completion callback well BEFORE enabling the
+ *   transfer (as soon as we are committed to it) to close the race with
+ *   the channel-halt ISR.  waiter is left false: an async transfer has
+ *   no sleeping thread, only the callback.  Mirrors stm32_otgfshost.c.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_USBHOST_ASYNCH
+static int rk3506_chan_asynchsetup(struct rk3506_usbhost_s *priv,
+                                   struct rk3506_chan_s *chan,
+                                   usbhost_asynch_t callback, FAR void *arg)
+{
+  irqstate_t flags;
+  int ret = -ENODEV;
+
+  flags = enter_critical_section();
+  if (priv->connected)
+    {
+      chan->waiter   = false;
+      chan->callback = callback;
+      chan->cbarg    = arg;
+      ret            = OK;
+    }
+
+  leave_critical_section(flags);
+  return ret;
+}
+#endif
+
+/****************************************************************************
  * Name: rk3506_chan_dump
  *
  * Description:
@@ -874,9 +932,36 @@ static void rk3506_chan_wakeup(struct rk3506_usbhost_s *priv,
     {
       if (chan->waiter)
         {
+#ifdef CONFIG_USBHOST_ASYNCH
+          /* A sleeping waiter and an async callback cannot coexist on
+           * the same channel.
+           */
+
+          DEBUGASSERT(chan->callback == NULL);
+#endif
           nxsem_post(&chan->waitsem);
           chan->waiter = false;
         }
+
+#ifdef CONFIG_USBHOST_ASYNCH
+      /* No sleeping thread: if an asynchronous transfer is pending on
+       * this channel, continue it (re-arm for the next chunk/NAK retry)
+       * or complete it by invoking the class callback.  Called from the
+       * channel-halt ISR, like the DesignWare reference host driver.
+       */
+
+      else if (chan->callback)
+        {
+          if (chan->in)
+            {
+              rk3506_in_next(priv, chan);
+            }
+          else
+            {
+              rk3506_out_next(priv, chan);
+            }
+        }
+#endif
     }
 }
 
@@ -1397,6 +1482,110 @@ static ssize_t rk3506_in_transfer(struct rk3506_usbhost_s *priv, int chidx,
 }
 
 /****************************************************************************
+ * Name: rk3506_in_next
+ *
+ * Description:
+ *   Continue an asynchronous IN transfer after a channel halt in the ISR.
+ *   If the previous chunk succeeded but the requested length is not yet
+ *   reached, re-arm the channel (multi-chunk control/bulk).  Otherwise the
+ *   transfer is finished: a NAK maps the channel reason to -EAGAIN (the hub
+ *   status pipe NAKs most polls) and the class callback gets the negative
+ *   result and resubmits from a delayed work item; other errors are
+ *   reported likewise.  Mirrors stm32_in_next in the OTG-FS host driver.
+ *
+ * Assumptions:
+ *   Always called from interrupt context (rk3506_chan_wakeup).
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_USBHOST_ASYNCH
+static void rk3506_in_next(struct rk3506_usbhost_s *priv,
+                           struct rk3506_chan_s *chan)
+{
+  usbhost_asynch_t callback;
+  FAR void *arg;
+  ssize_t nbytes;
+  int result;
+  int ret;
+
+  result = -(int)chan->result;
+  if (chan->xfrd < chan->buflen && result == OK)
+    {
+      /* More chunks are needed to satisfy the requested length. */
+
+      ret = rk3506_in_setup(priv, chan->chidx);
+      if (ret >= 0)
+        {
+          return;
+        }
+
+      uerr("ERROR: rk3506_in_setup failed: %d\n", ret);
+      result = ret;
+    }
+
+  /* The transfer is complete (data, NAK or error).  Capture the callback
+   * and clear the channel state before invoking it.
+   */
+
+  callback       = chan->callback;
+  arg            = chan->cbarg;
+  nbytes         = chan->xfrd;
+
+  chan->callback = NULL;
+  chan->cbarg    = NULL;
+  chan->xfrd     = 0;
+
+  if (result < 0)
+    {
+      nbytes = (ssize_t)result;
+    }
+
+  callback(arg, nbytes);
+}
+#endif
+
+/****************************************************************************
+ * Name: rk3506_in_asynch
+ *
+ * Description:
+ *   Start the first chunk of an asynchronous IN transfer and return
+ *   immediately; completion is delivered through the callback.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_USBHOST_ASYNCH
+static int rk3506_in_asynch(struct rk3506_usbhost_s *priv, int chidx,
+                            uint8_t *buffer, size_t buflen,
+                            usbhost_asynch_t callback, FAR void *arg)
+{
+  struct rk3506_chan_s *chan;
+  int ret;
+
+  chan         = &priv->chan[chidx];
+  chan->buffer = buffer;
+  chan->buflen = buflen;
+  chan->xfrd   = 0;
+
+  ret = rk3506_chan_asynchsetup(priv, chan, callback, arg);
+  if (ret < 0)
+    {
+      uerr("ERROR: rk3506_chan_asynchsetup failed: %d\n", ret);
+      return ret;
+    }
+
+  ret = rk3506_in_setup(priv, chidx);
+  if (ret < 0)
+    {
+      uerr("ERROR: rk3506_in_setup failed: %d\n", ret);
+      chan->callback = NULL;
+      chan->cbarg    = NULL;
+    }
+
+  return ret;
+}
+#endif
+
+/****************************************************************************
  * Name: rk3506_out_setup
  ****************************************************************************/
 
@@ -1505,6 +1694,101 @@ static ssize_t rk3506_out_transfer(struct rk3506_usbhost_s *priv,
 
   return xfrd;
 }
+
+/****************************************************************************
+ * Name: rk3506_out_next
+ *
+ * Description:
+ *   Continue an asynchronous OUT transfer after a channel halt in the ISR:
+ *   re-arm for the remaining length while the last chunk succeeded,
+ *   otherwise complete the transfer and invoke the class callback with the
+ *   byte count (or the negative error).  Mirrors stm32_out_next.
+ *
+ * Assumptions:
+ *   Always called from interrupt context (rk3506_chan_wakeup).
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_USBHOST_ASYNCH
+static void rk3506_out_next(struct rk3506_usbhost_s *priv,
+                            struct rk3506_chan_s *chan)
+{
+  usbhost_asynch_t callback;
+  FAR void *arg;
+  ssize_t nbytes;
+  int result;
+  int ret;
+
+  result = -(int)chan->result;
+  if (chan->xfrd < chan->buflen && result == OK)
+    {
+      ret = rk3506_out_setup(priv, chan->chidx);
+      if (ret >= 0)
+        {
+          return;
+        }
+
+      uerr("ERROR: rk3506_out_setup failed: %d\n", ret);
+      result = ret;
+    }
+
+  callback       = chan->callback;
+  arg            = chan->cbarg;
+  nbytes         = chan->xfrd;
+
+  chan->callback = NULL;
+  chan->cbarg    = NULL;
+  chan->xfrd     = 0;
+
+  if (result < 0)
+    {
+      nbytes = (ssize_t)result;
+    }
+
+  callback(arg, nbytes);
+}
+#endif
+
+/****************************************************************************
+ * Name: rk3506_out_asynch
+ *
+ * Description:
+ *   Start the first chunk of an asynchronous OUT transfer and return
+ *   immediately; completion is delivered through the callback.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_USBHOST_ASYNCH
+static int rk3506_out_asynch(struct rk3506_usbhost_s *priv, int chidx,
+                             uint8_t *buffer, size_t buflen,
+                             usbhost_asynch_t callback, FAR void *arg)
+{
+  struct rk3506_chan_s *chan;
+  int ret;
+
+  chan         = &priv->chan[chidx];
+  chan->buffer = buffer;
+  chan->buflen = buflen;
+  chan->xfrd   = 0;
+
+  ret = rk3506_chan_asynchsetup(priv, chan, callback, arg);
+  if (ret < 0)
+    {
+      uerr("ERROR: rk3506_chan_asynchsetup failed: %d\n", ret);
+      return ret;
+    }
+
+  ret = rk3506_out_setup(priv, chidx);
+  if (ret < 0)
+    {
+      uerr("ERROR: rk3506_out_setup failed: %d\n", ret);
+      chan->callback = NULL;
+      chan->cbarg    = NULL;
+    }
+
+  return ret;
+}
+#endif
 
 /****************************************************************************
  * Name: rk3506_gint_wrpacket
@@ -2117,6 +2401,16 @@ static inline void rk3506_gint_hprtisr(struct rk3506_usbhost_s *priv)
                   rk3506_portreset(priv);
                 }
             }
+          else if ((hprt & DWC2_HPRT_PSPD_MASK) == DWC2_HPRT_PSPD_HS)
+            {
+              /* High-speed: 60 MHz UTMI PHY clock -> 60000 microframe
+               * interval.  FSLSPCS is a full/low-speed PHY clock select
+               * and is left at the reset value for HS (no reprogramming,
+               * no extra port reset).
+               */
+
+              rk3506_putreg(priv, DWC2_HFIR_OFFSET, 60000);
+            }
           else
             {
               rk3506_putreg(priv, DWC2_HFIR_OFFSET, 48000);
@@ -2244,8 +2538,15 @@ static inline void rk3506_hostinit_enable(struct rk3506_usbhost_s *priv)
   rk3506_putreg(priv, DWC2_GOTGINT_OFFSET, 0xffffffff);
   rk3506_putreg(priv, DWC2_GINTSTS_OFFSET, 0xbfffffff);
 
-  regval = (DWC2_GINT_WKUP | DWC2_GINT_USBSUSP |
-            DWC2_GINT_RXFLVL | DWC2_GINT_IPXFR  |
+  /* Enable only the interrupt sources that the ISR actually services.
+   * WKUP/USBSUSP are deliberately NOT enabled: the host never suspends or
+   * remote-wakes the bus, and the ISR has no branch to clear them.  With
+   * them masked in, a spurious WKUP/USBSUSP status bit would keep
+   * 'pending' non-zero forever and spin the ISR's for(;;) loop, hard-
+   * hanging the system.  Masked sources can never set a pending bit.
+   */
+
+  regval = (DWC2_GINT_RXFLVL | DWC2_GINT_IPXFR  |
             DWC2_GINT_HPRT   | DWC2_GINT_HC     |
             DWC2_GINT_DISC);
   rk3506_putreg(priv, DWC2_GINTMSK_OFFSET, regval);
@@ -2366,13 +2667,20 @@ static int rk3506_rh_enumerate(struct rk3506_usbhost_s *priv,
   rk3506_portreset(priv);
 
   regval = rk3506_getreg(priv, DWC2_HPRT_OFFSET);
-  if ((regval & DWC2_HPRT_PSPD_MASK) == DWC2_HPRT_PSPD_LS)
+  switch (regval & DWC2_HPRT_PSPD_MASK)
     {
-      priv->rhport.hport.speed = USB_SPEED_LOW;
-    }
-  else
-    {
-      priv->rhport.hport.speed = USB_SPEED_FULL;
+      case DWC2_HPRT_PSPD_HS:
+        priv->rhport.hport.speed = USB_SPEED_HIGH;
+        break;
+
+      case DWC2_HPRT_PSPD_LS:
+        priv->rhport.hport.speed = USB_SPEED_LOW;
+        break;
+
+      case DWC2_HPRT_PSPD_FS:
+      default:
+        priv->rhport.hport.speed = USB_SPEED_FULL;
+        break;
     }
 
   ret = rk3506_ctrlchan_alloc(priv, 0, 0, priv->rhport.hport.speed,
@@ -2779,6 +3087,54 @@ static ssize_t rk3506_transfer(struct usbhost_driver_s *drvr,
 }
 
 /****************************************************************************
+ * Name: rk3506_asynch
+ *
+ * Description:
+ *   Queue an asynchronous transfer and return immediately.  Only one
+ *   transfer may be pending on an endpoint; its callback runs in interrupt
+ *   context when the transfer completes (or NAKs with -EAGAIN on the low-end
+ *   DWC2 core, in which case the USB hub/CDC-ACM class resubmits from a
+ *   delayed work item).  This is the method the hub class relies on to poll
+ *   its interrupt-IN status endpoint without a blocking thread.
+ *
+ *   Never called from an interrupt handler; takes the driver lock so the
+ *   submission is serialized against the enumeration/control traffic.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_USBHOST_ASYNCH
+static int rk3506_asynch(struct usbhost_driver_s *drvr, usbhost_ep_t ep,
+                         uint8_t *buffer, size_t buflen,
+                         usbhost_asynch_t callback, FAR void *arg)
+{
+  struct rk3506_usbhost_s *priv = (struct rk3506_usbhost_s *)drvr;
+  unsigned int chidx = (unsigned int)ep;
+  int ret;
+
+  DEBUGASSERT(priv && buffer && chidx < RK3506_MAX_TX_FIFOS &&
+              buflen > 0 && callback != NULL);
+
+  ret = nxmutex_lock(&priv->lock);
+  if (ret < 0)
+    {
+      return ret;
+    }
+
+  if (priv->chan[chidx].in)
+    {
+      ret = rk3506_in_asynch(priv, chidx, buffer, buflen, callback, arg);
+    }
+  else
+    {
+      ret = rk3506_out_asynch(priv, chidx, buffer, buflen, callback, arg);
+    }
+
+  nxmutex_unlock(&priv->lock);
+  return ret;
+}
+#endif
+
+/****************************************************************************
  * Name: rk3506_cancel
  ****************************************************************************/
 
@@ -2799,9 +3155,33 @@ static int rk3506_cancel(struct usbhost_driver_s *drvr, usbhost_ep_t ep)
 
   if (chan->waiter)
     {
+#ifdef CONFIG_USBHOST_ASYNCH
+      DEBUGASSERT(chan->callback == NULL);
+#endif
       nxsem_post(&chan->waitsem);
       chan->waiter = false;
     }
+
+#ifdef CONFIG_USBHOST_ASYNCH
+  /* A pending asynchronous transfer is completed with -ESHUTDOWN; the
+   * channel-halt ISR must not also run its continuation, so clear the
+   * callback before invoking it (cancel runs with interrupts disabled).
+   */
+
+  else if (chan->callback)
+    {
+      usbhost_asynch_t callback;
+      FAR void *cbarg;
+
+      callback       = chan->callback;
+      cbarg          = chan->cbarg;
+      chan->callback = NULL;
+      chan->cbarg    = NULL;
+      chan->xfrd     = 0;
+
+      callback(cbarg, -ESHUTDOWN);
+    }
+#endif
 
   leave_critical_section(flags);
   return OK;
@@ -3016,6 +3396,9 @@ static inline void rk3506_sw_initialize(struct rk3506_usbhost_s *priv)
   drvr->ctrlout        = rk3506_ctrlout;
   drvr->transfer       = rk3506_transfer;
   drvr->cancel         = rk3506_cancel;
+#ifdef CONFIG_USBHOST_ASYNCH
+  drvr->asynch         = rk3506_asynch;
+#endif
 #ifdef CONFIG_USBHOST_HUB
   drvr->connect        = rk3506_connect;
 #endif
@@ -3076,14 +3459,14 @@ static void rk3506_usbphy_init(struct rk3506_usbhost_s *priv)
 
   /* 1. Ungate the PHY reference clock (24M) and this controller's bus
    *    clocks.  Reset default is ungated; this is belt-and-suspenders in
-   *    case the previous boot stage closed them.  Rockchip gate bits are
-   *    active-high "clock stopped", written with write-enable in the
-   *    high half-word: writing value 0 with WE keeps the clock running.
+   *    case the previous boot stage closed them.  The shared
+   *    rk3506_cru_gate() primitive does the HIWORD_UPDATE store
+   *    (CLK_GATE_SET_TO_DISABLE, data bit 0 = keep the clock running).
    */
 
-  putreg32(RK3506_CON1_REF_USBPHY << 16, RK3506_CRU_CLKGATE_CON(1));
-  regval = (otg1 ? RK3506_CON7_OTG1_BITS : RK3506_CON7_OTG0_BITS) << 16;
-  putreg32(regval, RK3506_CRU_CLKGATE_CON(7));
+  rk3506_cru_gate(1, RK3506_CON1_REF_USBPHY, true);
+  rk3506_cru_gate(7, otg1 ? RK3506_CON7_OTG1_BITS : RK3506_CON7_OTG0_BITS,
+                  true);
 
   /* 2. Turn on the PHY 480MHz clock output (clkout_ctl_phy, bits [7:2] =
    *    0x27) and wait for it to stabilize.
@@ -3137,8 +3520,20 @@ static inline int rk3506_hw_initialize(struct rk3506_usbhost_s *priv)
 
   rk3506_usbphy_init(priv);
 
+  /* Configure GUSBCFG for the on-board INNO USB2 PHY, which is an 8-bit
+   * UTMI+ (high-speed) interface -- NOT the USB 1.1 FS serial transceiver.
+   * Per the SDK HAL_USB_CoreInit: PHYSEL must be CLEARED (the |= PHYSEL
+   * here was an STM32F4-OTG-FS porting leftover that selected the wrong
+   * PHY), and the turnaround time / timeout calibration / PHY width are
+   * programmed explicitly for an 8-bit UTMI link (TRDT=9, PHYIF=0,
+   * TOCAL=7) instead of relying on reset defaults.
+   */
+
   regval = rk3506_getreg(priv, DWC2_GUSBCFG_OFFSET);
-  regval |= DWC2_GUSBCFG_PHYSEL;
+  regval &= ~(DWC2_GUSBCFG_PHYSEL |
+              DWC2_GUSBCFG_TRDT_MASK |
+              DWC2_GUSBCFG_TOCAL_MASK);
+  regval |= DWC2_GUSBCFG_TRDT(9) | 7;   /* TRDT=9 (8-bit UTMI), TOCAL=7 */
   rk3506_putreg(priv, DWC2_GUSBCFG_OFFSET, regval);
 
   for (timeout = 0; timeout < RK3506_READY_DELAY; timeout++)

@@ -67,27 +67,11 @@
 
 static const struct section_mapping_s g_rk3506_mappings[] =
 {
-  /* Identity-map DRAM 0x00000000..0x03c00000 as cached normal memory
-   * (60 x 1MB sections; the NuttX RAM 0x02080000..0x03c00000 lives
-   * here).
-   */
+  /* Identity-map DRAM 0x00000000..0x08000000 as cached normal memory. */
 
-  { 0x00000000u, 0x00000000u, MMU_MEMFLAGS, 0x03c },  /* 60 x 1MB sections */
+  { 0x00000000u, 0x00000000u, MMU_MEMFLAGS, 0x03e },  /* 62 x 1MB sections */
 
-  /* The rpmsg shared window 0x03c00000..0x03e00000 (vring0/vring1 +
-   * buffer carveout, shared with the M0) must be UNCACHED device
-   * memory: the Cortex-M0 has no cache and no coherency with the A7,
-   * so with a cached A7 view the vring descriptors and the avail/used
-   * indexes stick in the A7 dcache while the M0 reads stale data from
-   * DDR - the rpmsg data plane never synchronizes (v8 root cause of
-   * the rpmsgtest timeout).  open-amp touches the vring metadata with
-   * plain stores/loads, so the mapping itself must guarantee the
-   * coherency.
-   */
-
-  { 0x03c00000u, 0x03c00000u, MMU_IOFLAGS, 0x002 },   /* 2 x 1MB sections  */
-
-  /* Rest of the DRAM window, cached again (0x03e00000..0x08000000). */
+  /* Remaining DRAM window, cached (0x03e00000..0x08000000). */
 
   { 0x03e00000u, 0x03e00000u, MMU_MEMFLAGS, 0x042 },  /* 66 x 1MB sections */
 

@@ -12,10 +12,11 @@
  *    PWM_CHANNEL_OFFSET); the SDK board dts exposes every channel as
  *    its own node (pwm0_4ch_N @ 0xFF930000 + N*0x1000).
  *  - This driver fronts ONE channel block, defaulting to
- *    pwm0_4ch_2 @ 0xFF932000 - the channel wired to RM_IO10
- *    (GPIO0_B2, RM_IO function 47 -> PWM0_CH2) on the HD-RK3506-EVM
+ *    pwm0_4ch_2 @ 0xFF932000 - the channel wired to RM_IO12
+ *    (GPIO0_B4 = J9-29, func 47 -> PWM0_CH2) on the HD-RK3506-EVM
  *    header.  (The SDK iot board also uses pwm0_4ch_2 for the LCD
- *    backlight, period 25000 ns.)
+ *    backlight, period 25000 ns; the HD-RK3506-EVM backlight is a
+ *    plain GPIO instead, see the pin-routing note below.)
  *  - Time base: CLK_PWM0 <- clk_gpll_div_100m = 100 MHz (GPLL
  *    1.2 GHz; parent chain per kernel-6.1/drivers/clk/rockchip/
  *    clk-rk3506.c lines 188-193, 729-731), divider left at /1.
@@ -27,10 +28,13 @@
  *  CTRL         = continuous mode + polarity, HIWORD_UPDATE style
  *  ENABLE       = CTRL_UPDATE_EN then PWM_EN | PWM_CLK_EN
  *
- * Pin routing for RM_IO10 (GPIO0_B2, bank 0 in-bank pin 10), per
- * rk3506-pinctrl-rmio.dtsi rm_io10_pwm0_ch2 = <0 RK_PB2 47>:
- *  1. grf_pmu (0xFF910000) + 0x80 + 4*10 = routing function 47-15=32
- *  2. GPIO0B iomux (ioc_pmu 0xFF950000 + 0x08) nibble 2 = 7
+ * Pin routing for RM_IO12 (GPIO0_B4 = J9-29, bank 0 in-bank pin 12),
+ * per rk3506-pinctrl-rmio.dtsi rm_io12_pwm0_ch2 = <0 RK_PB4 47>:
+ *  1. grf_pmu (0xFF910000) + 0x80 + 4*12 = routing function 47-15=32
+ *  2. GPIO0_B4 iomux (ioc_pmu 0xFF950000 + 0x0C) nibble 0 = 7
+ * This pad is J9-29 on the HD-RK3506-EVM, where it carries the NV3007
+ * backlight.  That driver (hd_rk3506_nv3007.c) owns the pad as a plain
+ * GPIO output, so CONFIG_RK3506_PWM is off on that board.
  *
  * Included Files
  ****************************************************************************/
@@ -40,6 +44,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <inttypes.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 #include <debug.h>
@@ -47,15 +52,11 @@
 #include <nuttx/timers/pwm.h>
 
 #include "rk3506_cru.h"
+#include "rk3506_pinctrl.h"
+#include "rk3506_register.h"
+#include "hardware/rk3506_memorymap.h"
 
 #ifdef CONFIG_RK3506_PWM
-
-#ifndef putreg32
-#  define putreg32(v, a) (*(FAR volatile uint32_t *)(a) = (v))
-#endif
-#ifndef getreg32
-#  define getreg32(a)    (*(FAR volatile uint32_t *)(a))
-#endif
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -89,23 +90,19 @@
 #define PWM_POLARITY_NORMAL     HIWORD_UPDATE(1, 2, 3)
 #define PWM_POLARITY_INVERTED   HIWORD_UPDATE(2, 2, 3)
 
-/* Pin routing (RM_IO10 -> PWM0_CH2) */
+/* PWM0 channel 2 is routed out through the RM_IO matrix via the
+ * unified rk3506_pinctrl_set_mux(); the pad is board-configurable
+ * (CONFIG_RK3506_PWM_BANK/PIN/FUNC, default RM_IO12 = GPIO0_B4 =
+ * J9-29 -> PWM0_CH2, dts function 47).  No local RM_IO/IOMUX register
+ * pokes here.
+ */
 
-#define RK3506_GRF_PMU_ADDR     0xFF910000u
-#define RK3506_IOC_PMU_ADDR     0xFF950000u
-#define RMIO_BANK0_REG(pin)     (RK3506_GRF_PMU_ADDR + 0x80u + \
-                                 0x4u * (pin))
-#define RMIO_BANK0_DATA(fn)     (0x7f0000u | ((fn) & 0x7fu))
-#define RMIO_PWM0_CH2_ROUTEPIN  10u           /* GPIO0_B2 = RM_IO10 */
-#define RMIO_PWM0_CH2_FN        (47u - 15u)   /* dts func 47 -> routing fn */
+/* PWM0 channel 2 register block: RK3506_PWM0_4CH_2_ADDR from
+ * hardware/rk3506_memorymap.h (single shared address table), and the
+ * default frequency.
+ */
 
-#define IOC_GPIO0B_SEL_0        (RK3506_IOC_PMU_ADDR + 0x08u)
-#define GPIO0B_B2_BIT           8u       /* nibble 2 of GPIO0B @ 0x08 */
-#define RMIO_IOMUX_FUNC         7u
-
-/* PWM0 channel 2 register block, default frequency */
-
-#define PWM0_CH2_BASE           0xFF932000u
+#define PWM0_CH2_BASE           RK3506_PWM0_4CH_2_ADDR
 /* 40 kHz, matches the SDK backlight mode */
 #define PWM_DEFAULT_FREQUENCY   40000
 
@@ -309,7 +306,7 @@ static int pwm_ioctl(FAR struct pwm_lowerhalf_s *dev, int cmd,
  * Name: rk3506_pwm_initialize
  *
  * Description:
- *   Enable the PWM0 clocks, route RM_IO10 (GPIO0_B2) to PWM0_CH2,
+ *   Enable the PWM0 clocks, route RM_IO12 (GPIO0_B4 = J9-29) to PWM0_CH2,
  *   register /dev/pwm0 backed by the pwm0_4ch_2 channel block
  *   (0xFF932000).
  *
@@ -321,17 +318,29 @@ static int pwm_ioctl(FAR struct pwm_lowerhalf_s *dev, int cmd,
 int rk3506_pwm_initialize(void)
 {
   FAR struct rk3506_pwm_s *priv = &g_pwm0ch2;
+  static bool initialized;
+  int ret = OK;
 
-  /* Route the pad: RM_IO routing function then GPIO0B nibble = 7
-   * (rm_io10_pwm0_ch2 = <0 RK_PB2 47>, per rk3506-pinctrl-rmio.dtsi).
-   * Drive level 1 (pcfg_pull_none_drv_level_1) is the SDK default
-   * pad setting for this function; left at reset default here.
+  if (initialized)
+    {
+      /* The pad/clock setup is idempotent and the device must be
+       * registered only once.
+       */
+
+      return OK;
+    }
+
+  /* Route the pad to PWM0_CH2 through the unified pin-control.  The
+   * pad is a board choice taken from CONFIG_RK3506_PWM_BANK/PIN/FUNC
+   * (default rm_io12_pwm0_ch2 = <0 RK_PB4 47>, HD-RK3506-EVM J9-29).
+   * rk3506_pinctrl_set_mux() sees the RM_IO function number (> 15),
+   * programs the routing channel with (func - 15) and then forces the
+   * local IOMUX nibble to the matrix path (7).
    */
 
-  putreg32(RMIO_BANK0_DATA(RMIO_PWM0_CH2_FN),
-           RMIO_BANK0_REG(RMIO_PWM0_CH2_ROUTEPIN));
-  putreg32((0xfu << (GPIO0B_B2_BIT + 16)) |
-           (RMIO_IOMUX_FUNC << GPIO0B_B2_BIT), IOC_GPIO0B_SEL_0);
+  rk3506_pinctrl_set_mux((uint8_t)CONFIG_RK3506_PWM_BANK,
+                         (uint8_t)CONFIG_RK3506_PWM_PIN,
+                         (uint32_t)CONFIG_RK3506_PWM_FUNC);
 
   /* Clock gates for PWM0 (PCLK_PMU domain) live in rk3506_cru.c;
    * rk3506_pwm_clock_init() ungates PCLK_PWM0 and CLK_PWM0.
@@ -344,9 +353,32 @@ int rk3506_pwm_initialize(void)
   priv->base      = PWM0_CH2_BASE;
   priv->channel   = 2;
 
-  _info("PWM0 ch2 @ 0x%08" PRIx32 " on RM_IO10 -> /dev/pwm0\n",
+  _info("PWM0 ch2 @ 0x%08" PRIx32 " on RM_IO12 (J9-29) -> /dev/pwm0\n",
         priv->base);
 
-  return pwm_register("/dev/pwm0", &priv->lower);
+  ret = pwm_register("/dev/pwm0", &priv->lower);
+  if (ret < 0)
+    {
+      return ret;
+    }
+
+  initialized = true;
+  return OK;
+}
+
+/****************************************************************************
+ * Name: rk3506_pwm_getlower
+ *
+ * Description:
+ *   Return the PWM0 channel-2 lower half (RM_IO12 / GPIO0_B4 = J9-29) so an
+ *   in-kernel consumer can start/stop it without going through the
+ *   /dev/pwm0 character device.  (No in-tree consumer: the NV3007 backlight
+ *   on this board is a plain GPIO, see hd_rk3506_nv3007.c.)
+ *
+ ****************************************************************************/
+
+FAR struct pwm_lowerhalf_s *rk3506_pwm_getlower(void)
+{
+  return &g_pwm0ch2.lower;
 }
 #endif /* CONFIG_RK3506_PWM */

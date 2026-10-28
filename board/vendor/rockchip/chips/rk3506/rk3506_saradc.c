@@ -55,22 +55,21 @@
 #include <nuttx/analog/adc.h>
 #include <nuttx/analog/ioctl.h>
 
+#include "hardware/rk3506_memorymap.h"
 #include "rk3506_cru.h"
+#include "rk3506_register.h"
 
 #ifdef CONFIG_RK3506_SARADC
-
-#ifndef putreg32
-#  define putreg32(v, a) (*(FAR volatile uint32_t *)(a) = (v))
-#endif
-#ifndef getreg32
-#  define getreg32(a)    (*(FAR volatile uint32_t *)(a))
-#endif
 
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
 
-#define SARADC_BASE             0xFF4E8000u
+/* Controller base: RK3506_SARADC_ADDR from hardware/rk3506_memorymap.h
+ * (single shared address table; no local literal).
+ */
+
+#define SARADC_BASE             RK3506_SARADC_ADDR
 
 /* Register offsets (rockchip_saradc.c SARADC2_* / rk3506.h) */
 
@@ -95,30 +94,19 @@
 
 #define SARADC_DATA_MASK        0x00000fffu
 
-/* CRU bits (clk-rk3506.c) */
-
-#define CRU_ADDR                0xFF480000u
-#define CRU_CLKGATE_CON(n)      (CRU_ADDR + (n) * 4u + 0x800u)
-#define CRU_CLKSEL_CON(n)       (CRU_ADDR + (n) * 4u + 0x300u)
-#define CRU_SOFTRST_CON(n)      (CRU_ADDR + (n) * 4u + 0xa00u)
-
-#define CLKGATE19_PCLK_SARADC   (1u << 0)
-#define CLKGATE19_CLK_SARADC    (1u << 1)
-
-/* CLKSEL_CON(54): mux bits [5:4] (0 = xin24m), div bits [3:0].
- * div = 15 -> 24 MHz / 16 = 1.5 MHz converter clock.
+/* Soft-reset bit used by saradc_pclk_reset() (clk-rk3506.c:
+ * SOFTRST_CON(19) SRST_P_SARADC = bit 0).  The reset itself is pulsed
+ * through the shared rk3506_cru_reset() primitive, which uses the
+ * correct RK3506_CRU_ADDR (0xFF9A0000) base -- the previous local
+ * CRU_SOFTRST_CON used 0xFF480000 (the SDMMC base), so the pulse
+ * landed in SDMMC register space and never actually fired.
+ *
+ * The one-time clock gate / divider setup is NOT done here: it lives
+ * in rk3506_cru.c (rk3506_saradc_clock_init(), called by
+ * rk3506_saradc_initialize() below).
  */
 
-#define CLKSEL54_MUX_SHIFT      4
-#define CLKSEL54_MUX_MASK       (0x3u << CLKSEL54_MUX_SHIFT)
-#define CLKSEL54_DIV_SHIFT      0
-#define CLKSEL54_DIV_MASK       (0xfu << CLKSEL54_DIV_SHIFT)
-#define CLKSEL54_DIV_1P5MHZ     15u
-
-/* SOFTRST_CON(19): SRST_P_SARADC = bit 0, SRST_SARADC = bit 1 */
-
 #define SOFTRST19_SRST_P_SARADC (1u << 0)
-#define SOFTRST19_SRST_SARADC   (1u << 1)
 
 #define SARADC_IRQ              RK3506_IRQ_SARADC
 
@@ -200,12 +188,13 @@ static struct adc_dev_s *g_saradc_dev;
 
 static void saradc_pclk_reset(void)
 {
-  /* Assert (set bit) then deassert (clear bit), HIWORD style */
+  /* Assert (set bit) then deassert (clear bit), via the shared CRU
+   * soft-reset primitive (SOFTRST_CON(19) SRST_P_SARADC = bit 0).
+   */
 
-  putreg32(SOFTRST19_SRST_P_SARADC << 16 | SOFTRST19_SRST_P_SARADC,
-           CRU_SOFTRST_CON(19));
+  rk3506_cru_reset(19, SOFTRST19_SRST_P_SARADC, true);
   up_udelay(10);
-  putreg32(SOFTRST19_SRST_P_SARADC << 16, CRU_SOFTRST_CON(19));
+  rk3506_cru_reset(19, SOFTRST19_SRST_P_SARADC, false);
 }
 
 /****************************************************************************
@@ -487,7 +476,6 @@ static int saradc_ioctl(FAR struct adc_dev_s *dev, int cmd,
 int rk3506_saradc_initialize(void)
 {
   FAR struct rk3506_saradc_s *priv = &g_saradc;
-  uint32_t clksel;
   int ret;
 
   /* Clocks + resets (clk-rk3506.c): ungate PCLK_SARADC/CLK_SARADC,

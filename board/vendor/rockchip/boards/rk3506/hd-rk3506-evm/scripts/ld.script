@@ -4,22 +4,30 @@
  * Linker script for HD-RK3506-EVM board.
  *
  * Memory layout:
- *   CONFIG_RAM_START = 0x02080000 (U-Boot kernel_addr_r)
- *   CONFIG_RAM_SIZE  = 27.5MiB (0x01B80000 = 28835840 bytes)
+ *   ORIGIN = 0x02080000 (U-Boot kernel_addr_r)
+ *   END    = 0x03a00000 -> LENGTH 0x01980000 (25.5 MiB)
  *
- * Physical DRAM is 128MiB spanning 0x00000000-0x08000000. NuttX runs
- * from 0x02080000. RAM must END at 0x03c00000: the A7<->M0 rpmsg
- * shared window (2MiB at pa 0x03c00000, identity-mapped into the MCU's
- * LINUX_RPMSG linker region and reserved by rk3506-amp.dtsi) lives in
- * DRAM, and the mm heap would otherwise allocate over it. The L1 page
- * table sits at RAM_START+RAM_SIZE-0x4000 (chip.h).
+ * Physical DRAM is 128MiB spanning 0x00000000-0x08000000.  NuttX runs
+ * from 0x02080000 and must STOP at 0x03a00000: the four 1 MiB AMP
+ * windows live above it (Linux SDK rk3506-amp-mcu-only.dtsi):
+ *
+ *   0x03a00000  M0 firmware load window (amp.its load / gcc_bus_m0_ddr.ld
+ *               ORIGIN) - the running M0 image itself
+ *   0x03b00000  amp-shmem (reserved; currently unused by both sides)
+ *   0x03c00000  A7<->M0 rpmsg vrings + M0 buffer pool
+ *   0x03d00000  A7 master carveout heap
+ *
+ * The mm heap is carved out of this region, so letting it run to
+ * 0x03c00000 (the old layout) would hand the allocator the M0's code and
+ * the shared vrings - corrupting the peer.  The L1 page table sits at
+ * ORIGIN+LENGTH-0x4000 (chip.h), i.e. 0x039fc000, still below the M0.
  *
  * Reference: vendor_allwinnertech/boards/r528/r528s3-gemini-s1/scripts/sdram.ld.S
  ****************************************************************************/
 
 MEMORY
 {
-    sdram (W!RX) : ORIGIN = 0x02080000, LENGTH = 0x1B80000
+    sdram (W!RX) : ORIGIN = 0x02080000, LENGTH = 0x1980000
 }
 
 OUTPUT_FORMAT("elf32-littlearm", "elf32-littlearm", "elf32-littlearm")
@@ -119,4 +127,11 @@ SECTIONS
     .debug_line 0 : { *(.debug_line) }
     .debug_pubnames 0 : { *(.debug_pubnames) }
     .debug_aranges 0 : { *(.debug_aranges) }
+
+    /* A linker build-id note would be orphan-placed at VMA 0 and marked
+     * SHF_ALLOC, making objcopy -O binary pad the image from address 0
+     * (observed: 37 MB nuttx.bin instead of 2.9 MB).  Discard it.
+     */
+
+    /DISCARD/ : { *(.note.gnu.build-id) }
 }

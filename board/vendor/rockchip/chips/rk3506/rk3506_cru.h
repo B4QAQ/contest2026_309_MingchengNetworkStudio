@@ -24,8 +24,80 @@
 #define __VENDOR_ROCKCHIP_CHIPS_RK3506_RK3506_CRU_H
 
 /****************************************************************************
+ * Included Files
+ ****************************************************************************/
+
+#include <stdint.h>
+#include <stdbool.h>
+
+#include "hardware/rk3506_memorymap.h"
+
+/****************************************************************************
+ * Pre-processor Definitions
+ ****************************************************************************/
+
+/* CRU register layout (single shared definition; previously several
+ * drivers privately re-derived these from their own CRU base macro).
+ * Verified against drivers/clk/rockchip/clk-rk3506.c and the SDK
+ * rk3506.h.
+ */
+
+#define RK3506_CRU_CLKSEL_CON(n)   (RK3506_CRU_ADDR + (n) * 4u + 0x300u)
+#define RK3506_CRU_CLKGATE_CON(n)  (RK3506_CRU_ADDR + (n) * 4u + 0x800u)
+#define RK3506_CRU_SOFTRST_CON(n)  (RK3506_CRU_ADDR + (n) * 4u + 0xa00u)
+
+/* PMU CRU (0xFF9B0000) register layout, for the PMU-domain gates
+ * (GPIO0, PWM0, ...).
+ */
+
+#define RK3506_PMUCRU_CLKSEL_CON(n)   (RK3506_PMU_CRU_ADDR + (n) * 4u + 0x300u)
+#define RK3506_PMUCRU_CLKGATE_CON(n)  (RK3506_PMU_CRU_ADDR + (n) * 4u + 0x800u)
+#define RK3506_PMUCRU_SOFTRST_CON(n)  (RK3506_PMU_CRU_ADDR + (n) * 4u + 0xa00u)
+
+/****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
+
+/****************************************************************************
+ * Name: rk3506_cru_gate
+ *
+ * Description:
+ *   Generic CRU clock-gate primitive.  Ungate (enable) or gate
+ *   (disable) the clock bits in `mask` of main-CRU CLKGATE_CON(con).
+ *   Rockchip gates are HIWORD_UPDATE with CLK_GATE_SET_TO_DISABLE
+ *   semantics (data bit 1 = disable, 0 = enable), so the write is
+ *   (mask << 16) | (enable ? 0 : mask) -- a single read-modify-write-
+ *   free store that touches only the requested bits.
+ *
+ *   This is the shared entry point for drivers that only need to flip
+ *   gate bits (e.g. rptun's M0 cluster, usbhost's OTG/PHY clocks) so
+ *   they no longer carry private copies of the CRU register layout.
+ *
+ * Input Parameters:
+ *   con    - CLKGATE_CON index
+ *   mask   - bitmask of gate bits to change
+ *   enable - true to ungate (enable), false to gate (disable)
+ *
+ ****************************************************************************/
+
+void rk3506_cru_gate(uint8_t con, uint32_t mask, bool enable);
+
+/****************************************************************************
+ * Name: rk3506_cru_reset
+ *
+ * Description:
+ *   Generic CRU soft-reset primitive.  Assert or deassert the reset
+ *   bits in `mask` of main-CRU SOFTRST_CON(con), HIWORD_UPDATE style
+ *   (data bit 1 = assert reset, 0 = release).
+ *
+ * Input Parameters:
+ *   con    - SOFTRST_CON index
+ *   mask   - bitmask of reset bits to change
+ *   assert - true to assert reset, false to release
+ *
+ ****************************************************************************/
+
+void rk3506_cru_reset(uint8_t con, uint32_t mask, bool assert);
 
 /****************************************************************************
  * Name: rk3506_spi1_clock_init
@@ -50,6 +122,34 @@
  ****************************************************************************/
 
 void rk3506_spi1_clock_init(void);
+
+/* Ungate/clock the SPI0 DesignWare SSI at 0xFF120000 (24 MHz source). */
+
+void rk3506_spi0_clock_init(void);
+
+/* Ungate one I2C controller's PCLK + CLK_I2Cx (bus 0..2).  Called by
+ * rk3506_i2cbus_initialize(); returns OK or -EINVAL.
+ */
+
+int rk3506_i2c_clock_init(uint8_t bus);
+
+/* Ungate PCLK_GPIO0 (PMU CRU) so the GPIO0 register block backing the
+ * RM_IO pads is accessible (required for RST/DC GPIO outputs).
+ */
+
+void rk3506_gpio0_clock_init(void);
+
+/* Ungate one GPIO bank's PCLK + DBCLK (bank 0..4).  Supersedes the
+ * per-bank ad-hoc clock pokes; returns OK or -EINVAL.
+ */
+
+int rk3506_gpio_clock_enable(uint8_t bank);
+
+/* Debug aid: ungate every clock in main CRU + PMU CRU.  DEBUG-ONLY,
+ * no production caller (LTO-GC'd); do not use in production paths.
+ */
+
+void rk3506_all_clocks_enable(void);
 
 /****************************************************************************
  * Name: rk3506_fspi_clock_init

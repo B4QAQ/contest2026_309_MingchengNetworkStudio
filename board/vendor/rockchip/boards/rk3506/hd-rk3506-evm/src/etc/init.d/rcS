@@ -72,3 +72,19 @@ ntpcstart
 # (cable replug, switch STP expiry) via the GMAC0 SIOCMIINOTIFY
 # signal.  Priority 90: below NSH so it never starves the console.
 netcfg &
+
+# Home screen UI on the NV3007 panel (status cards + menu, navigated
+# with the J9 buttons).  The LVGL display/indev are already up from
+# bringup; run detached so NSH stays interactive.
+hd_ui &
+
+# Network ADB daemon (port 5555, wildcard bind): `adb connect <board-ip>`
+# then `adb shell` / `adb push` / `adb pull` from the host.  Started after
+# netcfg so DHCP is at least underway; the listen socket works with no
+# carrier yet.
+adbd &
+
+# QuickJS quick-app store: user apps live under /data/apps/<name>/
+# (app.js entry), built-in demos ship in romfs /etc/apps/.  Create the
+# data-side root so adb push / qapp install have a place to land.
+mkdir -p /data/apps

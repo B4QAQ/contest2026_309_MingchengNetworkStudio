@@ -5,12 +5,11 @@
  *
  * LVGL v9 display port for the HD-RK3506-EVM board.
  *
- * - Opens /dev/fb0 (registered by rk3506_vop_register in the bringup) and
- *   mmaps the framebuffer into a contiguous buffer that LVGL renders into.
- * - The flush callback copies LVGL's rendered chunk into the framebuffer.
- *   Without a connected LCD, FBIO_UPDATE is a no-op, but the pixel data
- *   is still in the framebuffer memory and would be scanned out if a panel
- *   were attached.
+ * - Opens /dev/fb0 (the NV3007 SPI panel exposed through the NuttX
+ *   lcd_framebuffer bridge) and mmaps its RAM framebuffer.
+ * - The flush callback copies LVGL's rendered chunk into the framebuffer
+ *   and issues FBIO_UPDATE, which the bridge turns into an lcd putarea
+ *   SPI transfer to the panel.
  * - A dedicated NuttX task pumps lv_timer_handler() in a sleep loop so LVGL
  *   animations/timers run. A 1 ms tick increment is provided by
  *   CONFIG_USEC_PER_TICK (1 ms) inside the system tick ISR -- LVGL v9 can
@@ -38,7 +37,7 @@
 #include <nuttx/video/fb.h>
 #include <nuttx/clock.h>
 
-#include <syslog.h>
+#include <debug.h>
 
 #include <lvgl/lvgl.h>
 
@@ -68,14 +67,18 @@ static struct fb_planeinfo_s g_plane;
 static struct fb_videoinfo_s g_video;
 static lv_display_t     *g_disp       = NULL;
 
-/* One full-screen render buffer (RGB565 == 2 bytes/pixel). 480*854*2 = 820 KB.
- * We allocate it from the heap so LVGL can render into it; on flush we copy
- * to the framebuffer.  A partial-mode buffer (a few rows) would be lighter
- * but requires LVGL to render in stripes; for now the simplest correct
- * behaviour is full-frame.
+/* One full-screen render buffer (RGB565 == 2 bytes/pixel).  On the NV3007
+ * panel this is 142*428*2 ~= 119 KB.  We allocate it from the heap so LVGL
+ * can render into it; on flush we copy to the framebuffer.  A partial-mode
+ * buffer (a few rows) would be lighter but requires LVGL to render in
+ * stripes; for now the simplest correct behaviour is full-frame.
  */
 
 static lv_color_t       *g_render_buf = NULL;
+
+#ifdef CONFIG_HD_RK3506_LV_BUTTONS
+int hd_rk3506_lv_port_indev_init(void);
+#endif
 
 /****************************************************************************
  * Private Functions
@@ -99,31 +102,109 @@ static void rk3506_disp_flush(lv_display_t *disp,
       return;
     }
 
-  /* px_map is laid out as a contiguous w*h block of lv_color16 (RGB565).
-   * Copy row-by-row into the framebuffer at (area->x1, area->y1) using
-   * the plane's stride.
+  /* px_map is a contiguous w*h RGB565 block in the LANDSCAPE logical
+   * frame (428 wide x 142 tall).  The panel framebuffer is panel-native
+   * PORTRAIT (142 wide x 428 tall, stride from the fb driver), so each
+   * logical pixel is transposed with a 90 degree rotation:
+   *
+   *   logical (x,y)  ->  fb (fb_x = y, fb_y = fb_h - 1 - x)
+   *
+   * (fb_h = physical yres = 428).  With FULL render mode the flushed
+   * area is always the whole logical screen, but keep the math general
+   * so partial areas would work too.
    */
 
   const uint8_t *src = px_map;
-  uint8_t       *dst = (uint8_t *)g_fb_base
-                     + (size_t)area->y1 * g_plane.stride
-                     + (size_t)area->x1 * (g_video.fmt == FB_FMT_RGB16_565
-                                            ? 2 : 1);
-  size_t row_bytes = (size_t)w * (g_video.fmt == FB_FMT_RGB16_565 ? 2 : 1);
+  uint8_t       *fb  = (uint8_t *)g_fb_base;
+  size_t bpp         = (g_video.fmt == FB_FMT_RGB16_565) ? 2 : 1;
+  int32_t fb_h       = (int32_t)g_video.yres;   /* physical panel height */
 
-  for (int32_t y = 0; y < h; y++)
+  if (bpp == 2)
     {
-      memcpy(dst, src, row_bytes);
-      src += row_bytes;
-      dst += g_plane.stride;
+      /* Block transpose: process 8x8 tiles so the source reads are
+       * cache-friendly (8 consecutive rows fit in L1), then write each
+       * transposed tile to the framebuffer.  A source row (x varies)
+       * becomes a framebuffer column (stride apart); a source column
+       * (y varies) becomes a framebuffer row (bpp apart, contiguous).
+       * So we read rows and write columns of the tile.
+       */
+
+      const uint16_t *s16 = (const uint16_t *)src;
+
+      for (int32_t y0 = 0; y0 < h; y0 += 8)
+        {
+          int32_t ylim = (y0 + 8 <= h) ? 8 : (h - y0);
+
+          for (int32_t x0 = 0; x0 < w; x0 += 8)
+            {
+              int32_t xlim = (x0 + 8 <= w) ? 8 : (w - x0);
+
+              /* Read the 8x8 tile from source (contiguous rows). */
+
+              uint16_t blk[8][8];
+
+              for (int32_t dy = 0; dy < ylim; dy++)
+                {
+                  const uint16_t *row = s16 +
+                    (size_t)(y0 + dy) * w + x0;
+
+                  for (int32_t dx = 0; dx < xlim; dx++)
+                    {
+                      blk[dy][dx] = row[dx];
+                    }
+                }
+
+              /* Write transposed: for each source column dx, the
+               * framebuffer address is
+               *   fb + (fb_h - 1 - (x0+dx)) * stride + (y0+dy) * bpp
+               * so dy walks contiguous bytes (bpp apart).
+               */
+
+              for (int32_t dx = 0; dx < xlim; dx++)
+                {
+                  uint8_t *dst = fb +
+                    (size_t)(fb_h - 1 - (area->x1 + x0 + dx)) *
+                    g_plane.stride +
+                    (size_t)(area->y1 + y0) * bpp;
+
+                  for (int32_t dy = 0; dy < ylim; dy++)
+                    {
+                      *(uint16_t *)dst = blk[dy][dx];
+                      dst += bpp;
+                    }
+                }
+            }
+        }
+    }
+  else
+    {
+      for (int32_t y = 0; y < h; y++)
+        {
+          uint8_t *dst = fb + (size_t)(area->y1 + y) * bpp
+                       + (size_t)(fb_h - 1 - area->x1) * g_plane.stride;
+
+          for (int32_t x = 0; x < w; x++)
+            {
+              *dst = src[x];
+              dst -= g_plane.stride;
+            }
+
+          src += (size_t)w * bpp;
+        }
     }
 
 #ifdef CONFIG_FB_UPDATE
+  /* Update only the transposed bounding box of the dirty area.  The
+   * transpose maps logical (x,y) to fb (fb_x=y, fb_y=fb_h-1-x), so the
+   * dirty rectangle's corners swap and invert.
+   */
+
   struct fb_area_s upd;
-  upd.x = area->x1;
-  upd.y = area->y1;
-  upd.w = w;
-  upd.h = h;
+
+  upd.x = area->y1;
+  upd.y = fb_h - 1 - area->x2;
+  upd.w = area->y2 - area->y1 + 1;
+  upd.h = area->x2 - area->x1 + 1;
   (void)ioctl(g_fb_fd, FBIO_UPDATE, &upd);
 #endif
 
@@ -178,12 +259,12 @@ int hd_rk3506_lv_port_disp_init(void)
 {
   int ret;
 
-  syslog(LOG_INFO, "LVGL: hd_rk3506_lv_port_disp_init() enter\n");
+  _info("LVGL: hd_rk3506_lv_port_disp_init() enter\n");
 
   /* Initialise the LVGL core. */
 
   lv_init();
-  syslog(LOG_INFO, "LVGL: lv_init() done\n");
+  _info("LVGL: lv_init() done\n");
 
   /* Open the framebuffer registered by rk3506_vop_register(). */
 
@@ -193,11 +274,11 @@ int hd_rk3506_lv_port_disp_init(void)
       int err = errno;
       struct stat st;
       int stat_ret = stat(LV_PORT_DISP_DEV, &st);
-      syslog(LOG_ERR, "LVGL: open(%s) failed: errno=%d, stat=%d\n",
+      _err("LVGL: open(%s) failed: errno=%d, stat=%d\n",
              LV_PORT_DISP_DEV, err, stat_ret);
       if (stat_ret == 0)
         {
-          syslog(LOG_ERR, "LVGL: stat shows %s exists, mode=0%o, size=%lld\n",
+          _err("LVGL: stat shows %s exists, mode=0%o, size=%lld\n",
                  LV_PORT_DISP_DEV, (unsigned)(st.st_mode & 0777),
                  (long long)st.st_size);
         }
@@ -213,50 +294,50 @@ int hd_rk3506_lv_port_disp_init(void)
           int n = 0;
           while ((e = readdir(dir)) != NULL && n < 32)
             {
-              syslog(LOG_INFO, "LVGL: /dev/%s\n", e->d_name);
+              _info("LVGL: /dev/%s\n", e->d_name);
               n++;
             }
           closedir(dir);
         }
       else
         {
-          syslog(LOG_ERR, "LVGL: opendir(/dev) failed errno=%d\n", errno);
+          _err("LVGL: opendir(/dev) failed errno=%d\n", errno);
         }
 
       set_errno(err);
       return -err;
     }
-  syslog(LOG_INFO, "LVGL: open(%s) ok fd=%d\n", LV_PORT_DISP_DEV, g_fb_fd);
+  _info("LVGL: open(%s) ok fd=%d\n", LV_PORT_DISP_DEV, g_fb_fd);
 
   ret = ioctl(g_fb_fd, FBIOGET_VIDEOINFO, (unsigned long)((uintptr_t)&g_video));
   if (ret < 0)
     {
       int err = errno;
-      syslog(LOG_ERR, "LVGL: FBIOGET_VIDEOINFO failed: errno=%d\n", err);
+      _err("LVGL: FBIOGET_VIDEOINFO failed: errno=%d\n", err);
       close(g_fb_fd);
       g_fb_fd = -1;
       set_errno(err);
       return -err;
     }
-  syslog(LOG_INFO, "LVGL: videoinfo fmt=%d xres=%d yres=%d\n",
+  _info("LVGL: videoinfo fmt=%d xres=%d yres=%d\n",
          (int)g_video.fmt, (int)g_video.xres, (int)g_video.yres);
 
   ret = ioctl(g_fb_fd, FBIOGET_PLANEINFO, (unsigned long)((uintptr_t)&g_plane));
   if (ret < 0)
     {
       int err = errno;
-      syslog(LOG_ERR, "LVGL: FBIOGET_PLANEINFO failed: errno=%d\n", err);
+      _err("LVGL: FBIOGET_PLANEINFO failed: errno=%d\n", err);
       close(g_fb_fd);
       g_fb_fd = -1;
       set_errno(err);
       return -err;
     }
-  syslog(LOG_INFO, "LVGL: planeinfo stride=%u fblen=%u fbmem=%p\n",
+  _info("LVGL: planeinfo stride=%u fblen=%u fbmem=%p\n",
          (unsigned)g_plane.stride, (unsigned)g_plane.fblen, g_plane.fbmem);
 
   if (g_plane.fbmem == NULL || g_plane.fblen == 0)
     {
-      syslog(LOG_ERR, "LVGL: plane has no fbmem (fbmem=%p fblen=%u)\n",
+      _err("LVGL: plane has no fbmem (fbmem=%p fblen=%u)\n",
              g_plane.fbmem, (unsigned)g_plane.fblen);
       close(g_fb_fd);
       g_fb_fd = -1;
@@ -268,24 +349,23 @@ int hd_rk3506_lv_port_disp_init(void)
   if (g_fb_base == MAP_FAILED)
     {
       int err = errno;
-      syslog(LOG_ERR, "LVGL: mmap failed: errno=%d\n", err);
+      _err("LVGL: mmap failed: errno=%d\n", err);
       close(g_fb_fd);
       g_fb_fd = -1;
       g_fb_base = NULL;
       set_errno(err);
       return -err;
     }
-  syslog(LOG_INFO, "LVGL: mmap ok base=%p\n", g_fb_base);
+  _info("LVGL: mmap ok base=%p\n", g_fb_base);
 
   /* Allocate a render buffer large enough for the whole screen. RGB565
-   * is 2 bytes per pixel.  480*854*2 = 819 840 bytes; round up to be
-   * safe.
+   * is 2 bytes per pixel (142*428*2 ~= 121 552 bytes on the NV3007).
    */
 
   size_t buf_pixels = (size_t)g_video.xres * (size_t)g_video.yres;
   if (buf_pixels == 0)
     {
-      syslog(LOG_ERR, "LVGL: videoinfo has zero resolution\n");
+      _err("LVGL: videoinfo has zero resolution\n");
       munmap(g_fb_base, g_plane.fblen);
       close(g_fb_fd);
       g_fb_base = NULL;
@@ -296,7 +376,7 @@ int hd_rk3506_lv_port_disp_init(void)
   g_render_buf = (lv_color_t *)malloc(buf_pixels * sizeof(lv_color_t));
   if (g_render_buf == NULL)
     {
-      syslog(LOG_ERR, "LVGL: malloc(%zu) for render buf failed\n",
+      _err("LVGL: malloc(%zu) for render buf failed\n",
              buf_pixels * sizeof(lv_color_t));
       munmap(g_fb_base, g_plane.fblen);
       close(g_fb_fd);
@@ -304,15 +384,20 @@ int hd_rk3506_lv_port_disp_init(void)
       g_fb_fd   = -1;
       return -ENOMEM;
     }
-  syslog(LOG_INFO, "LVGL: render buf %zu bytes at %p\n",
+  _info("LVGL: render buf %zu bytes at %p\n",
          buf_pixels * sizeof(lv_color_t), g_render_buf);
 
-  /* Create the LVGL display and bind the flush callback. */
+  /* Create the LVGL display as landscape: the panel is physically
+   * 142x428, but the UI is rotated 90 degrees so LVGL sees 428x142.
+   * The flush callback transposes logical (x,y) into the panel-native
+   * framebuffer layout, so the panel init / CASET / RASET / MADCTL stay
+   * exactly at the vendor defaults.
+   */
 
-  g_disp = lv_display_create(g_video.xres, g_video.yres);
+  g_disp = lv_display_create(g_video.yres, g_video.xres);
   if (g_disp == NULL)
     {
-      syslog(LOG_ERR, "LVGL: lv_display_create returned NULL\n");
+      _err("LVGL: lv_display_create returned NULL\n");
       free(g_render_buf);
       munmap(g_fb_base, g_plane.fblen);
       close(g_fb_fd);
@@ -321,13 +406,20 @@ int hd_rk3506_lv_port_disp_init(void)
       g_fb_fd      = -1;
       return -ENOMEM;
     }
-  syslog(LOG_INFO, "LVGL: lv_display_create ok disp=%p\n", g_disp);
+  _info("LVGL: lv_display_create ok disp=%p\n", g_disp);
 
   lv_display_set_flush_cb(g_disp, rk3506_disp_flush);
+  /* PARTIAL mode: LVGL renders only the dirty (changed) areas into
+   * the render buffer and flushes each one.  The flush callback still
+   * transposes into the full framebuffer, but only the changed rows
+   * are touched - a blinking cursor or a ticking label costs a few
+   * hundred pixels instead of the full 60776-pixel frame.
+   */
+
   lv_display_set_buffers(g_disp, g_render_buf, NULL,
                          buf_pixels * sizeof(lv_color_t),
-                         LV_DISPLAY_RENDER_MODE_FULL);
-  syslog(LOG_INFO, "LVGL: flush_cb + buffers set, render mode FULL\n");
+                         LV_DISPLAY_RENDER_MODE_PARTIAL);
+  _info("LVGL: flush_cb + buffers set, render mode PARTIAL\n");
 
   /* Start the LVGL timer-handler and tick threads. */
 
@@ -336,25 +428,32 @@ int hd_rk3506_lv_port_disp_init(void)
                     LV_PORT_TICK_THREAD_STACK, lv_port_tick_thread, NULL);
   if (pid < 0)
     {
-      syslog(LOG_INFO, "LVGL: lvgl_tick task_create failed: %d\n", pid);
+      _info("LVGL: lvgl_tick task_create failed: %d\n", pid);
     }
   else
     {
-      syslog(LOG_INFO, "LVGL: lvgl_tick task pid=%d\n", pid);
+      _info("LVGL: lvgl_tick task pid=%d\n", pid);
     }
 
   pid = task_create("lvgl_timer", LV_PORT_TIMER_THREAD_PRIO,
                     LV_PORT_TIMER_THREAD_STACK, lv_port_timer_thread, NULL);
   if (pid < 0)
     {
-      syslog(LOG_INFO, "LVGL: lvgl_timer task_create failed: %d\n", pid);
+      _info("LVGL: lvgl_timer task_create failed: %d\n", pid);
     }
   else
     {
-      syslog(LOG_INFO, "LVGL: lvgl_timer task pid=%d\n", pid);
+      _info("LVGL: lvgl_timer task pid=%d\n", pid);
     }
 
-  syslog(LOG_INFO, "LVGL: init done OK\n");
+#ifdef CONFIG_HD_RK3506_LV_BUTTONS
+  if (hd_rk3506_lv_port_indev_init() < 0)
+    {
+      _warn("LVGL: button input device init failed, display still usable\n");
+    }
+#endif
+
+  _info("LVGL: init done OK\n");
   return OK;
 }
 

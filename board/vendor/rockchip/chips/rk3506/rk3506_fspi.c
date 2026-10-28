@@ -31,13 +31,7 @@
 
 #include "hardware/rk3506_memorymap.h"
 #include "rk3506_fspi.h"
-
-#ifndef putreg32
-#  define putreg32(v, a) (*(FAR volatile uint32_t *)(a) = (v))
-#endif
-#ifndef getreg32
-#  define getreg32(a)    (*(FAR volatile uint32_t *)(a))
-#endif
+#include "rk3506_register.h"
 
 #ifndef BIT
 #  define BIT(n)  (1u << (n))
@@ -215,7 +209,11 @@ extern void up_udelay(unsigned int microseconds);
  * Local helpers
  ****************************************************************************/
 
-#define FSPI_BASE                          0xFF488000UL
+/* Controller base: RK3506_FSPI_ADDR from hardware/rk3506_memorymap.h
+ * (single shared address table; no local literal).
+ */
+
+#define FSPI_BASE                          RK3506_FSPI_ADDR
 #define FSPI_REG(_off)                     (FSPI_BASE + (_off))
 
 static inline uint32_t sfc_read(uint32_t off)
@@ -349,15 +347,12 @@ static void rk3506_sfc_set_delay_lines(uint16_t cells, uint8_t cs)
 }
 
 /****************************************************************************
- * rockchip_sfc_irq_unmask / _mask  (verbatim, kept for symmetry)
+ * rockchip_sfc_irq_mask  (verbatim)
+ *
+ * Only the mask helper is kept: this driver operates the SFC in polled
+ * mode (no IRQ is ever attached), so the verbatim rockchip_sfc_irq_unmask
+ * counterpart had no caller and was removed (it tripped -Wunused-function).
  ****************************************************************************/
-
-static void rk3506_sfc_irq_unmask(uint32_t mask)
-{
-  uint32_t reg = sfc_read(SFC_IMR);
-  reg &= ~mask;
-  sfc_write(SFC_IMR, reg);
-}
 
 static void rk3506_sfc_irq_mask(uint32_t mask)
 {

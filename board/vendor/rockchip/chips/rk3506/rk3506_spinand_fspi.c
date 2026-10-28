@@ -45,10 +45,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <debug.h>
-#include <syslog.h>
 
 #include <nuttx/kmalloc.h>
 #include <nuttx/mtd/mtd.h>
+#include <nuttx/arch.h>
 
 #include "rk3506_fspi.h"
 
@@ -891,8 +891,8 @@ FAR struct mtd_dev_s *rk3506_spinand_fspi_initialize(void)
       return NULL;
     }
 
-  syslog(LOG_INFO, "FSPI: SPI NAND READ_ID = %02x %02x %02x %02x\n",
-         id[0], id[1], id[2], id[3]);
+  finfo("FSPI: SPI NAND READ_ID = %02x %02x %02x %02x\n",
+        id[0], id[1], id[2], id[3]);
 
   /* Match the ID against the chip table */
 
@@ -971,15 +971,14 @@ FAR struct mtd_dev_s *rk3506_spinand_fspi_initialize(void)
   priv->mtd.markbad = spinand_markbad;
   priv->mtd.name    = "rk_spinand";
 
-  syslog(LOG_INFO,
-         "SPI NAND: %s %lu KiB (%lu blocks x %lu KiB), page %u+%u, "
-         "on-die ECC enabled\n",
-         priv->id->name,
-         (unsigned long)((uint32_t)priv->nblocks * priv->ppb *
-                         priv->pagesize / 1024),
-         (unsigned long)priv->nblocks,
-         (unsigned long)(priv->ppb * priv->pagesize / 1024),
-         priv->pagesize, priv->oobsize);
+  finfo("SPI NAND: %s %lu KiB (%lu blocks x %lu KiB), page %u+%u, "
+        "on-die ECC enabled\n",
+        priv->id->name,
+        (unsigned long)((uint32_t)priv->nblocks * priv->ppb *
+                        priv->pagesize / 1024),
+        (unsigned long)priv->nblocks,
+        (unsigned long)(priv->ppb * priv->pagesize / 1024),
+        (unsigned int)priv->pagesize, (unsigned int)priv->oobsize);
 
   return (FAR struct mtd_dev_s *)priv;
 }

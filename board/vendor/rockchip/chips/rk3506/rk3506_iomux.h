@@ -3,20 +3,14 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Minimal IOMUX (pin function select) helpers for RK3506G2.
+ * Board-fixed pin-mux setup helpers for the RK3506G2.
  *
- * GPIO bank 0 (the low-power/PMU IO bank) mux registers live in the
- * "ioc_pmu" register block at 0xFF950000 (RK3506_IOC_PMU_ADDR, also
- * GPIO0_IOC_BASE in the SDK rk3506.h).  This is confirmed by:
- *
- *   - the U-Boot DTS node  ioc_pmu: syscon@ff950000
- *   - the pinctrl driver using regmap_pmu for bank 0
- *     (pinctrl-rk3506.c rk3506_set_mux: bank 0 -> regmap_pmu)
- *   - struct GPIO0_IOC_REG in the SDK CMSIS header
- *
- * Mux registers use the Rockchip HIWORD_UPDATE convention: the high
- * half-word is a per-nibble write-enable mask, the low half-word holds
- * the 4-bit function select per pin (one nibble per pin).
+ * These are thin, per-peripheral wrappers around the unified
+ * pin-control back-end (rk3506_pinctrl.h).  All register-level detail
+ * (per-bank IOC base, 4-bit IOMUX nibble, RM_IO routing matrix,
+ * pull/drive) lives in rk3506_pinctrl_set_mux(); the functions here
+ * only pass the (bank, pin, function) triples from the U-Boot pinctrl
+ * DTS and document which pads each peripheral owns on the board.
  *
  ****************************************************************************/
 
@@ -39,13 +33,8 @@
  *     spi1_miso : bank0 RK_PB2 (pin 10) -> func 2
  *     spi1_csn0 : bank0 RK_PB6 (pin 14) -> func 2
  *
- *   Bank0 sub-bank B mux register layout (struct GPIO0_IOC_REG):
- *     GPIO0B_IOMUX_SEL_0 @ 0x08 : pins  8, 9,10,11 in nibbles 0,1,2,3
- *     GPIO0B_IOMUX_SEL_1 @ 0x0C : pins 12,13,14,15 in nibbles 0,1,2,3
- *
- *   Each pin's 4-bit nibble is programmed with an isolated HIWORD_UPDATE
- *   write, so the other three pins sharing the same register are
- *   untouched.
+ *   The nibble-level register layout is handled internally by
+ *   rk3506_pinctrl_set_mux().
  *
  ****************************************************************************/
 
@@ -74,6 +63,22 @@ void rk3506_ioc_fspi_setup(void);
  ****************************************************************************/
 
 void rk3506_ioc_i2c0_setup(void);
+
+/****************************************************************************
+ * Name: rk3506_ioc_i2c2_setup
+ *
+ * Description:
+ *   Route RM_IO4/5 to I2C2 SCL/SDA, per the SDK pinctrl data
+ *   (rk3506-pinctrl-rmio.dtsi):
+ *
+ *     rm_io4_i2c2_scl:  <0 RK_PA4 32 &pcfg_pull_none>
+ *     rm_io5_i2c2_sda:  <0 RK_PA5 33 &pcfg_pull_none>
+ *
+ *   The rjgt102 crypt chip sits on this bus at address 0x68.
+ *
+ ****************************************************************************/
+
+void rk3506_ioc_i2c2_setup(void);
 
 /****************************************************************************
  * Name: rk3506_ioc_gmac0_rmii_setup

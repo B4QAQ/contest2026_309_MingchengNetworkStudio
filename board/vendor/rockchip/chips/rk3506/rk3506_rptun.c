@@ -3,207 +3,262 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * RK3506 A7-side rptun (remote processor tunnel) lower half for the bus
- * Cortex-M0 ("mcu"), used by the NuttX rpmsg stack (master role).
+ * RK3506G2 A7 rptun lower half for the bus Cortex-M0.
  *
- * M0 lifecycle (SDK flow, v8m):
- *   The M0 firmware is NOT embedded in or started by NuttX.  It is packed
- *   as a standalone FIT (amp.img, load = 0xfff84000) into the "amp" GPT
- *   partition.  U-Boot (CONFIG_AMP / CONFIG_ROCKCHIP_AMP) loads and
- *   releases it before booting NuttX:
- *     amp_cpus_on() (u-boot drivers/cpu/rockchip_amp.c) reads the amp
- *     partition, boot_get_loadable() copies the standalone image into the
- *     M0 SRAM while the core is held reset, fit_standalone_release()
- *     (arch/arm/mach-rockchip/rk3506/rk3506.c) issues the SIP_MCU_CFG
- *     code-start SMC, opens CRU_GATE_CON5, writes GRF_SOC_CON36 and
- *     PMU_INT_MASK_CON.
- *   By the time NuttX runs, the M0 has already finished rpmsg-lite remote
- *   init and is waiting for link up.  NuttX's only responsibilities are
- *   the A-side clocks (same role as the Linux rockchip_amp driver's
- *   clk_prepare_enable of the six clocks) and the mailbox kick/rx path.
+ * The A7 is the rpmsg master (virtio driver).  The M0 runs the unmodified
+ * SDK rpmsg-lite test firmware (HAL project rk3506-mcu, master id 0,
+ * remote id 3).  Under the SDK AMP flow the M0 firmware is packaged into
+ * the standalone FIT image amp/amp.img (load=0x03a00000, DRAM) burned
+ * into the "amp" GPT partition, and U-Boot loads + releases the core in
+ * board_late_init() -> amp_cpus_on() -> fit_standalone_release()
+ * (u-boot arch/arm/mach-rockchip/rk3506/rk3506.c) before the kernel runs.
+ * The 32 KiB M0 SRAM window is too small for a HAL firmware with a
+ * console + rpmsg, so the image runs from the 1 MiB DRAM window
+ * 0x03a00000-0x03b00000 - which is why the NuttX heap must stop below
+ * that address (see the board ld.script).
  *
- * Facts verified against the Linux SDK sources:
+ * M0 LIFE CYCLE BELONGS TO U-BOOT, NOT TO THIS FILE.  This lower half
+ * therefore NEVER resets the M0, NEVER copies firmware into its load
+ * window and NEVER re-issues the SIP_MCU_CFG release SMC: doing any of
+ * those after
+ * U-Boot has already released a running M0 either destroys the peer state
+ * or drives the TEE through an unendorsed second MCU_CODE_START from a
+ * non-POR reset topology.  This file only:
  *
- * Mailbox hardware (hal/lib/CMSIS/Device/RK3506/Include/rk3506.h,
- * hal/lib/hal/src/hal_mbox.c, kernel-6.1/drivers/mailbox/rockchip-mailbox.c):
- *   - mailbox0..3 at 0xff290000 + 0x1000*n.  v2 register layout (revision
- *     >= 0x200): A2B_INTEN 0x00, A2B_STATUS 0x04, A2B_CMD 0x08,
- *     A2B_DATA 0x0c, B2A_INTEN 0x10, B2A_STATUS 0x14, B2A_CMD 0x18,
- *     B2A_DATA 0x1c.  All INTEN/STATUS writes use HIWORD write-enable
- *     (bit(16+n) enables data bit n).
- *   - B2A_STATUS bit0: message pending from the B side until the A side
- *     reads CMD/DATA and w1c-clears bit0.
- *   - A2B_STATUS bit0: message pending from the A side until the B side
- *     reads CMD/DATA and w1c-clears bit0.
- *   - A2B_INTEN bit8: A->B trigger method (0 = write DATA triggers,
- *     1 = write CMD then DATA triggers).  The kernel sets trigger method
- *     1 (MAILBOX_V2_TRIGGER_SHIFT = 8, trigger_method = 1).
+ *   - ungates the M0 time-base + mailbox/intmux clocks that U-Boot does
+ *     NOT open (fit_standalone_release opens only HCLK_M0/SWCLKTCK_M0);
+ *   - runs the mailbox0/mailbox3 kick/interrupt protocol (the rpmsg
+ *     master half);
+ *   - performs a READ-ONLY readiness probe of the peer (INTMUX group3
+ *     bit21) so the first kick is not sent before the M0 armed its
+ *     receive interrupt.
  *
- * Link wiring for master=A7 / remote=M0, link-id 0x03 =
- * RL_PLATFORM_SET_LINK_ID(0, 3) (hal test_demo.c: MASTER_ID=0,
- * REMOTE_ID=3; M_CPU_ID=0, R_CPU_ID=3):
- *   - A7 -> MCU kicks: mailbox3 A2B (MCU receives it via INTMUX line
- *     BB_3; kernel dts example rpmsg-rockchip link-id 0x03 uses
- *     mboxes <&mailbox 0 &mailbox 3> with tx = mailbox 3).
- *   - MCU q0 (tvq) kicks: mailbox0 B2A -> A7 GIC SPI 138.
- *   - MCU q1 (rvq) kicks: mailbox3 B2A -> A7 GIC SPI 141.
- *   - Kick message: { CMD = link_id & 0xff (0x03), DATA = RL_RPMSG_MAGIC
- *     (0x524d5347) } (hal rpmsg_platform.c platform_notify()).
+ * Every register value below is taken from the Linux SDK sources:
  *
- * Shared memory (hal/project/rk3506-mcu/GCC/gcc_bus_m0.ld, the MCU's
- * LINUX_RPMSG region is da 0x03c00000 len 0x200000, identity to the A7
- * physical window; rk3506-amp.dtsi reserves the same 2 MiB):
- *   - vring0 (master rvq = remote tvq) da=pa=0x03c00000, vring1 (master
- *     svq = remote rvq) da=pa=0x03c08000, align 0x1000, 64 descriptors
- *     (hal rpmsg_platform.h VRING_ALIGN/VRING_SIZE, rpmsg_config.h
- *     RL_BUFFER_COUNT).
- *   - carveout 0x03c10000 len 0x1f0000: buffer pool (2 x 64 x 512 B rx
- *     seed + tx pool), allocated by the openamp master via the rptun
- *     carveout heap; the remote takes all its tx buffers from the
- *     master-seeded rvq.
+ *   - Clock gates: u-boot fit_standalone_release() opens HCLK_M0/
+ *     SWCLKTCK_M0 (value 0x0c000000); the remaining clocks are the six
+ *     the Linux rockchip,amp core enables (arch/arm/boot/dts/
+ *     rk3506-amp.dtsi) + the mailbox/intmux pclocks needed on the A7
+ *     side.  Gate polarity is CLK_GATE_HIWORD_MASK|CLK_GATE_SET_TO_DISABLE
+ *     (drivers/clk/rockchip/clk-rk3506.c GFLAGS), so an enable writes the
+ *     bit position in the high half-word and 0 in the low half-word.
+ *   - Kick protocol: drivers/mailbox/rockchip-mailbox.c +
+ *     hal/lib/hal/src/hal_mbox.c (mailbox v2 registers, level interrupts,
+ *     w1c status, busy-drop, CMD-before-DATA order).
+ *   - Peer side: hal/middleware/rpmsg-lite/.../platform/RK3506/
+ *     rpmsg_platform.c (first-kick handshake, mailbox3 wiring, INTMUX
+ *     group3 bit21 as the last arming step).
  *
- ****************************************************************************/
-
-/****************************************************************************
- * Included Files
+ * Shared memory layout (matches the M0 linker script LINUX_RPMSG region
+ * and the Linux AMP reserved-memory nodes):
+ *
+ *   0x03c00000  vring0 (master rvq, 64 desc, align 0x1000)
+ *   0x03c08000  vring1 (master svq)
+ *   0x03c10000  rpmsg-lite peer buffer pool (M0 bump allocator)
+ *   0x03d00000  master buffer pool / carveout heap, 0x100000
+ *
+ * Mailbox wiring (see M0 rpmsg_platform.c platform_notify / clients):
+ *
+ *   A7 -> M0 : mailbox3 A2B (CMD 0x03, DATA "RMSG"); the peer's first
+ *              received kick is its link-up event, every later kick
+ *              addresses its tx vq (first_notify filter).
+ *   M0 -> A7 : mailbox0 B2A -> GIC SPI138 -> vring0 (NS + data)
+ *              mailbox3 B2A -> GIC SPI141 -> vring1 (consumed buffers)
+ *
  ****************************************************************************/
 
 #include <nuttx/config.h>
 
-#include <errno.h>
+#include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
-#include <stdint.h>
+#include <inttypes.h>
+#include <errno.h>
 #include <string.h>
-
 #include <debug.h>
-#include <nuttx/irq.h>
-#include <nuttx/rptun/rptun.h>
-#include <nuttx/spinlock.h>
 
-#include <openamp/remoteproc.h>
-#include <openamp/virtio.h>
+#include <nuttx/irq.h>
+#include <nuttx/arch.h>
+#include <nuttx/spinlock.h>
+#include <nuttx/rptun/rptun.h>
+
+#include <arch/irq.h>
 
 #include "rk3506_rptun.h"
+#include "rk3506_cru.h"
+#include "rk3506_register.h"
+#include "hardware/rk3506_memorymap.h"
 
 #ifdef CONFIG_RK3506_RPTUN
-
-#ifndef putreg32
-#  define putreg32(v, a) (*(FAR volatile uint32_t *)(a) = (v))
-#endif
-#ifndef getreg32
-#  define getreg32(a)    (*(FAR volatile uint32_t *)(a))
-#endif
 
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
 
-/* Mailbox register block offsets (v2 layout) */
-
-#define RK3506_MBOX_A2B_INTEN       0x00
-#define RK3506_MBOX_A2B_STATUS      0x04
-#define RK3506_MBOX_A2B_CMD         0x08
-#define RK3506_MBOX_A2B_DATA        0x0c
-#define RK3506_MBOX_B2A_INTEN       0x10
-#define RK3506_MBOX_B2A_STATUS      0x14
-#define RK3506_MBOX_B2A_CMD         0x18
-#define RK3506_MBOX_B2A_DATA        0x1c
-
-#define RK3506_MBOX_B2A_MSG_PEND    (1u << 0)   /* B2A_STATUS: B posted msg */
-#define RK3506_MBOX_A2B_MSG_PEND    (1u << 0)   /* A2B_STATUS: A posted msg */
-#define RK3506_MBOX_B2A_TX_DONE     (1u << 1)   /* B2A_STATUS: A consumed   */
-
-/* HIWORD write-enable: bit(16 + n) enables writing data bit n */
-
-#define RK3506_MBOX_WE(n)           (1u << ((n) + 16))
-
-/* Mailbox blocks used by the rpmsg link */
-
-#define RK3506_MBOX0_BASE           0xff290000u /* rx: MCU tvq kicks        */
-#define RK3506_MBOX3_BASE           0xff293000u /* rx: MCU rvq kicks + tx   */
-
-/* CRU clock gates.  Rockchip gate registers are HIWORD (write-enable in
- * bits 31:16) with set-to-disable semantics: writing bit=1 gates the
- * clock, writing 0 with the WE bit enables it.  CLKGATE_CON(n) =
- * CRU + 0x800 + n*4.  Gate bit numbers come from the kernel
- * drivers/clk/rockchip/clk-rk3506.c GATE() table.
+/* M0-cluster clock gate bits (main CRU CLKGATE_CON, clk-rk3506.c).
+ * These are plain bit masks; the HIWORD_UPDATE store is done by the
+ * shared rk3506_cru_gate() primitive (data bit 0 = enable), so this
+ * driver no longer carries a private copy of the CRU register layout.
+ * All values were verified against clk-rk3506.c.
  */
 
-#define RK3506_CRU_BASE             0xff9a0000u
-#define RK3506_CRU_GATE_CON(n)      (RK3506_CRU_BASE + 0x800 + (n) * 4)
+/* CON5:  HCLK_M0 bit10, SWCLKTCK_M0 bit11 (exact u-boot value 0x0c00;
+ * u-boot already opens these, re-opening is idempotent). */
 
-/* PCLK_MAILBOX CON(6) bit13, PCLK_INTMUX CON(6) bit14: required for our
- * own mailbox access and for the M0's INTMUX (its mailbox IRQ router).
- * With these gates closed the mailbox register file is dead - all A7
- * mbox reads return 0 and every write is silently dropped (v8e board).
+#define RK3506_GATE_CON5_M0         ((1u << 10) | (1u << 11))
+
+/* CON6:  PCLK_TIMER b2, CLK_TIMER0_CH5 b8, PCLK_MAILBOX b13,
+ *        PCLK_INTMUX b14.
+ * The time-base clocks (PCLK_TIMER/CLK_TIMER0_CH5) keep the M0's
+ * HAL_DelayMs() alive; PCLK_MAILBOX/INTMUX are needed on the A7 side.
  */
 
-#define RK3506_GATE_EN_MAILBOX_INTMUX \
-                                    ((1u << (16 + 13)) | (1u << (16 + 14)))
+#define RK3506_GATE_CON6_M0         ((1u << 2) | (1u << 8) | \
+                                     (1u << 13) | (1u << 14))
 
-/* The six clocks the A side must ensure are running for the remote core,
- * per rk3506-amp.dtsi "rockchip,amp" clocks =
- *   <&cru HCLK_M0>, <&cru STCLK_M0>, <&cru SCLK_UART4>,
- *   <&cru PCLK_UART4>, <&cru PCLK_TIMER>, <&cru CLK_TIMER0_CH5>;
- * the Linux rockchip-amp driver clk_prepare_enable()s all six.  U-Boot's
- * fit_standalone_release() opens HCLK_M0 itself, so by NuttX boot that one
- * is already on; enabling it again (data 0 + WE) is harmless.
- *
- * Gate bits (clk-rk3506.c):
- *   HCLK_M0 / SWCLKTCK_M0  CON(5) bits 10,11 (u-boot value 0x0c000000)
- *   PCLK_TIMER            CON(6) bit 2
- *   CLK_TIMER0_CH5        CON(6) bit 8   (TIMER5 = M0 SYS_TIMER)
- *   STCLK_M0              CON(8) bit 2   (M0 SysTick clock)
- *   PCLK_UART4            CON(11) bit 8  (M0 debug UART4)
- *   SCLK_UART4            CON(11) bit 13
+/* CON8:  STCLK_M0 bit2 (M0 SysTick source). */
+
+#define RK3506_GATE_CON8_STCLK_M0   (1u << 2)
+
+/* CON11: the M0 debug UART clock (UART1).  PCLK_UART1 is bit5 and
+ * SCLK_UART1 is bit10 of CLKGATE_CON11 (kernel-6.1 clk-rk3506.c: GATE
+ * "pclk_uart1" @CON11/5, COMPOSITE "sclk_uart1" @CON11/10).  The M0
+ * firmware prints on UART1 with the pads remapped by RM_IO to
+ * GPIO0_C0 (RX) / GPIO0_C1 (TX), matching the validated Linux AMP flow.
  */
 
-#define RK3506_GATE_CON5_M0         0x0c000000u
-#define RK3506_GATE_EN_TIMER        ((1u << (16 + 2)) | (1u << (16 + 8)))
-#define RK3506_GATE_EN_STCLK        (1u << (16 + 2))
-#define RK3506_GATE_EN_UART4        ((1u << (16 + 8)) | (1u << (16 + 13)))
+#define RK3506_GATE_CON11_UART1     ((1u << 5) | (1u << 10))
 
-/* Kick message content (hal rpmsg_platform.c platform_notify) */
+/* Mailbox v2 registers (rockchip-mailbox.c reg_a2b table).  Controller
+ * bases come from hardware/rk3506_memorymap.h (RK3506_MAILBOX0/3_ADDR).
+ */
 
-#define RK3506_RPMSG_LINK_ID        0x03u       /* RL_PLATFORM_SET_LINK_ID(0, 3) */
-#define RK3506_RPMSG_MAGIC          0x524d5347u /* RL_RPMSG_MAGIC "RMSG" */
+#define RK3506_MBOX0_BASE           RK3506_MAILBOX0_ADDR
+#define RK3506_MBOX3_BASE           RK3506_MAILBOX3_ADDR
 
-/* Notify busy-wait bound: the MCU clears A2B_STATUS bit0 as soon as its
- * INTMUX ISR runs; a few thousand register-poll iterations are plenty. */
+#define MBOX_A2B_INTEN              0x00u
+#define MBOX_A2B_STATUS             0x04u
+#define MBOX_A2B_CMD                0x08u
+#define MBOX_A2B_DAT                0x0cu
+#define MBOX_B2A_INTEN              0x10u
+#define MBOX_B2A_STATUS             0x14u
+#define MBOX_B2A_CMD                0x18u
+#define MBOX_B2A_DAT                0x1cu
 
-#define RK3506_NOTIFY_SPIN_MAX      10000u
+#define MBOX_CHAN0                  0x1u     /* bit0, w1c on STATUS     */
+#define MBOX_INTEN_WE               0x10000u /* hiword write enable    */
+
+/* INTMUX (rk3506.h struct INTMUX_REG): ENABLE group 3 at 0x0c, FLAG
+ * group 3 at 0x8c.  MAILBOX_BB_3 IRQ 117 lands in group 3 bit 21 and is
+ * fanned out to M0 NVIC IRQ31; the M0 rpmsg_platform.c
+ * platform_interrupt_enable() sets it as the very last step of the peer's
+ * rpmsg initialisation, and it is the ONLY writer of that bit (A7/U-Boot/
+ * TEE never touch INTMUX).  Read-only readiness probe input.
+ */
+
+#define RK3506_INTMUX_BASE          RK3506_INTMUX_ADDR
+#define RK3506_INTMUX_EN_GRP3       (RK3506_INTMUX_BASE + 0x0cu)
+#define RK3506_INTMUX_FLAG_GRP3     (RK3506_INTMUX_BASE + 0x8cu)
+#define RK3506_INTMUX_MBOX3_BIT     (1u << 21)
+
+/* Split vring layout (num=64, standard vring with 0x1000 alignment):
+ * desc[] occupies 64*16 = 0x400 bytes, avail[] at +0x400, used[] at
+ * the next 0x1000 boundary (+0x1000).  The idx halfword sits at
+ * offset +2 of each structure.  Used by the diagnostic dump only.
+ */
+
+#define RK3506_VR_AVAIL_IDX_OFF     (0x0400u + 2u)
+#define RK3506_VR_USED_IDX_OFF      (0x1000u + 2u)
+#define RK3506_VR_DESC_OFF          0x0000u
+
+/* Kick protocol (rpmsg_config.h / rpmsg_platform.h). */
+
+#define RK3506_LINK_ID              0x03u       /* SET_LINK_ID(0, 3)    */
+#define RK3506_RPMSG_MAGIC          0x524d5347u /* "RMSG"              */
+
+/* Shared window / vring parameters (M0 linker script +
+ * include/linux/rpmsg/rockchip_rpmsg.h).
+ */
+
+#define RK3506_SHMEM_BASE           0x03c00000u
+#define RK3506_VRING0_DA            (RK3506_SHMEM_BASE)
+#define RK3506_VRING1_DA            (RK3506_SHMEM_BASE + 0x8000u)
+#define RK3506_VRING_ALIGN          0x1000u
+#define RK3506_VRING_NUM            64u
+#define RK3506_CARVEOUT_DA          0x03d00000u
+#define RK3506_CARVEOUT_LEN         0x100000u
+
+/* Read-only readiness probe bounds.  Non-fatal: U-Boot releases the M0
+ * well before the kernel runs, so the bit is normally already set; the
+ * short poll only covers the worst-case scheduling gap.
+ */
+
+#define RK3506_READY_TIMEOUT_US     200000u   /* 200 ms */
+#define RK3506_READY_STEP_US        1000u
 
 /****************************************************************************
  * Private Types
  ****************************************************************************/
 
-struct rk3506_rptun_dev_s
+struct rk3506_rptun_priv_s
 {
-  struct rptun_dev_s    rptun;      /* Rptun device (MUST be first) */
-  spinlock_t            lock;       /* Protects mailbox tx */
-  rptun_callback_t      callback;   /* Upper half callback */
-  FAR void              *arg;       /* Callback arg */
+  /* The rptun device must be the first member. */
+
+  struct rptun_dev_s rptun;
+
+  /* Upper-half callback registered after start(). */
+
+  rptun_callback_t callback;
+  FAR void        *cbarg;
+
+  /* Serialises mailbox A2B writes.  The notify path also runs from IRQ
+   * context (rpmsg rx processing kicks the reclaim vq), so an irqsave
+   * spinlock is required.
+   */
+
+  spinlock_t       tx_lock;
+
+  /* The first DRIVER_OK kick is the peer's link-up handshake; only one
+   * is ever sent (rockchip_rpmsg_mbox.c rk_rpmsg_notify).
+   */
+
+  bool             handshake_sent;
 };
+
+/****************************************************************************
+ * Private Function Prototypes
+ ****************************************************************************/
+
+static FAR const char *rp_get_cpuname(FAR struct rptun_dev_s *dev);
+static FAR struct resource_table *
+rp_get_resource(FAR struct rptun_dev_s *dev);
+static bool rp_is_autostart(FAR struct rptun_dev_s *dev);
+static bool rp_is_master(FAR struct rptun_dev_s *dev);
+static int  rp_start(FAR struct rptun_dev_s *dev);
+static int  rp_stop(FAR struct rptun_dev_s *dev);
+static int  rp_notify(FAR struct rptun_dev_s *dev, uint32_t vqid);
+static int  rp_register_callback(FAR struct rptun_dev_s *dev,
+                                 rptun_callback_t callback, FAR void *arg);
+
+static int rk3506_mbox_isr(int irq, FAR void *context, FAR void *arg);
 
 /****************************************************************************
  * Private Data
  ****************************************************************************/
 
-/* Resource table: one rpmsg virtio device + one buffer-pool carveout.
- * The trace slot of struct rptun_rsc_s is intentionally unused (num = 2).
+/* Static resource table: one rpmsg vdev (NS + CPUNAME features) and one
+ * carveout for the master-side buffer pool.  The vring device addresses
+ * are fixed at the addresses the peer firmware was built for, so the
+ * rptun core leaves them untouched and the carveout heap never overlaps
+ * them or the peer's own pool at 0x03c10000.
  *
- * dfeatures: NS (endpoint announce; the MCU demo calls rpmsg_ns_announce)
- * and CPUNAME (mandatory: rpmsg_virtio_probe DEBUGASSERTs it and the
- * /dev/rpmsg/<name> node comes from remote_cpuname).  BUFSZ/BUFADDR/ACK/
- * PRIORITY are left off: buffers come from the carveout heap + the rvq
- * seeds, and the MCU demo has no NS-ACK handler.
- *
- * The MCU's tvq is vring0 = master rvq: seeded with 64 x 512 B buffers
- * by the master; the MCU borrows those to send.  vring1 = master svq.
+ * The table is mutable: the rptun/openamp core writes gfeatures and the
+ * vdev status back into it.  The M0 rpmsg-lite firmware never parses the
+ * resource table, so the cpuname config fields are A7-side bookkeeping
+ * and are pre-filled here (config space is not shared with the peer).
  */
 
-static const struct rptun_rsc_s g_rk3506_rptun_rsc =
+static struct rptun_rsc_s g_rk3506_rsc =
 {
   .rsc_tbl_hdr =
     {
@@ -218,19 +273,13 @@ static const struct rptun_rsc_s g_rk3506_rptun_rsc =
       offsetof(struct rptun_rsc_s, carveout),
     },
 
-  .log_trace =
-    {
-      .type = RSC_TRACE,
-      .da   = FW_RSC_U32_ADDR_ANY,
-    },
-
   .rpmsg_vdev =
     {
       .type          = RSC_VDEV,
       .id            = VIRTIO_ID_RPMSG,
-      .notifyid      = 0,
-      .dfeatures     = (1UL << VIRTIO_RPMSG_F_NS) |
-                       (1UL << VIRTIO_RPMSG_F_CPUNAME),
+      .notifyid      = RSC_NOTIFY_ID_ANY,
+      .dfeatures     = (1u << VIRTIO_RPMSG_F_NS) |
+                       (1u << VIRTIO_RPMSG_F_CPUNAME),
       .gfeatures     = 0,
       .config_len    = sizeof(struct fw_rsc_config),
       .status        = 0,
@@ -238,325 +287,300 @@ static const struct rptun_rsc_s g_rk3506_rptun_rsc =
       .reserved      = { 0, 0 },
     },
 
+  .config =
+    {
+      .host_cpuname   = "ap",
+      .remote_cpuname = "mcu",
+    },
+
   .rpmsg_vring0 =
     {
-      .da       = 0x03c00000,          /* master rvq = remote tvq */
-      .align    = 0x1000,
-      .num      = 64,
+      .da       = RK3506_VRING0_DA,
+      .align    = RK3506_VRING_ALIGN,
+      .num      = RK3506_VRING_NUM,
       .notifyid = 0,
     },
 
   .rpmsg_vring1 =
     {
-      .da       = 0x03c08000,          /* master svq = remote rvq */
-      .align    = 0x1000,
-      .num      = 64,
+      .da       = RK3506_VRING1_DA,
+      .align    = RK3506_VRING_ALIGN,
+      .num      = RK3506_VRING_NUM,
       .notifyid = 1,
-    },
-
-  .config =
-    {
-      .h2r_buf_size   = 512,
-      .r2h_buf_size   = 512,
-      .h2r_buf_addr   = 0,
-      .r2h_buf_addr   = 0,
-      .host_cpuname   = "ap",
-      .remote_cpuname = "mcu",
     },
 
   .carveout =
     {
-      .type     = RSC_CARVEOUT,
-      .da       = 0x03c10000,          /* buffer pool after the 2 vrings */
-      .pa       = 0x03c10000,
-      .len      = 0x1f0000,            /* up to 0x03e00000 */
-      .flags    = 0,
-      .reserved = 0,
-      .name     = "rsc-shm",
+      .type  = RSC_CARVEOUT,
+      .da    = RK3506_CARVEOUT_DA,
+      .pa    = RK3506_CARVEOUT_DA,
+      .len   = RK3506_CARVEOUT_LEN,
+      .flags = 0,
+      .name  = "vdev0buffer",
     },
 };
-
-static struct rk3506_rptun_dev_s g_rk3506_rptun =
-{
-  .rptun =
-    {
-      .ops = NULL,
-    },
-  .lock = SP_UNLOCKED,
-};
-
-/****************************************************************************
- * Private Function Prototypes
- *
- * (The ops table below references the implementations further down; make
- * the static functions visible to it instead of relying on implicit
- * declarations, which would shadow them with implicit externs.)
- ****************************************************************************/
-
-static FAR const char *rk3506_rptun_get_cpuname(FAR struct rptun_dev_s *dev);
-static FAR struct resource_table *
-rk3506_rptun_get_resource(FAR struct rptun_dev_s *dev);
-static bool rk3506_rptun_is_autostart(FAR struct rptun_dev_s *dev);
-static bool rk3506_rptun_is_master(FAR struct rptun_dev_s *dev);
-static int rk3506_rptun_config(FAR struct rptun_dev_s *dev, FAR void *data);
-static int rk3506_rptun_start(FAR struct rptun_dev_s *dev);
-static int rk3506_rptun_stop(FAR struct rptun_dev_s *dev);
-static int rk3506_rptun_notify(FAR struct rptun_dev_s *dev, uint32_t vqid);
-static int rk3506_rptun_register_callback(FAR struct rptun_dev_s *dev,
-                                          rptun_callback_t callback,
-                                          FAR void *arg);
 
 static const struct rptun_ops_s g_rk3506_rptun_ops =
 {
-  .get_cpuname       = rk3506_rptun_get_cpuname,
-  .get_firmware      = NULL,
-  .get_addrenv       = NULL,
-  .get_resource      = rk3506_rptun_get_resource,
-  .is_autostart      = rk3506_rptun_is_autostart,
-  .is_master         = rk3506_rptun_is_master,
-  .config            = rk3506_rptun_config,
-  .start             = rk3506_rptun_start,
-  .stop              = rk3506_rptun_stop,
-  .notify            = rk3506_rptun_notify,
-  .register_callback = rk3506_rptun_register_callback,
+  .get_cpuname       = rp_get_cpuname,
+  .get_resource      = rp_get_resource,
+  .is_autostart      = rp_is_autostart,
+  .is_master         = rp_is_master,
+  .start             = rp_start,
+  .stop              = rp_stop,
+  .notify            = rp_notify,
+  .register_callback = rp_register_callback,
 };
+
+static struct rk3506_rptun_priv_s g_rk3506_rptun;
 
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
 
 /****************************************************************************
- * Name: rk3506_mbox_getreg / putreg helpers
+ * Name: rk3506_mcu_clock_enable
+ *
+ * Description:
+ *   Ungate the clocks the M0 + the A7-side kick path need.  U-Boot's
+ *   fit_standalone_release() opens only HCLK_M0/SWCLKTCK_M0, so the M0
+ *   time-base clocks (STCLK_M0, PCLK_TIMER, CLK_TIMER0_CH5) and the
+ *   mailbox/intmux pclocks MUST be opened here or the peer dies in
+ *   HAL_DelayMs() right after link-up and the mailbox block has no pclk.
+ *   All writes are HIWORD data=0 (SET_TO_DISABLE polarity -> enable).
+ *
  ****************************************************************************/
 
-static inline uint32_t rk3506_mbox_getreg(uintptr_t base, unsigned int off)
+static void rk3506_mcu_clock_enable(void)
 {
-  return getreg32(base + off);
-}
-
-static inline void rk3506_mbox_putreg(uintptr_t base, unsigned int off,
-                                      uint32_t val)
-{
-  putreg32(val, base + off);
+  rk3506_cru_gate(5,  RK3506_GATE_CON5_M0,        true);
+  rk3506_cru_gate(6,  RK3506_GATE_CON6_M0,        true);
+  rk3506_cru_gate(8,  RK3506_GATE_CON8_STCLK_M0,  true);
+  rk3506_cru_gate(11, RK3506_GATE_CON11_UART1,    true);
 }
 
 /****************************************************************************
- * Name: rk3506_mbox_init
+ * Name: rk3506_m0_wait_ready
  *
  * Description:
- *   A-side clocks + mailbox setup for the rpmsg link:
- *     - enable PCLK_MAILBOX + PCLK_INTMUX (CON(6) bits 13,14)
- *     - ensure the six AMP-core clocks are on (Linux rockchip_amp role)
- *     - mailbox3: clear stale status on both directions, set the A2B
- *       trigger method to 1 (write CMD then DATA) without disturbing the
- *       M0's own A2B_INTEN bit0
- *     - mailbox0: clear stale status; the rx interrupt enable happens in
- *       register_callback()
+ *   READ-ONLY probe of the peer's rpmsg readiness.  The M0 sets INTMUX
+ *   group3 bit21 as the last step of its rpmsg init; this function polls
+ *   that bit for up to RK3506_READY_TIMEOUT_US so the link-up kick is not
+ *   sent before the peer armed its receive interrupt.  It never writes
+ *   INTMUX and never fails: the M0 is released by U-Boot, not by us.
  *
  ****************************************************************************/
 
-static void rk3506_mbox_init(void)
+static void rk3506_m0_wait_ready(void)
 {
-  /* A7's own access clocks. */
+  unsigned int waited;
 
-  putreg32(RK3506_GATE_EN_MAILBOX_INTMUX, RK3506_CRU_GATE_CON(6));
-
-  /* AMP-core clocks (u-boot already did CON5; the rest are the Linux
-   * rockchip-amp clock set). */
-
-  putreg32(RK3506_GATE_CON5_M0, RK3506_CRU_GATE_CON(5));
-  putreg32(RK3506_GATE_EN_TIMER, RK3506_CRU_GATE_CON(6));
-  putreg32(RK3506_GATE_EN_STCLK, RK3506_CRU_GATE_CON(8));
-  putreg32(RK3506_GATE_EN_UART4, RK3506_CRU_GATE_CON(11));
-
-  /* mailbox3: clear stale status on both directions; set the A2B trigger
-   * method to 1 without disturbing the M0's A2B_INTEN bit0. */
-
-  rk3506_mbox_putreg(RK3506_MBOX3_BASE, RK3506_MBOX_B2A_STATUS,
-                     RK3506_MBOX_B2A_MSG_PEND | RK3506_MBOX_B2A_TX_DONE);
-  rk3506_mbox_putreg(RK3506_MBOX3_BASE, RK3506_MBOX_A2B_STATUS,
-                     RK3506_MBOX_A2B_MSG_PEND);
-  rk3506_mbox_putreg(RK3506_MBOX3_BASE, RK3506_MBOX_A2B_INTEN,
-                     RK3506_MBOX_WE(8) | (1u << 8));
-
-  /* mailbox0: clear stale status; the rx interrupt enable happens in
-   * register_callback(). */
-
-  rk3506_mbox_putreg(RK3506_MBOX0_BASE, RK3506_MBOX_B2A_STATUS,
-                     RK3506_MBOX_B2A_MSG_PEND | RK3506_MBOX_B2A_TX_DONE);
-}
-
-/****************************************************************************
- * Name: rk3506_mbox_send
- *
- * Description:
- *   Send one kick message to the MCU over mailbox3 A2B.  The previous
- *   message must have been consumed by the MCU (A2B_STATUS bit0 cleared
- *   from its side) before a new one is accepted; bounded-wait for that
- *   under the spin lock so concurrent notify() calls cannot interleave.
- *
- ****************************************************************************/
-
-static int rk3506_mbox_send(uint32_t cmd, uint32_t data)
-{
-  irqstate_t flags;
-  uint32_t retry;
-  int ret = -ETIMEDOUT;
-
-  flags = spin_lock_irqsave(&g_rk3506_rptun.lock);
-
-  for (retry = 0; retry < RK3506_NOTIFY_SPIN_MAX; retry++)
+  for (waited = 0;
+       (getreg32(RK3506_INTMUX_EN_GRP3) & RK3506_INTMUX_MBOX3_BIT) == 0;
+       waited += RK3506_READY_STEP_US)
     {
-      if ((rk3506_mbox_getreg(RK3506_MBOX3_BASE, RK3506_MBOX_A2B_STATUS) &
-           RK3506_MBOX_A2B_MSG_PEND) == 0)
+      if (waited >= RK3506_READY_TIMEOUT_US)
         {
-          rk3506_mbox_putreg(RK3506_MBOX3_BASE, RK3506_MBOX_A2B_CMD, cmd);
-          rk3506_mbox_putreg(RK3506_MBOX3_BASE, RK3506_MBOX_A2B_DATA, data);
-          ret = OK;
-          break;
+          return;
         }
+
+      nxsig_usleep(RK3506_READY_STEP_US);
     }
+}
 
-  spin_unlock_irqrestore(&g_rk3506_rptun.lock, flags);
+/****************************************************************************
+ * Name: rk3506_mbox_kick
+ *
+ * Description:
+ *   Post one kick to the M0 through mailbox3 A2B (CMD/DAT order per
+ *   HAL MBOX_ChanSendMsg).  A still-set A2B status means the peer has
+ *   not consumed the previous kick: the message is dropped, exactly as
+ *   rockchip_rpmsg_mbox.c does on EBUSY - the peer reprocesses the
+ *   vring state when it handles the previous kick.
+ *
+ ****************************************************************************/
 
-  if (ret < 0)
+static void rk3506_mbox_kick(uint32_t reason)
+{
+  FAR struct rk3506_rptun_priv_s *priv = &g_rk3506_rptun;
+  uint32_t status;
+  irqstate_t flags = spin_lock_irqsave(&priv->tx_lock);
+
+  status = getreg32(RK3506_MBOX3_BASE + MBOX_A2B_STATUS);
+  if ((status & MBOX_CHAN0) == 0)
     {
-      _err("ERROR: mailbox3 A2B busy, kick dropped (cmd=0x%02lx)\n",
-           (unsigned long)cmd);
+      putreg32(RK3506_LINK_ID, RK3506_MBOX3_BASE + MBOX_A2B_CMD);
+      putreg32(RK3506_RPMSG_MAGIC, RK3506_MBOX3_BASE + MBOX_A2B_DAT);
     }
 
-  return ret;
+  spin_unlock_irqrestore(&priv->tx_lock, flags);
 }
 
 /****************************************************************************
  * Name: rk3506_mbox_isr
  *
  * Description:
- *   Common ISR for mailbox0 (MCU tvq kicks) and mailbox3 (MCU rvq kicks).
- *   Reads and w1c-clears the B2A message status, then dispatches
- *   RPTUN_NOTIFY_ALL to the upper half (rproc_virtio_notified() walks all
- *   vrings and only fires the ones with pending used entries).
+ *   B2A interrupt handler for mailbox0 (vring0) and mailbox3 (vring1).
+ *   Status bits are write-1-to-clear and the IRQ is level high.
  *
  ****************************************************************************/
 
 static int rk3506_mbox_isr(int irq, FAR void *context, FAR void *arg)
 {
-  FAR struct rk3506_rptun_dev_s *priv = &g_rk3506_rptun;
+  FAR struct rk3506_rptun_priv_s *priv = &g_rk3506_rptun;
   uintptr_t base = (uintptr_t)arg;
-  uint32_t status;
-  uint32_t cmd;
-  uint32_t data;
+  uint32_t vqid;
 
-  status = rk3506_mbox_getreg(base, RK3506_MBOX_B2A_STATUS);
+  (void)irq;
+  (void)context;
 
-  if ((status & RK3506_MBOX_B2A_MSG_PEND) != 0)
+  if ((getreg32(base + MBOX_B2A_STATUS) & MBOX_CHAN0) == 0)
     {
-      cmd  = rk3506_mbox_getreg(base, RK3506_MBOX_B2A_CMD);
-      data = rk3506_mbox_getreg(base, RK3506_MBOX_B2A_DATA);
-
-      /* W1C the message-pending bit: this is also the "consumed" signal
-       * for the MCU side. */
-
-      rk3506_mbox_putreg(base, RK3506_MBOX_B2A_STATUS,
-                         RK3506_MBOX_B2A_MSG_PEND);
-
-      UNUSED(cmd);
-      UNUSED(data);
-
-      if (priv->callback != NULL)
-        {
-          priv->callback(priv->arg, RPTUN_NOTIFY_ALL);
-        }
+      return OK;
     }
 
-  if ((status & RK3506_MBOX_B2A_TX_DONE) != 0)
-    {
-      /* The MCU acknowledged the previous message; nothing to do since
-       * the notify path busy-waits on A2B_STATUS instead. */
+  vqid = (base == RK3506_MBOX3_BASE) ? 1u : 0u;
 
-      rk3506_mbox_putreg(base, RK3506_MBOX_B2A_STATUS,
-                         RK3506_MBOX_B2A_TX_DONE);
+  putreg32(MBOX_CHAN0, base + MBOX_B2A_STATUS);
+
+  if (priv->callback != NULL)
+    {
+      priv->callback(priv->cbarg, vqid);
     }
 
   return OK;
 }
 
 /****************************************************************************
- * Name: rptun op implementations
+ * Rptun ops
  ****************************************************************************/
 
-static FAR const char *rk3506_rptun_get_cpuname(FAR struct rptun_dev_s *dev)
+static FAR const char *rp_get_cpuname(FAR struct rptun_dev_s *dev)
 {
+  (void)dev;
   return "mcu";
 }
 
 static FAR struct resource_table *
-rk3506_rptun_get_resource(FAR struct rptun_dev_s *dev)
+rp_get_resource(FAR struct rptun_dev_s *dev)
 {
-  return (FAR struct resource_table *)&g_rk3506_rptun_rsc;
+  (void)dev;
+  return (FAR struct resource_table *)&g_rk3506_rsc;
 }
 
-static bool rk3506_rptun_is_autostart(FAR struct rptun_dev_s *dev)
+static bool rp_is_autostart(FAR struct rptun_dev_s *dev)
 {
+  (void)dev;
   return true;
 }
 
-static bool rk3506_rptun_is_master(FAR struct rptun_dev_s *dev)
+static bool rp_is_master(FAR struct rptun_dev_s *dev)
 {
+  (void)dev;
   return true;
 }
 
-static int rk3506_rptun_config(FAR struct rptun_dev_s *dev, FAR void *data)
+static int rp_start(FAR struct rptun_dev_s *dev)
 {
-  rk3506_mbox_init();
+  FAR struct rk3506_rptun_priv_s *priv =
+    (FAR struct rk3506_rptun_priv_s *)dev;
+
+  priv->handshake_sent = false;
+
+  /* The M0 was loaded and released by U-Boot.  Open the time-base +
+   * mailbox/intmux clocks it needs (U-Boot opened only HCLK_M0/
+   * SWCLKTCK), then clear any stale A2B status so the first kick raises
+   * a fresh level into the armed receiver.
+   */
+
+  rk3506_mcu_clock_enable();
+  putreg32(MBOX_CHAN0, RK3506_MBOX3_BASE + MBOX_A2B_STATUS);
+
+  /* Read-only readiness probe (non-fatal): wait for the M0 to have armed
+   * its mailbox3 receive interrupt before the link-up kick.
+   */
+
+  rk3506_m0_wait_ready();
+
   return OK;
 }
 
-static int rk3506_rptun_start(FAR struct rptun_dev_s *dev)
+static int rp_stop(FAR struct rptun_dev_s *dev)
 {
-  /* The M0 was loaded and released by U-Boot (amp partition); nothing to
-   * start here. */
+  /* The M0 life cycle belongs to U-Boot; there is nothing to stop here. */
+
+  (void)dev;
+  return OK;
+}
+
+static int rp_notify(FAR struct rptun_dev_s *dev, uint32_t vqid)
+{
+  FAR struct rk3506_rptun_priv_s *priv =
+    (FAR struct rk3506_rptun_priv_s *)dev;
+
+  /* Peer protocol (rockchip_rpmsg_mbox.c rk_rpmsg_notify / M0
+   * rpmsg_remote_cb first_notify):
+   *   - the peer spins waiting for its FIRST kick, which is the link-up
+   *     handshake and is forced onto its tvq;
+   *   - after that, only vring1 (master svq, consumed buffers) kicks
+   *     are posted; further vring0 kicks are dropped (no tx-done);
+   *
+   * openamp emits notifyid = RSC_NOTIFY_ID_ANY twice before the link is
+   * up: once when negotiating features (vdev status still 0, vring0 not
+   * seeded yet) and once when setting DRIVER_OK (status 0x04).  Only the
+   * latter is the Linux "first notify" handshake, so gate on the vdev
+   * status byte in the resource table.
+   */
+
+  if (vqid == 1u)
+    {
+      rk3506_mbox_kick(1);
+    }
+  else if (!priv->handshake_sent &&
+           (g_rk3506_rsc.rpmsg_vdev.status &
+            VIRTIO_CONFIG_STATUS_DRIVER_OK) != 0)
+    {
+      /* openamp emits vdev-level notifyid (RSC_NOTIFY_ID_ANY) when the
+       * DRIVER_OK status is set; the M0 treats its first kick as the
+       * link-up event (forced onto its tvq).
+       */
+
+      priv->handshake_sent = true;
+      rk3506_mbox_kick(0);
+    }
+  else
+    {
+      /* Feature-negotiation ANY while status != DRIVER_OK, and every
+       * later vring0 notification, are dropped like the Linux driver.
+       */
+    }
 
   return OK;
 }
 
-static int rk3506_rptun_stop(FAR struct rptun_dev_s *dev)
+static int rp_register_callback(FAR struct rptun_dev_s *dev,
+                                rptun_callback_t callback, FAR void *arg)
 {
-  /* The M0 keeps running; it is out of NuttX's reset domain. */
-
-  return OK;
-}
-
-static int rk3506_rptun_notify(FAR struct rptun_dev_s *dev, uint32_t vqid)
-{
-  /* All A7 -> MCU kicks go over mailbox3 A2B with the link id / magic
-   * pair, regardless of the vring id; the MCU's rpmsg-lite remote
-   * callback treats the first notification as the link-up handshake and
-   * the later ones as rvq events. */
-
-  return rk3506_mbox_send(RK3506_RPMSG_LINK_ID, RK3506_RPMSG_MAGIC);
-}
-
-static int rk3506_rptun_register_callback(FAR struct rptun_dev_s *dev,
-                                          rptun_callback_t callback,
-                                          FAR void *arg)
-{
-  FAR struct rk3506_rptun_dev_s *priv = &g_rk3506_rptun;
+  FAR struct rk3506_rptun_priv_s *priv =
+    (FAR struct rk3506_rptun_priv_s *)dev;
   int ret;
 
-  priv->callback = callback;
-  priv->arg      = arg;
-
-  /* Enable the rx interrupts now that the upper half callback is in
-   * place: mailbox0 SPI138 (MCU tvq kicks) and mailbox3 SPI141 (MCU rvq
-   * kicks).  B2A_INTEN bit0 = AP inbound message interrupt (hal_mbox.c
-   * MBOX_ChanEnable writes WE|1). */
+  if (callback == NULL)
+    {
+      up_disable_irq(RK3506_IRQ_MAILBOX0);
+      up_disable_irq(RK3506_IRQ_MAILBOX3);
+      irq_detach(RK3506_IRQ_MAILBOX0);
+      irq_detach(RK3506_IRQ_MAILBOX3);
+      priv->callback = NULL;
+      priv->cbarg    = NULL;
+      return OK;
+    }
 
   ret = irq_attach(RK3506_IRQ_MAILBOX0, rk3506_mbox_isr,
                    (FAR void *)RK3506_MBOX0_BASE);
   if (ret < 0)
     {
-      _err("ERROR: irq_attach mailbox0 failed: %d\n", ret);
+      _err("rptun: attach mbox0 irq failed: %d\n", ret);
       return ret;
     }
 
@@ -564,18 +588,27 @@ static int rk3506_rptun_register_callback(FAR struct rptun_dev_s *dev,
                    (FAR void *)RK3506_MBOX3_BASE);
   if (ret < 0)
     {
-      _err("ERROR: irq_attach mailbox3 failed: %d\n", ret);
+      _err("rptun: attach mbox3 irq failed: %d\n", ret);
+      irq_detach(RK3506_IRQ_MAILBOX0);
       return ret;
     }
 
-  rk3506_mbox_putreg(RK3506_MBOX0_BASE, RK3506_MBOX_B2A_INTEN,
-                     RK3506_MBOX_WE(0) | RK3506_MBOX_B2A_MSG_PEND);
-  rk3506_mbox_putreg(RK3506_MBOX3_BASE, RK3506_MBOX_B2A_INTEN,
-                     RK3506_MBOX_WE(0) | RK3506_MBOX_B2A_MSG_PEND);
+  priv->callback = callback;
+  priv->cbarg    = arg;
+
+  /* Clear stale status, then arm the B2A receive interrupts (write
+   * enable in the high half-word, enable bit0 low).
+   */
+
+  putreg32(MBOX_CHAN0, RK3506_MBOX0_BASE + MBOX_B2A_STATUS);
+  putreg32(MBOX_CHAN0, RK3506_MBOX3_BASE + MBOX_B2A_STATUS);
+  putreg32(MBOX_INTEN_WE | MBOX_CHAN0,
+           RK3506_MBOX0_BASE + MBOX_B2A_INTEN);
+  putreg32(MBOX_INTEN_WE | MBOX_CHAN0,
+           RK3506_MBOX3_BASE + MBOX_B2A_INTEN);
 
   up_enable_irq(RK3506_IRQ_MAILBOX0);
   up_enable_irq(RK3506_IRQ_MAILBOX3);
-
   return OK;
 }
 
@@ -585,30 +618,20 @@ static int rk3506_rptun_register_callback(FAR struct rptun_dev_s *dev,
 
 /****************************************************************************
  * Name: rk3506_rptun_initialize
- *
- * Description:
- *   Register the RK3506 bus-M0 rptun device.  Called from board bringup;
- *   with is_autostart = true the rptun core immediately spawns its start
- *   thread and brings up the rpmsg virtio device (/dev/rpmsg/mcu once the
- *   virtio rpmsg driver probes it).  The M0 itself is already running,
- *   loaded from the amp partition by U-Boot.
- *
- * Returned Value:
- *   Zero on success; a negated errno value on failure.
- *
  ****************************************************************************/
 
 int rk3506_rptun_initialize(void)
 {
+  FAR struct rk3506_rptun_priv_s *priv = &g_rk3506_rptun;
   int ret;
 
-  g_rk3506_rptun.rptun.ops = &g_rk3506_rptun_ops;
+  memset(priv, 0, sizeof(*priv));
+  priv->rptun.ops = &g_rk3506_rptun_ops;
 
-  ret = rptun_initialize(&g_rk3506_rptun.rptun);
+  ret = rptun_initialize(&priv->rptun);
   if (ret < 0)
     {
-      _err("ERROR: rptun_initialize failed: %d\n", ret);
-      return ret;
+      _err("rptun: rptun_initialize failed: %d\n", ret);
     }
 
   return ret;

@@ -128,6 +128,7 @@ struct rk3506_ota_dev_s
   /* Streaming update state */
 
   bool     updating;                /* UPDATE_BEGIN done */
+  bool     write_failed;            /* a page program failed: update dead */
   uint8_t  target;                  /* slot selected for write()/read() */
   uint32_t cursor;                  /* bytes programmed so far (page aligned) */
   uint16_t pageoff;                 /* fill level of the page buffer */
@@ -282,6 +283,18 @@ static void ota_meta_defaults(FAR struct avb_ab_data_s *meta)
  *
  ****************************************************************************/
 
+/* On the raw SPI NAND, bread() returns -EUCLEAN when the ECC engine had to
+ * correct bitflips; the destination buffer still holds the valid page data
+ * (see rk3506_spinand_fspi.c and drivers/mtd/dhara.c).  Such a read must be
+ * treated as success -- an erased/blank page reads back as 0xFF anyway.
+ * Only -EBADMSG (uncorrectable) and bus errors are real failures.
+ */
+
+static inline bool ota_bread_ok(ssize_t n)
+{
+  return n >= 0 || n == -EUCLEAN;
+}
+
 static int ota_meta_read(FAR struct rk3506_ota_dev_s *priv,
                          FAR struct avb_ab_data_s *meta)
 {
@@ -300,7 +313,7 @@ static int ota_meta_read(FAR struct rk3506_ota_dev_s *priv,
     }
 
   n = priv->misc->bread(priv->misc, page, 1, scratch);
-  if (n < 0)
+  if (!ota_bread_ok(n))
     {
       return (int)n;
     }
@@ -334,7 +347,7 @@ static int ota_meta_write(FAR struct rk3506_ota_dev_s *priv,
   /* Preserve the rest of the pages (BCB at offset 0 lives in page 0) */
 
   n = priv->misc->bread(priv->misc, firstpage, npages, pages);
-  if (n < 0)
+  if (!ota_bread_ok(n))
     {
       kmm_free(pages);
       return (int)n;
@@ -414,10 +427,14 @@ static bool ota_slot_fit_ok(FAR struct rk3506_ota_dev_s *priv, int slot)
   ssize_t n;
 
   n = priv->slot[slot]->bread(priv->slot[slot], 0, 1, priv->rdbuf);
-  if (n < 0)
+  if (!ota_bread_ok(n))
     {
       return false;
     }
+
+  /* -EUCLEAN leaves valid data in rdbuf; an erased slot reads 0xFF and so
+   * simply fails the FIT-magic test below.
+   */
 
   memcpy(hdr, priv->rdbuf, 4);
   magic = ((uint32_t)hdr[0] << 24) | ((uint32_t)hdr[1] << 16) |
@@ -469,6 +486,13 @@ static int ota_page_program(FAR struct rk3506_ota_dev_s *priv)
                                        page, 1, priv->pagebuf);
   if (n < 0)
     {
+      /* Leave pageoff == pagesize: the update is now dead.  Marking it
+       * failed makes ota_write() fail fast (avoids the chunk==0 spin) and
+       * keeps ota_pad_program()/COMMIT from touching the staging buffer
+       * past its one-page allocation.
+       */
+
+      priv->write_failed = true;
       return (int)n;
     }
 
@@ -488,6 +512,18 @@ static int ota_page_program(FAR struct rk3506_ota_dev_s *priv)
 
 static int ota_pad_program(FAR struct rk3506_ota_dev_s *priv)
 {
+  /* Pad only a genuine partial page.  pageoff == 0 means nothing is
+   * pending; pageoff == pagesize is a full page whose program either
+   * already succeeded (pageoff would be 0) or failed.  Indexing
+   * pagebuf at pageoff in those cases would run past the one-page
+   * staging allocation.
+   */
+
+  if (priv->pageoff == 0 || priv->pageoff >= priv->pagesize)
+    {
+      return OK;
+    }
+
   while (priv->pageoff != 0)
     {
       priv->pagebuf[priv->pageoff++] = 0xff;
@@ -580,10 +616,12 @@ static ssize_t ota_read(FAR struct file *filep, FAR char *buffer,
 
       n = priv->slot[priv->target]->bread(priv->slot[priv->target],
                                           page, 1, priv->rdbuf);
-      if (n < 0)
+      if (n < 0 && n != -EUCLEAN)
         {
           return done > 0 ? (ssize_t)done : (ssize_t)n;
         }
+
+      /* -EUCLEAN: corrected bitflips, rdbuf holds the valid page. */
 
       memcpy(buffer + done, priv->rdbuf + inpage, chunk);
       done += chunk;
@@ -610,6 +648,11 @@ static ssize_t ota_write(FAR struct file *filep, FAR const char *buffer,
   if (!priv->updating)
     {
       return -EPERM;   /* must call OTAIOC_UPDATE_BEGIN first */
+    }
+
+  if (priv->write_failed)
+    {
+      return -EIO;    /* a previous page program failed; update is dead */
     }
 
   if ((off_t)priv->cursor + buflen >
@@ -947,6 +990,7 @@ static int ota_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
             }
 
           priv->updating = true;
+          priv->write_failed = false;
           priv->target   = (uint8_t)slotarg;
           priv->cursor   = 0;
           priv->pageoff  = 0;
@@ -961,6 +1005,17 @@ static int ota_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
           if (!priv->updating)
             {
               ret = -EPERM;
+              break;
+            }
+
+          if (priv->write_failed)
+            {
+              /* A page program failed mid-update; the slot is incomplete
+               * and must never be marked bootable.
+               */
+
+              priv->updating = false;
+              ret = -EIO;
               break;
             }
 
@@ -1061,13 +1116,13 @@ int rk3506_ota_initialize(FAR struct mtd_dev_s *mtd)
       return ret;
     }
 
-  syslog(LOG_INFO, "OTA: /dev/ota ready (misc@%luK boot_a@%luK "
-         "boot_b@%luK, %lu x %luK blocks)\n",
-         (unsigned long)(OTA_MISC_START_SECT * 512 / 1024),
-         (unsigned long)(OTA_BOOTA_START_SECT * 512 / 1024),
-         (unsigned long)(OTA_BOOTB_START_SECT * 512 / 1024),
-         (unsigned long)(priv->slot_pages * priv->pagesize / priv->erasesize),
-         (unsigned long)(priv->erasesize / 1024));
+  finfo("OTA: /dev/ota ready (misc@%luK boot_a@%luK "
+        "boot_b@%luK, %lu x %luK blocks)\n",
+        (unsigned long)(OTA_MISC_START_SECT * 512 / 1024),
+        (unsigned long)(OTA_BOOTA_START_SECT * 512 / 1024),
+        (unsigned long)(OTA_BOOTB_START_SECT * 512 / 1024),
+        (unsigned long)(priv->slot_pages * priv->pagesize / priv->erasesize),
+        (unsigned long)(priv->erasesize / 1024));
   return OK;
 }
 

@@ -16,6 +16,9 @@
 #ifndef __VENDOR_ROCKCHIP_CHIPS_RK3506_RK3506_GMAC0_H
 #define __VENDOR_ROCKCHIP_CHIPS_RK3506_RK3506_GMAC0_H
 
+#include <stdint.h>
+#include <nuttx/compiler.h>
+
 /****************************************************************************
  * Public Function Prototypes
  ****************************************************************************/
@@ -37,6 +40,14 @@ extern "C"
  */
 
 int rk3506_gmac0_initialize(void);
+
+/* Copy the eth0 cumulative byte counters (NET_STATISTICS).  Flat-build
+ * helper for board apps (hd_ui network rate card): the counters live
+ * in the driver's private net_driver_s and userspace has no standard
+ * ioctl path to them.  Returns -ENODEV when eth0 is not registered.
+ */
+
+int rk3506_gmac0_get_stats(FAR uint64_t *rx_bytes, FAR uint64_t *tx_bytes);
 
 #undef EXTERN
 #ifdef __cplusplus

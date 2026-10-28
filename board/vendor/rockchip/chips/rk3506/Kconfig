@@ -7,6 +7,34 @@ if ARCH_CHIP_RK3506
 
 menu "Rockchip RK3506 Peripheral Selection"
 
+config RK3506_PINCTRL
+	bool "RK3506 pin control (IOMUX / RM_IO / pull / drive)"
+	default y
+	---help---
+		Unified pin-control for the RK3506G2.  Provides
+		rk3506_pinctrl_set_mux() / RM_IO routing (GRF_PMU matrix) /
+		rk3506_pinctrl_set_pull() / rk3506_pinctrl_set_drive() /
+		rk3506_pinctrl_set_schmitt(), with register values taken
+		verbatim from the SDK pinctrl driver.  This is the single
+		entry point every peripheral uses to configure its pins;
+		it replaces the scattered hard-coded pokes in
+		rk3506_iomux.c and friends.  Always enabled.
+
+config RK3506_GPIO
+	bool "RK3506 GPIO controller (ioexpander lower-half)"
+	default n
+	depends on IOEXPANDER
+	select IOEXPANDER_INT_ENABLE
+	---help---
+		GPIO v2.2 controller driver for the RK3506G2.  Registers
+		one ioexpander lower-half device per GPIO bank (5 banks x
+		32 pins) so board code can create /dev/gpioN nodes via
+		gpio_lower_half() (the R528-style model), and provides
+		the chip-level rk3506_gpio_config/write/read helpers used
+		by on-board drivers (LCD reset/DC, PHY reset, ...).
+		Interrupt support (per-pin trigger + dispatch through the
+		bank's combined GIC line) is included.
+
 config RK3506_UART0
 	bool "UART 0"
 	default y
@@ -30,6 +58,8 @@ config RK3506_UART2
 	select ARCH_HAVE_SERIAL_TERMIOS
 	---help---
 		Enable UART2 (base 0xFF0C0000, IRQ 68).
+		SDK dts: RM_IO0 (RX), RM_IO2 (TX) -> GPIO0_A0/A2.
+		Used for M0 debug console.
 
 config RK3506_UART3
 	bool "UART 3"
@@ -38,30 +68,11 @@ config RK3506_UART3
 	select ARCH_HAVE_SERIAL_TERMIOS
 	---help---
 		Enable UART3 (base 0xFF0D0000, IRQ 69).
+		SDK dts: RM_IO15 (RX), RM_IO14 (TX) -> GPIO0_B7/B6.
 
-config RK3506_UART4
-	bool "UART 4"
-	default n
-	select UART4_SERIALDRIVER
-	select ARCH_HAVE_SERIAL_TERMIOS
-	---help---
-		Enable UART4 (base 0xFF0E0000, IRQ 70).
+comment "UART4-UART5 exist in hardware but are not yet implemented in rk3506_serial.c"
 
-config RK3506_UART5
-	bool "UART 5"
-	default n
-	select UART5_SERIALDRIVER
-	select ARCH_HAVE_SERIAL_TERMIOS
-	---help---
-		Enable UART5 (base 0xFF4E0000, IRQ 71).
-
-config RK3506_VOP
-	bool "RK3506 VOP Framebuffer"
-	default n
-	depends on VIDEO_FB
-	---help---
-		Enable the RK3506 VOP (Video Output Processor) framebuffer driver.
-		Provides /dev/fb0 with 480x854 RGB565 output via the RGB interface.
+comment "Do not add RK3506_UART4..5 until the driver grows per-port instances for them"
 
 config RK3506_I2C
 	bool "RK3506 I2C Bus Controller"
@@ -185,19 +196,43 @@ config RK3506_GMAC0
 	bool "RK3506 GMAC0 (Synopsys DWMAC 4.20a) Ethernet"
 	default n
 	select ARCH_PHY_INTERRUPT
+	select ARCH_HAVE_NETDEV_STATISTICS
 	---help---
 		Enable the RK3506 GMAC0 Ethernet netdev ("eth0"; snps,dwmac-4.20a
 		@0xFF4C8000, IRQ66).  All hardware sequences come from the Linux
 		SDK GMAC HAL ported verbatim (rk3506_gmac_hal.c: hal_gmac.c +
 		hal_gmac_rk3506.c) behind a NuttX net_driver_s shell (dm90x0
-		pattern).  Covers CRU clocks, RMII IOMUX, GPIO4_A2 PHY reset
-		(HD-RK3506-EVM board doc), MDIO/PHY autoneg (YT8512B @ addr 0),
-		DMA descriptor rings and the MAC IRQ.  The interface is brought
-		up by NETINIT + DHCPC.
+		pattern).  Covers CRU clocks, RMII IOMUX, the PHY reset GPIO
+		(configured below, default GPIO0_B3 per the HD board's active
+		vanxoak-hd-rk3506-evm-v1.dtsi), MDIO/PHY autoneg (YT8512B @
+		addr 0), DMA descriptor rings
+		and the MAC IRQ.  The interface is brought up by NETINIT + DHCPC.
 		ARCH_PHY_INTERRUPT enables the NuttX PHY-event plumbing: the
 		driver implements SIOCMIINOTIFY/SIOCGMIIPHY/SIOCGMIIREG so the
 		netinit link monitor (CONFIG_NETINIT_MONITOR) can track and
 		react to link transitions.
+
+config RK3506_GMAC0_PHY_RESET_BANK
+	int "PHY reset GPIO bank (0..4)"
+	default 0
+	range 0 4
+	depends on RK3506_GMAC0
+	---help---
+		GPIO bank of the PHY hardware-reset pin (active low).
+		HD-RK3506-EVM: vanxoak-hd-rk3506-evm-v1.dtsi sets
+		snps,reset-gpio = <&gpio0 RK_PB3 GPIO_ACTIVE_LOW> (the
+		<&gpio4 RK_PA2> line is commented out - that is the
+		Rockchip in-house EVM wiring), so the default is
+		bank 0 / pin 11.  Override for carriers wired differently.
+
+config RK3506_GMAC0_PHY_RESET_PIN
+	int "PHY reset GPIO pin within the bank (0..31)"
+	default 11
+	range 0 31
+	depends on RK3506_GMAC0
+	---help---
+		Pin number of the PHY hardware-reset pin inside
+		RK3506_GMAC0_PHY_RESET_BANK (see that option).
 
 config RK3506_GMAC0_EXTCLK
 	bool "GMAC0: RMII REF_CLK driven by the PHY (SELET_IO)"
@@ -215,19 +250,58 @@ config RK3506_GMAC0_EXTCLK
 		Wrong direction shows up as every received frame failing the
 		FCS check (MMC RX CRC errors), or no link at all.
 
-endmenu # "Rockchip RK3506 Peripheral Selection"
-
-endif # ARCH_CHIP_RK3506
-
 config RK3506_PWM
-	bool "RK3506 PWM0 channel 2 on RM_IO10 (/dev/pwm0)"
+	bool "RK3506 PWM0 channel 2 (/dev/pwm0)"
 	default n
 	depends on PWM
 	---help---
 		Register /dev/pwm0 backed by the pwm0_4ch_2 channel block
-		(0xFF932000, 100 MHz time base), with RM_IO10 (GPIO0_B2)
-		routed to PWM0_CH2 (RM_IO function 47).  Register sequence
-		ported from the SDK hal_pwm.c continuous mode.
+		(0xFF932000, 100 MHz time base).  The output pad is routed
+		through the RM_IO matrix (see the RK3506_PWM_* options below;
+		the default is RM_IO12 = GPIO0_B4, J9-29, DTS function 47).
+		Register sequence ported from the SDK hal_pwm.c continuous
+		mode.  NOTE: on the HD-RK3506-EVM that pad is the NV3007
+		backlight and hd_rk3506_nv3007.c drives it as a plain GPIO
+		output, so this option is off there -- enabling it would
+		re-mux the pad away from the backlight.
+
+config RK3506_PWM_BANK
+	int "PWM output GPIO bank"
+	default 0
+	range 0 4
+	depends on RK3506_PWM
+	---help---
+		GPIO bank of the pad routed to the PWM channel.  The RK3506
+		PWM0_CH2 signal only reaches the outside through the RM_IO
+		matrix, which on this chip serves bank 0 pads (RM_IO0..23 =
+		GPIO0_A0..C7).  The default bank 0 / pin 12 (GPIO0_B4 =
+		RM_IO12) is J9-29 on the HD-RK3506-EVM, i.e. the NV3007
+		backlight pad -- which is why RK3506_PWM is off on that board.
+
+config RK3506_PWM_PIN
+	int "PWM output GPIO pin within the bank (0..31)"
+	default 12
+	range 0 31
+	depends on RK3506_PWM
+	---help---
+		Pin number of the PWM output pad inside RK3506_PWM_BANK,
+		counted from A0=0 (A0..A7=0..7, B0..B7=8..15, ...).  The
+		NV3007 backlight pad is GPIO0_B4 = RM_IO12, which is in-bank
+		pin 12 (NOT 4 -- 4 would be GPIO0_A4).  Using 4 here routes
+		PWM to RM_IO channel 4 (GPIO0_A4) instead of channel 12
+		(GPIO0_B4).
+
+config RK3506_PWM_FUNC
+	int "PWM output RM_IO function number (DTS mux value)"
+	default 47
+	range 16 127
+	depends on RK3506_PWM
+	---help---
+		DTS "mux" number for the RM_IO route, from
+		rk3506-pinctrl-rmio.dtsi (rm_io12_pwm0_ch2 = <0 RK_PB4 47>).
+		Values exceed the 4-bit IOMUX field, so the pinctrl back-end
+		programs the RM_IO channel with (value - 15) and forces the
+		local IOMUX nibble to the matrix path (7).
 
 config RK3506_SARADC
 	bool "RK3506 SARADC (/dev/adc0, IN2/IN3 on header)"
@@ -277,14 +351,57 @@ config RK3506_CAN1_BITRATE
 
 config RK3506_CAN_LOOPBACK
 	bool "Loopback mode (single-node self-test)"
-	default y
+	default n
 	---help---
 		Put the controllers in internal loopback (MODE_LBACK) and
 		mask ACK errors, per the kernel CAN_CTRLMODE_LOOPBACK path:
 		frames sent by the node are received back without any
 		external bus or transceiver.  Combined with the SocketCAN
 		software echo this gives a full cansend/candump self-test.
-		Disable for real two-node bus operation.
+		Disable for real two-node bus operation.  This is a bench
+		self-test option, so it defaults to off like upstream
+		network drivers.
+
+comment "CAN pad routing (RM_IO bank0 pin 0..23, 255 = not routed)"
+
+config RK3506_CAN0_TX_PAD
+	int "can0 TX pad (bank0 pin, 255 = not routed)"
+	default 255
+	range 0 255
+	depends on !RK3506_CAN_LOOPBACK
+	---help---
+		GPIO0 pad (pin 0..23, reachable through the RM_IO matrix)
+		routed to can0 TX (DTS function 43).  255 leaves the pad
+		unrouted.  Board setting: no can0/can1 pinctrl ships in the
+		EVM SDK dts, so the default stays unrouted until the board
+		schematic assigns the pads.
+
+config RK3506_CAN0_RX_PAD
+	int "can0 RX pad (bank0 pin, 255 = not routed)"
+	default 255
+	range 0 255
+	depends on !RK3506_CAN_LOOPBACK
+	---help---
+		GPIO0 pad routed to can0 RX (DTS function 44); see
+		RK3506_CAN0_TX_PAD.
+
+config RK3506_CAN1_TX_PAD
+	int "can1 TX pad (bank0 pin, 255 = not routed)"
+	default 255
+	range 0 255
+	depends on !RK3506_CAN_LOOPBACK
+	---help---
+		GPIO0 pad routed to can1 TX (DTS function 41); see
+		RK3506_CAN0_TX_PAD.
+
+config RK3506_CAN1_RX_PAD
+	int "can1 RX pad (bank0 pin, 255 = not routed)"
+	default 255
+	range 0 255
+	depends on !RK3506_CAN_LOOPBACK
+	---help---
+		GPIO0 pad routed to can1 RX (DTS function 42); see
+		RK3506_CAN0_TX_PAD.
 
 endif
 
@@ -298,21 +415,6 @@ config RK3506_WDT
 		/dev/watchdog1.  Supports pre-timeout capture callbacks
 		(two-stage IRQ mode) and live timeout updates.
 
-config RK3506_RPTUN
-	bool "RK3506 bus-M0 rptun / rpmsg master"
-	default n
-	select RPTUN
-	---help---
-		Register the A7-side rptun lower half for the bus Cortex-M0
-		(/dev/rptun/mcu, master role).  The M0 firmware is loaded and
-		released by U-Boot from the "amp" GPT partition (CONFIG_AMP /
-		CONFIG_ROCKCHIP_AMP, standalone FIT amp.img); NuttX ensures the
-		A-side clocks and runs the mailbox kick/rx path, then brings up
-		the rpmsg virtio master over mailbox0/mailbox3 and the 2 MiB
-		shared window at 0x03c00000, exposing /dev/rpmsg/mcu.
-		Selecting this pulls in RPTUN (and with
-		CONFIG_DRIVERS_VIRTIO_RPMSG also the whole rpmsg stack).
-
 config RK3506_OTA
 	bool "RK3506 A/B OTA slot manager (/dev/ota)"
 	default n
@@ -325,3 +427,215 @@ config RK3506_OTA
 		streaming slot update with readback verify, boot-try decrement /
 		rollback hook (rcS runs `ota bootcheck`) and activate/confirm.
 		Acceptance: nsh> ota status / ota update /data/nuttx.fit.
+
+config RK3506_RPTUN
+	bool "RK3506 bus-M0 rptun/rpmsg master"
+	default n
+	depends on !MM_PGALLOC
+	select RPTUN
+	select SPINLOCK
+	---help---
+		Master-side rptun lower half for the RK3506 bus Cortex-M0.
+		The M0 firmware (SDK rpmsg-lite test) is packaged into the
+		standalone FIT amp/amp.img burned into the "amp" GPT
+		partition and is loaded + released by U-Boot
+		(amp_cpus_on -> fit_standalone_release).  This driver only
+		ungates the M0 time-base + mailbox/intmux clocks and runs
+		the mailbox0/mailbox3 kick protocol; it never resets,
+		reloads or re-releases the M0.  The 2 MiB window
+		0x03c00000..0x03e00000 must stay outside the NuttX RAM;
+		enable RPMSG_CHAR for /dev/rpmsg/mcu.
+
+config RK3506_MMC
+	bool "RK3506 SD/MMC host controller (dw-mshc @ 0xFF480000)"
+	default n
+	depends on MMCSD
+	select ARCH_HAVE_SDIO
+	select MMCSD_SDIO
+	---help---
+		Register the RK3506 Synopsys DesignWare MSHC controller
+		("rockchip,rk3506-dw-mshc", 0xFF480000, GIC SPI 86) as an
+		NuttX MMCSD slot (/dev/mmcsd0).  Polled PIO data transfers
+		(no IDMAC, no interrupt); card detect is polled by board
+		code because the board wires it to a plain GPIO.
+
+		Acceptance:
+		  nsh> ls /dev/mmcsd0
+		  nsh> mount -t vfat /dev/mmcsd0 /mnt/sd
+		  nsh> ls /mnt/sd
+
+if RK3506_MMC
+
+config RK3506_MMC_MAXFREQ
+	int "Maximum SD card clock (Hz)"
+	default 50000000
+	range 400000 150000000
+	---help---
+		Card clock used for data transfers (CLOCK_MMC_TRANSFER /
+		CLOCK_SD_TRANSFER_1BIT / CLOCK_SD_TRANSFER_4BIT).  The dts
+		allows 150 MHz, but this board is SD 2.0 / 3.3 V only
+		(HD-RK3506-EVM SDMMC doc: "no 1.8 V, no SD 3.0"), so no UHS
+		mode is attempted and 50 MHz high-speed is the practical
+		ceiling.  Identification always uses 400 kHz.
+
+config RK3506_MMC_BLOCKSIZE
+	int "Transfer block size (bytes)"
+	default 512
+	range 512 512
+	---help---
+		SD block size.  Also selects 4-bit operation: the controller
+		reports SDIO_CAPS_4BIT.
+
+config RK3506_MMC_CIU_FROM_XIN24M
+	bool "Drive the controller from xin24m instead of GPLL"
+	default n
+	---help---
+		The card clock is ciu / ((CLKDIV & 0xff) * 2).  By default
+		ciu comes from GPLL divided down to RK3506_MMC_CIU_HZ, which
+		needs the GPLL rate to be right.  Enable this to use the
+		24 MHz oscillator (divider /1, no assumption at all) if card
+		identification behaves oddly; the card clock then tops out at
+		12 MHz.
+
+config RK3506_MMC_GPLL_HZ
+	int "GPLL frequency (Hz)"
+	default 1200000000
+	depends on !RK3506_MMC_CIU_FROM_XIN24M
+	---help---
+		GPLL rate used to derive the SDMMC ciu divider.  A wrong value
+		only scales the card clock (the SD spec tolerates it), it does
+		not break enumeration.
+
+config RK3506_MMC_CIU_HZ
+	int "Desired SDMMC ciu clock (Hz)"
+	default 100000000
+	depends on !RK3506_MMC_CIU_FROM_XIN24M
+	---help---
+		Target controller input clock; CLKDIV then divides it by
+		(2 * n) to the card clock.  100 MHz gives exactly 400 kHz and
+		50 MHz.
+
+comment "SD card power switch"
+
+config RK3506_MMC_PWREN
+	bool "Drive the SD card power switch from a GPIO"
+	default n
+	---help---
+		Enable only on carriers that gate the SD 3.3 V rail with a
+		GPIO.  The HD-RK3506-EVM does NOT: its vmmc/vqmmc is the
+		always-on vcc3v3_stb regulator
+		(vanxoak-hd-rk3506-evm-v1.dtsi), so this must stay off
+		there; driving GPIO3_A6 as a power switch fights the real
+		card-detect signal on that pad.
+
+config RK3506_MMC_PWREN_BANK
+	int "SD power switch GPIO bank"
+	default 3
+	range 0 4
+	depends on RK3506_MMC_PWREN
+
+config RK3506_MMC_PWREN_PIN
+	int "SD power switch GPIO pin"
+	default 6
+	range 0 31
+	depends on RK3506_MMC_PWREN
+	---help---
+		GPIO pin of the (carrier-specific) SD rail switch.  Unused
+		on the HD-RK3506-EVM, whose SD rail is always on.
+
+config RK3506_MMC_PWREN_ACTIVELOW
+	bool "SD power switch is active low"
+	default y
+	depends on RK3506_MMC_PWREN
+
+comment "SD card detect"
+
+config RK3506_MMC_CD_GPIO
+	bool "Card detect comes from a GPIO"
+	default y
+	---help---
+		Enable when the socket's card-detect switch is wired to a
+		GPIO.  Disable to use the controller's own CDETECT bit
+		(SDMMC_DET pin, muxed to the controller in board init).
+
+config RK3506_MMC_CD_BANK
+	int "Card detect GPIO bank"
+	default 3
+	range 0 4
+	depends on RK3506_MMC_CD_GPIO
+
+config RK3506_MMC_CD_PIN
+	int "Card detect GPIO pin"
+	default 6
+	range 0 31
+	depends on RK3506_MMC_CD_GPIO
+	---help---
+		Default 6 = GPIO3_A6, the socket card-detect switch on the
+		HD-RK3506-EVM (active low, internal pull-up):
+		vanxoak-hd-rk3506-evm-v1.dtsi cd_gpio =
+		<3 RK_PA6 RK_FUNC_GPIO &pcfg_pull_up>.
+		GPIO3_A7 is RMII1_RXD1 on this board and MUST NOT be used.
+
+config RK3506_MMC_CD_ACTIVELOW
+	bool "Card detect is active low"
+	default y
+	depends on RK3506_MMC_CD_GPIO
+
+config RK3506_MMC_HOTPLUG
+	bool "Poll card detect for hotplug"
+	default y
+	---help---
+		Run a low-rate board poll that calls rk3506_mmc_carddetect()
+		and drives the mmcsd media-change callback.  The DM_INSERTED
+		callback is armed when no card is present at boot.
+
+config RK3506_MMC_POLL_MS
+	int "Card detect poll interval (ms)"
+	default 500
+	range 100 5000
+	depends on RK3506_MMC_HOTPLUG
+
+endif # RK3506_MMC
+
+config RK3506_RNG
+	bool "RK3506 True Random Number Generator"
+	default n
+	---help---
+		Enable the RK3506 TRNG (0xFF0E0000).  Provides hardware
+		random numbers for /dev/random.
+
+config RK3506_TSADC
+	bool "RK3506 Temperature Sensor ADC"
+	default n
+	depends on SENSORS
+	---help---
+		Enable the RK3506 TSADC (0xFF2A8000).  Provides CPU
+		temperature readings via /dev/tsadc.
+
+config RK3506_RGA2
+	bool "RK3506 2D Graphics Accelerator"
+	default n
+	---help---
+		Enable the RK3506 RGA2 (0xFF400000).  2D graphics
+		acceleration (blitting, scaling, rotation).  Stub only -
+		full driver needs Rockchip RGA library integration.
+
+config RK3506_GMAC1
+	bool "RK3506 GMAC1 Ethernet (second port)"
+	default n
+	depends on RK3506_GMAC0
+	---help---
+		Enable the second GMAC controller (0xFF680000).  Requires
+		RMII PHY on the second port.
+
+config RK3506_USBHOST_OTG0
+	bool "RK3506 USB OTG0 (peripheral mode)"
+	default n
+	depends on RK3506_USBHOST
+	---help---
+		Enable USB OTG0 (0xFF740000) in peripheral mode.  Used for
+		firmware flashing via USB Type-C port.
+
+endmenu # "Rockchip RK3506 Peripheral Selection"
+
+endif # ARCH_CHIP_RK3506

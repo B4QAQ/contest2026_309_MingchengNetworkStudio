@@ -47,22 +47,21 @@
 #include <debug.h>
 
 #include "rk3506_cru.h"
+#include "rk3506_register.h"
+#include "hardware/rk3506_memorymap.h"
 
 #ifdef CONFIG_RK3506_WDT
-
-#ifndef putreg32
-#  define putreg32(v, a) (*(FAR volatile uint32_t *)(a) = (v))
-#endif
-#ifndef getreg32
-#  define getreg32(a)    (*(FAR volatile uint32_t *)(a))
-#endif
 
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
 
-#define WDT0_BASE               0xff260000u
-#define WDT1_BASE               0xff268000u
+/* Controller bases: RK3506_WDT0_ADDR / RK3506_WDT1_ADDR from
+ * hardware/rk3506_memorymap.h (single shared address table).
+ */
+
+#define WDT0_BASE               RK3506_WDT0_ADDR
+#define WDT1_BASE               RK3506_WDT1_ADDR
 
 #define WDT_IRQ0                RK3506_IRQ_WDT0
 #define WDT_IRQ1                RK3506_IRQ_WDT1

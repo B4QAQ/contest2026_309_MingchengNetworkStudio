@@ -68,18 +68,15 @@
 #include <nuttx/spinlock.h>
 #include <nuttx/net/ip.h>
 #include <nuttx/net/netdev.h>
+
+#include "rk3506_gmac0.h"
 #include <nuttx/cache.h>
 
 #include "hardware/rk3506_memorymap.h"
 
-#ifndef putreg32
-#  define putreg32(v, a) (*(FAR volatile uint32_t *)(a) = (v))
-#endif
-#ifndef getreg32
-#  define getreg32(a)    (*(FAR volatile uint32_t *)(a))
-#endif
 #include "rk3506_cru.h"
 #include "rk3506_iomux.h"
+#include "drv/gpio/rk3506_gpio.h"
 #include "rk3506_gmac_hal.h"
 
 /****************************************************************************
@@ -99,34 +96,28 @@
 
 /* TX timeout and link poll watchdogs */
 
-#define GMAC0_TXTIMEOUT  (5 * CLK_TCK)
-#define GMAC0_LINKPOLL   (2 * CLK_TCK)
-
-/* Bounded wait for the first link-up inside ifup: covers typical RMII
- * autoneg (2-4 s from the PHY reset).  Costs nothing when the link is
- * already up; on timeout ifup still succeeds and the link poll takes
- * over.
- */
-
-#define GMAC0_LINKWAIT_MS 5000
+#define GMAC0_TXTIMEOUT    (5 * CLK_TCK)
+#define GMAC0_LINKPOLL     (2 * CLK_TCK)
+#define GMAC0_LINKSETTLE   (CLK_TCK / 10 + 1)  /* 100 ms-ish first poll */
 
 /* Packet buffer for the network stack (dm90x0.c pattern) */
 
 #define PKTBUF_SIZE (MAX_NETDEV_PKTSIZE + CONFIG_NET_GUARDSIZE)
 
-/* PHY hardware reset: GPIO4_A2, active low (HD-RK3506-EVM GMAC.md:
- * snps,reset-gpio = <&gpio4 RK_PA2 GPIO_ACTIVE_LOW>,
- * reset-delays-us = <0 20000 100000>).  GPIO4 v2 controller base
- * 0xFF1E0000 (rk3506.h GPIO4_BASE); A2 = pin 2 lives in the _L register
- * pair (pins 0..15): SWPORT_DR_L = +0x00, SWPORT_DDR_L = +0x08, bit 2.
- * NOTE: GPIO0_C2 was the Rockchip in-house EVM value and is NOT the
- * pin wired to the PHY reset on this board.
+/* PHY hardware reset, active low.  The active board wiring for the
+ * HD-RK3506-EVM is (vanxoak-hd-rk3506-evm-v1.dtsi):
+ *   snps,reset-gpio      = <&gpio0 RK_PB3 GPIO_ACTIVE_LOW>;  GPIO0_B3
+ *   snps,reset-delays-us = <0 20000 100000>;
+ * The <&gpio4 RK_PA2> value is commented out in that dtsi (Rockchip
+ * in-house EVM wiring), as is GPIO0_C2 (another historical in-house
+ * value); neither is the HD-RK3506-EVM pad.  The pad comes from
+ * CONFIG_RK3506_GMAC0_PHY_RESET_BANK/PIN (default bank 0 / pin 11) and
+ * is driven through the shared GPIO back-end (rk3506_gpio_config/write).
  */
 
-#define RK3506_GPIO4_BASE              0xFF1E0000u
-#define GPIO_SWPORT_DR_L               0x00u
-#define GPIO_SWPORT_DDR_L              0x08u
-#define PHY_RESET_PIN_BIT              (1u << 2)
+#define RK3506_PHY_RESET_GPIN  \
+  RK3506_GPIO_PIN(CONFIG_RK3506_GMAC0_PHY_RESET_BANK, \
+                  CONFIG_RK3506_GMAC0_PHY_RESET_PIN)
 
 /* MDIO clock source frequency fed to HAL_GMAC_Init() for the CSR
  * selection.  hclk_lsperi_root: CLKSEL_CON(29) mux[6:5]=0 (clk_gpll_div)
@@ -384,35 +375,34 @@ static int rk3506_gmac0_yt8512b_init(FAR struct GMAC_HANDLE *gmac)
  * Name: rk3506_gmac0_phy_reset
  *
  * Description:
- *   Hardware-reset the Ethernet PHY via GPIO4_A2 (active low), per
- *   the board vendor doc (HD-RK3506-EVM, SDK开发与外设设备树配置
- *   /GMAC.md):
- *     reset-gpios = <&gpio4 RK_PA2 GPIO_ACTIVE_LOW>;
- *     reset-delays-us = <0 20000 100000>;
- *   GPIO v2 controller HIWORD semantics: writing (bit<<16)|value sets
- *   the bit to value.  DDR bit = 1 means OUTPUT.  A2 = pin 2 -> the _L
- *   register pair (SWPORT_DR_L / SWPORT_DDR_L).
+ *   Hardware-reset the Ethernet PHY via GPIO0_B3 (active low), per the
+ *   active board device tree (vanxoak-hd-rk3506-evm-v1.dtsi):
+ *     snps,reset-gpio      = <&gpio0 RK_PB3 GPIO_ACTIVE_LOW>;
+ *     snps,reset-delays-us = <0 20000 100000>;
+ *   The pin is an output on the _L register pair (pin 11 < 16).
  *
  ****************************************************************************/
 
 static void rk3506_gmac0_phy_reset(void)
 {
-  uint32_t dr = RK3506_GPIO4_BASE + GPIO_SWPORT_DR_L;
-  uint32_t ddr = RK3506_GPIO4_BASE + GPIO_SWPORT_DDR_L;
+  /* Configure the reset pad as an output driving high (deasserted),
+   * then pulse it low for the dts-specified 20 ms and release for
+   * 100 ms.  rk3506_gpio_config() muxes the pin to GPIO and ungates the
+   * bank clocks; rk3506_gpio_write() does the HIWORD single-bit drive.
+   */
 
-  /* Set the pin direction to OUTPUT first. */
-
-  putreg32((PHY_RESET_PIN_BIT << 16) | PHY_RESET_PIN_BIT, ddr);
+  rk3506_gpio_config(RK3506_PHY_RESET_GPIN, RK3506_GPIO_OUTPUT |
+                     RK3506_GPIO_VALUE_HIGH);
 
   /* Drive low: PHY held in reset. */
 
-  putreg32((PHY_RESET_PIN_BIT << 16) | 0u, dr);
+  rk3506_gpio_write(RK3506_PHY_RESET_GPIN, false);
 
   up_udelay(20 * 1000u);
 
   /* Release reset: drive high. */
 
-  putreg32((PHY_RESET_PIN_BIT << 16) | PHY_RESET_PIN_BIT, dr);
+  rk3506_gpio_write(RK3506_PHY_RESET_GPIN, true);
 
   up_udelay(100 * 1000u);
 }
@@ -758,10 +748,25 @@ static int rk3506_gmac0_interrupt(int irq, FAR void *context,
                                   FAR void *arg)
 {
   FAR struct rk3506_gmac0_s *priv = (FAR struct rk3506_gmac0_s *)arg;
+  int ret;
+
+  /* Level-high GIC line: mask it while the work is pending and let
+   * the worker re-enable it when it is done.  If the deferred work
+   * cannot be queued, re-enable the line immediately so a dropped
+   * deferral cannot leave the interface silently dead until the next
+   * 2 s link-poll drain (the historical "RX/TX stalls after a few
+   * seconds" failure mode).
+   */
 
   up_disable_irq(RK3506_IRQ_GMAC0_0);
-  work_queue(ETHWORK, &priv->irqwork, rk3506_gmac0_interrupt_work,
-             priv, 0);
+
+  ret = work_queue(ETHWORK, &priv->irqwork, rk3506_gmac0_interrupt_work,
+                   priv, 0);
+  if (ret < 0)
+    {
+      up_enable_irq(RK3506_IRQ_GMAC0_0);
+    }
+
   return OK;
 }
 
@@ -808,8 +813,9 @@ static int rk3506_gmac0_txavail(FAR struct net_driver_s *dev)
  *     CRU clocks -> RMII IOMUX -> GPIO PHY reset -> HAL_GMAC_Init
  *     (GRF + CSR + link table) -> descriptor rings -> HAL_GMAC_Start
  *     (SWR + DMA + MAC + rings) -> attach/enable IRQ -> PHY init
- *     (MDIO softreset + scan + AN config) -> PHY startup -> initial
- *     link adjust -> link poll timer.
+ *     (MDIO softreset + scan + AN config) -> PHY startup -> link poll
+ *     timer (first poll after a short settle, then periodic; carrier
+ *     and MAC link adjust happen asynchronously, never blocking ifup).
  *
  ****************************************************************************/
 
@@ -819,7 +825,6 @@ static int rk3506_gmac0_ifup(FAR struct net_driver_s *dev)
     (FAR struct rk3506_gmac0_s *)dev->d_private;
   struct GMAC_PHY_Config config;
   int ret;
-  int i;
 
   /* SoC/board glue (all verified in M2b.1 bring-up) */
 
@@ -873,6 +878,11 @@ static int rk3506_gmac0_ifup(FAR struct net_driver_s *dev)
   ret = irq_attach(RK3506_IRQ_GMAC0_0, rk3506_gmac0_interrupt, priv);
   if (ret != OK)
     {
+      /* GMAC0 stays silent by design; propagate the failure after
+       * stopping the MAC/DMA so a later ifup starts clean.
+       */
+
+      HAL_GMAC_Stop(&priv->gmac);
       return ret;
     }
 
@@ -907,47 +917,36 @@ static int rk3506_gmac0_ifup(FAR struct net_driver_s *dev)
   ret = HAL_GMAC_PHYInit(&priv->gmac, &config);
   if (ret != HAL_OK)
     {
+      /* GMAC0 stays silent by design; tear down IRQ and MAC/DMA and
+       * propagate the failure so a later ifup starts clean.
+       */
+
       up_disable_irq(RK3506_IRQ_GMAC0_0);
+      irq_detach(RK3506_IRQ_GMAC0_0);
+      HAL_GMAC_Stop(&priv->gmac);
       return ret;
     }
 
   HAL_GMAC_PHYStartup(&priv->gmac);
 
-  /* Initial link bring-up: RMII autoneg needs a couple of seconds
-   * after the PHY reset.  Wait for it here (bounded) so that the
-   * interface is RUNNING (netdev_carrier_on) before ifup returns.
-   * Boot-time DHCP depends on this: netdev_default() filters on
-   * IFF_RUNNING for the broadcast DISCOVER, and dhcpc_request()
-   * aborts on the first sendto failure with no retry - without the
-   * wait, netinit's DHCP always loses the race against autoneg and
-   * the board boots with no address.  On timeout (no cable) we fall
-   * through to the link poll, which will carrier_on later; DHCP can
-   * then be re-run with `renew eth0`.
+  /* Link state is tracked asynchronously by the link-poll worker,
+   * which adjusts the MAC and runs netdev_carrier_on/off on
+   * transitions (dm90x0.c pattern).  Never block ifup (invoked with
+   * the network stack locked) waiting for autonegotiation: a bounded
+   * multi-second sleep here froze every concurrent socket operation
+   * and could deadlock with MDIO ioctl consumers.  The first poll
+   * runs after a short settle delay, then every GMAC0_LINKPOLL; the
+   * boot-time DHCP race is covered by netinit's DHCP retries, and a
+   * late cable plug is picked up by the periodic poll.
    */
-
-  for (i = 0; i < GMAC0_LINKWAIT_MS / 100; i++)
-    {
-      HAL_GMAC_PHYUpdateLink(&priv->gmac);
-      if (priv->gmac.phyStatus.link)
-        {
-          break;
-        }
-
-      nxsig_usleep(100 * 1000);
-    }
-
-  if (priv->gmac.phyStatus.link)
-    {
-      HAL_GMAC_PHYParseLink(&priv->gmac);
-      HAL_GMAC_AdjustLink(&priv->gmac, 0, 0);
-      netdev_carrier_on(&priv->dev);
-    }
 
   priv->bifup = true;
 
-  /* Start the link poll watchdog */
+  /* First link poll after a short settle, then every GMAC0_LINKPOLL
+   * (the worker re-arms itself with the regular period).
+   */
 
-  wd_start(&priv->linktimer, GMAC0_LINKPOLL,
+  wd_start(&priv->linktimer, GMAC0_LINKSETTLE,
            rk3506_gmac0_linkpoll_expiry, (wdparm_t)priv);
 
   return OK;
@@ -1144,6 +1143,7 @@ int rk3506_gmac0_initialize(void)
 {
   FAR struct rk3506_gmac0_s *priv = &g_gmac0;
   static const uint8_t mac[6] = GMAC0_DEFAULT_MAC;
+  int ret;
 
   memset(priv, 0, sizeof(struct rk3506_gmac0_s));
 
@@ -1168,8 +1168,35 @@ int rk3506_gmac0_initialize(void)
 
   memcpy(priv->dev.d_mac.ether.ether_addr_octet, mac, 6);
 
-  netdev_register(&priv->dev, NET_LL_ETHERNET);
+  ret = netdev_register(&priv->dev, NET_LL_ETHERNET);
+  return ret;
+}
 
+/****************************************************************************
+ * Name: rk3506_gmac0_get_stats
+ *
+ * Description:
+ *   Copy the cumulative eth0 byte counters for board apps (flat build;
+ *   there is no standard userspace ioctl path to d_statistics).
+ *
+ ****************************************************************************/
+
+int rk3506_gmac0_get_stats(FAR uint64_t *rx_bytes, FAR uint64_t *tx_bytes)
+{
+  FAR struct rk3506_gmac0_s *priv = &g_gmac0;
+
+  if (priv->dev.d_ifup == NULL)
+    {
+      return -ENODEV;
+    }
+
+#ifdef CONFIG_NETDEV_STATISTICS
+  *rx_bytes = priv->dev.d_statistics.rx_bytes;
+  *tx_bytes = priv->dev.d_statistics.tx_bytes;
+#else
+  *rx_bytes = 0;
+  *tx_bytes = 0;
+#endif
   return OK;
 }
 

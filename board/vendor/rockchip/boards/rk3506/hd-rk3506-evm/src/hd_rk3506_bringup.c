@@ -32,25 +32,27 @@
 #include <nuttx/config.h>
 
 #include <sys/types.h>
-#include <syslog.h>
 #include <errno.h>
 #include <debug.h>
 
 #include <nuttx/board.h>
 #include <nuttx/i2c/i2c_master.h>
+#include <nuttx/leds/userled.h>
+#include <nuttx/video/fb.h>
 
-#include "rk3506_vop.h"
 #include "rk3506_usbhost.h"
 #include "rk3506_i2c.h"
-#include "rk3506_spi.h"
+#include "rk3506_rng.h"
+#include "rk3506_tsadc.h"
+
+#include "drv/gpio/rk3506_gpio.h"
+#include "drv/spi/rk3506_spi.h"
 #include "rk3506_spinand.h"
 #include "rk3506_cru.h"
 #include "rk3506_iomux.h"
 #include "rk3506_fspi.h"
 #include "rk3506_gmac0.h"
 #include "hd_rk3506.h"
-#include "hd_rk3506_gt911.h"
-#include "hd_rk3506_st7701s.h"
 
 #ifdef CONFIG_RK3506_SPINAND_FSPI
 #  include <nuttx/mtd/mtd.h>
@@ -59,12 +61,12 @@
 
 FAR struct mtd_dev_s *rk3506_spinand_fspi_initialize(void);
 
-/* Start of the "userdata" region in nand_firmware/parameter.txt (v6, A/B
- * layout + amp partition: mtdparts sector 0x11000, 512-byte units) =
- * 35,651,584 bytes (34 MiB, immediately after the amp partition which
- * follows boot_b).  Everything below this offset belongs to the boot
- * chain (vnvm/uboot/misc/boot_a/boot_b/amp) and is only touched via the
- * OTA manager / U-Boot.
+/* Start of the "userdata" region in nand_firmware/parameter.txt (v8, A/B
+ * layout with the amp partition: mtdparts sector 0x11000, 512-byte units)
+ * = 35,651,584 bytes (34 MiB, immediately after amp).  Everything below
+ * this offset belongs to the boot chain
+ * (vnvm/uboot/misc/boot_a/boot_b/amp) and is only touched via the OTA
+ * manager / U-Boot.
  */
 
 #  define SPINAND_USERDATA_START_BYTES 0x11000ULL * 512ULL
@@ -117,7 +119,7 @@ int rk3506_rptun_initialize(void);
     int _r = (stmt); \
     if (_r < 0) \
       { \
-        syslog(LOG_ERR, "ERROR: " fmt " (errno=%d)\n", \
+        _err("ERROR: " fmt " (errno=%d)\n", \
                ##__VA_ARGS__, _r); \
       } \
   } while (0)
@@ -145,7 +147,7 @@ static int hd_rk3506_i2c_init(void)
 {
   int ret = OK;
 
-  syslog(LOG_INFO, "Initializing I2C controllers...\n");
+  _info("Initializing I2C controllers...\n");
 
   /* Route RM_IO24/25 to I2C0 SDA/SCL first: without this the
    * GPIO1_B1/B2 pins stay in func 0 (GPIO) and every I2C0 transfer
@@ -158,27 +160,27 @@ static int hd_rk3506_i2c_init(void)
 
   if (rk3506_i2cbus_initialize(0) == NULL)
     {
-      syslog(LOG_ERR, "ERROR: rk3506_i2cbus_initialize(0) failed\n");
+      _err("ERROR: rk3506_i2cbus_initialize(0) failed\n");
       ret = -ENODEV;
     }
   else
     {
-      syslog(LOG_INFO, "I2C0 controller initialized (used by GT911)\n");
+      _info("I2C0 controller initialized (used by GT911)\n");
     }
 
-#ifdef CONFIG_RK3506_I2C1
-  if (rk3506_i2cbus_initialize(1) == NULL)
-    {
-      syslog(LOG_WARNING, "WARNING: rk3506_i2cbus_initialize(1) failed\n");
-    }
-#endif
+  /* I2C2: rjgt102 crypt chip (0x68), RM_IO4/5 (GPIO0_A4/A5) */
 
-#ifdef CONFIG_RK3506_I2C2
+  rk3506_ioc_i2c2_setup();
+
   if (rk3506_i2cbus_initialize(2) == NULL)
     {
-      syslog(LOG_WARNING, "WARNING: rk3506_i2cbus_initialize(2) failed\n");
+      _err("ERROR: rk3506_i2cbus_initialize(2) failed\n");
+      ret = -ENODEV;
     }
-#endif
+  else
+    {
+      _info("I2C2 controller initialized (rjgt102 crypt)\n");
+    }
 
   /* Optionally register I2C character device for userspace testing.
    * When CONFIG_I2C_DRIVER is enabled, we need to also expose the I2C
@@ -190,7 +192,7 @@ static int hd_rk3506_i2c_init(void)
    */
 
 #ifdef CONFIG_I2C_DRIVER
-  syslog(LOG_INFO, "I2C_DRIVER enabled - userspace /dev/i2cN access available\n");
+  _info("I2C_DRIVER enabled - userspace /dev/i2cN access available\n");
 #endif
 
   return ret;
@@ -214,8 +216,7 @@ int hd_rk3506_bringup(void)
 {
   int ret;
 
-  syslog(LOG_INFO,
-         "\n"
+  _info("\n"
          " ██████╗ ███████╗██████╗ ███╗   ██╗██╗   ██╗███████╗██╗      █████╗                             \n"
          "██╔═══██╗██╔════╝██╔══██╗████╗  ██║██║   ██║██╔════╝██║     ██╔══██╗                            \n"
          "██║   ██║█████╗  ██████╔╝██╔██╗ ██║██║   ██║█████╗  ██║     ███████║                            \n"
@@ -230,7 +231,7 @@ int hd_rk3506_bringup(void)
          "██║     ╚██████╔╝██║  ██║    ██║  ██║██║  ██╗██████╔╝███████║╚██████╔╝╚██████╔╝╚██████╔╝███████╗\n"
          "╚═╝      ╚═════╝ ╚═╝  ╚═╝    ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚══════╝ ╚═════╝  ╚═════╝  ╚═════╝ ╚══════╝\n");
 
-  syslog(LOG_INFO, "=== HD-RK3506-EVM bringup ===\n");
+  _info("=== HD-RK3506-EVM bringup ===\n");
 
 #ifdef CONFIG_FS_PROCFS
   /* Mount the procfs file system */
@@ -238,11 +239,11 @@ int hd_rk3506_bringup(void)
   ret = nx_mount(NULL, "/proc", "procfs", 0, NULL);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: Failed to mount procfs at /proc: %d\n", ret);
+      _err("ERROR: Failed to mount procfs at /proc: %d\n", ret);
     }
   else
     {
-      syslog(LOG_INFO, "procfs mounted at /proc\n");
+      _info("procfs mounted at /proc\n");
     }
 #endif
 
@@ -253,12 +254,22 @@ int hd_rk3506_bringup(void)
                   "hd_rk3506_i2c_init() failed");
 #endif
 
+#ifdef CONFIG_IOEXPANDER
+  /* Register the board's exported GPIO pins as /dev/gpioN nodes on top
+   * of the per-bank ioexpander devices (rk3506_gpio.c).  Pads owned by
+   * on-board drivers stay private; only the table in hd_rk3506_gpio.c
+   * is exported.
+   */
+
+  BRINGUP_LOG_ERR(hd_rk3506_gpio_initialize(),
+                  "hd_rk3506_gpio_initialize() failed");
+#endif
+
 #ifdef CONFIG_FS_DEVFS
-  /* Mount devfs at /dev so character devices registered by
-   * rk3506_vop_register() (e.g. /dev/fb0) and the I2C/GPIO/etc. drivers
-   * become accessible by path. (Currently a no-op: NuttX has no
-   * CONFIG_FS_DEVFS; paths are created by register_driver itself via
-   * inode_reserve_path.)
+  /* Mount devfs at /dev so character devices (e.g. /dev/fb0) and the
+   * I2C/GPIO/etc. drivers become accessible by path. (Currently a no-op:
+   * NuttX has no CONFIG_FS_DEVFS; paths are created by register_driver
+   * itself via inode_reserve_path.)
    */
 #endif
 
@@ -275,50 +286,40 @@ int hd_rk3506_bringup(void)
   ret = nx_mount(NULL, "/tmp", "tmpfs", 0, NULL);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: Failed to mount tmpfs at /tmp: %d\n", ret);
+      _err("ERROR: Failed to mount tmpfs at /tmp: %d\n", ret);
     }
   else
     {
-      syslog(LOG_INFO, "tmpfs mounted at /tmp\n");
+      _info("tmpfs mounted at /tmp\n");
     }
 #endif
 
-#ifdef CONFIG_LCD_ST7701S
-  /* Initialize the ST7701S LCD panel (must be before VOP) */
+#ifdef CONFIG_LCD_NV3007
+  /* Register the NV3007 SPI panel as /dev/fb0.  fb_register() drives the
+   * lcd_framebuffer bridge: up_fbinitialize() runs board_lcd_initialize()
+   * (SPI0 + RM_IO pads + vendor init table + PWM backlight), allocates the
+   * RAM framebuffer and creates /dev/fb0.
+   */
 
-  BRINGUP_LOG_ERR(hd_rk3506_st7701s_initialize(),
-                  "hd_rk3506_st7701s_initialize() failed");
-#endif
-
-#ifdef CONFIG_RK3506_VOP
-  /* Initialize the VOP framebuffer */
-
-  ret = rk3506_vop_register();
+  ret = fb_register(0, 0);
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: rk3506_vop_register() failed: %d\n", ret);
+      _err("ERROR: fb_register(NV3007) failed: %d\n", ret);
     }
   else
     {
-      syslog(LOG_INFO, "rk3506_vop_register() ok (/dev/fb0 created)\n");
+      _info("NV3007 /dev/fb0 registered\n");
     }
 #endif
 
 #ifdef CONFIG_GRAPHICS_LVGL
   /* Initialise the LVGL display port: mmap /dev/fb0, register the LVGL
    * display driver, and start the LVGL timer/tick threads. Must run
-   * after rk3506_vop_register().
+   * after fb_register().
    */
 
   BRINGUP_LOG_ERR(hd_rk3506_lv_port_disp_init(),
                   "hd_rk3506_lv_port_disp_init() failed");
-#endif
-
-#ifdef CONFIG_INPUT_GT911
-  /* Initialize the GT911 touchscreen (depends on I2C) */
-
-  BRINGUP_LOG_ERR(hd_rk3506_gt911_initialize(),
-                  "hd_rk3506_gt911_initialize() failed");
 #endif
 
 #ifdef CONFIG_RK3506_USBHOST
@@ -342,7 +343,7 @@ int hd_rk3506_bringup(void)
       conn = rk3506_usbhost_initialize(1);
       if (conn == NULL)
         {
-          syslog(LOG_ERR, "ERROR: rk3506_usbhost_initialize(1) failed\n");
+          _err("ERROR: rk3506_usbhost_initialize(1) failed\n");
         }
       else
         {
@@ -356,12 +357,12 @@ int hd_rk3506_bringup(void)
           int waiter = usbhost_waiter_initialize(conn);
           if (waiter < 0)
             {
-              syslog(LOG_ERR, "ERROR: usbhost_waiter_initialize "
+              _err("ERROR: usbhost_waiter_initialize "
                               "failed: %d\n", waiter);
             }
           else
             {
-              syslog(LOG_INFO, "USB Host (OTG1, USB-A) initialized, "
+              _info("USB Host (OTG1, USB-A) initialized, "
                                "waiter started\n");
             }
         }
@@ -369,48 +370,14 @@ int hd_rk3506_bringup(void)
   while (0);
 #endif
 
-#if 0 /*  SPI NAND is NOT on SPI1.  The on-board GD5F SPI NAND is wired to
-        *  the dedicated FSPI controller at 0xFF488000 (IRQ85), flash@0,
-        *  1-bit command / 4-bit read (verified in the U-Boot DTS:
-        *  rk3506-u-boot.dtsi &fspi -> spi_nand: flash@0 "spi-nand").
-        *  The spi1 rk_spi path below therefore probes an empty bus,
-        *  waits out the per-byte timeouts and logs a false failure.
-        *  Disable it until the FSPI (rockchip,fspi, spi-mem) controller
-        *  driver lands; the rk_spi controller itself stays built.
-        */
-#ifdef CONFIG_RK3506_SPINAND
-  /* Bind GD5F upper-half to the RK3506 SPI1 controller so the on-board
-   * 128 MByte SPI NAND shows up as an MTD device.  The init sequence
-   * (clock ungating, pin mux, controller register, GD5F probe) is done
-   * inside rk3506_spinand_initialize(); here we only log whether a
-   * device was detected.  A failed probe returns NULL and is logged but
-   * does not stop the rest of bring-up.
-   */
-
-  do
-    {
-      FAR struct mtd_dev_s *mtd;
-      mtd = rk3506_spinand_initialize();
-      if (mtd == NULL)
-        {
-          syslog(LOG_ERR, "ERROR: rk3506_spinand_initialize failed "
-                          "(no GD5F device on SPI1 CS0?)\n");
-        }
-      else
-        {
-          syslog(LOG_INFO, "SPI NAND (GD5F on SPI1) initialized\n");
-        }
-    }
-  while (0);
-#endif
-#endif /* end #if 0 - NAND on FSPI, not SPI1 */
-
 #ifdef CONFIG_RK3506_FSPI
   /* The on-board GD5F SPI NAND is on the dedicated FSPI controller
-   * (0xFF488000, CS0).  First milestone: bring up clock + pinmux,
-   * reset/init the controller and run a single-bit READ_ID to validate
-   * the register sequence.  This never blocks the boot - every poll in
-   * the FSPI driver has a bounded timeout.
+   * (0xFF488000, IRQ85, CS0), NOT on the SPI1 rk_spi controller -- a
+   * previous SPI1-based probe path lived here behind #if 0 and has been
+   * removed (the FSPI controller driver below is the live path).  Bring
+   * up clock + pinmux, reset/init the controller and run a single-bit
+   * READ_ID to validate the register sequence.  This never blocks the
+   * boot - every poll in the FSPI driver has a bounded timeout.
    */
 
   do
@@ -427,14 +394,15 @@ int hd_rk3506_bringup(void)
       mtd = rk3506_spinand_fspi_initialize();
       if (mtd == NULL)
         {
-          syslog(LOG_ERR, "ERROR: SPI NAND init failed (FSPI CS0)\n");
+          _err("ERROR: SPI NAND init failed (FSPI CS0)\n");
           break;
         }
 
       /* Hand the "userdata" region of the Rockchip partition layout
-       * (nand_firmware/parameter.txt v6, A/B + amp) to dhara/littlefs.
-       * The boot-chain partitions (vnvm/uboot/misc/boot_a/boot_b/amp)
-       * are only touched through the OTA manager / U-Boot below.
+       * (nand_firmware/parameter.txt v8, A/B, with amp partition) to
+       * dhara/littlefs.  The boot-chain partitions
+       * (vnvm/uboot/misc/boot_a/boot_b/amp) are only touched through the
+       * OTA manager / U-Boot below.
        *
        * userdata starts at sector 0x11000 (512-byte units) =
        * 35,651,584 B = erase block 272 on the XCSP2AAPK (1728 blocks,
@@ -465,7 +433,7 @@ int hd_rk3506_bringup(void)
         if (mtd->ioctl(mtd, MTDIOC_GEOMETRY,
                        (unsigned long)((uintptr_t)&geo)) < 0)
           {
-            syslog(LOG_ERR, "ERROR: SPI NAND geometry ioctl failed\n");
+            _err("ERROR: SPI NAND geometry ioctl failed\n");
             break;
           }
 
@@ -475,7 +443,7 @@ int hd_rk3506_bringup(void)
 
         if (npages <= 0)
           {
-            syslog(LOG_ERR, "ERROR: userdata region empty (chip "
+            _err("ERROR: userdata region empty (chip "
                             "smaller than the parameter layout?)\n");
             break;
           }
@@ -483,18 +451,18 @@ int hd_rk3506_bringup(void)
         part = mtd_partition(mtd, first_page, npages);
         if (part == NULL)
           {
-            syslog(LOG_ERR, "ERROR: mtd_partition(userdata) failed\n");
+            _err("ERROR: mtd_partition(userdata) failed\n");
             break;
           }
 
         if (dhara_initialize(0, part) < 0)
           {
-            syslog(LOG_ERR, "ERROR: dhara_initialize(/dev/mtdblock0) "
+            _err("ERROR: dhara_initialize(/dev/mtdblock0) "
                             "failed\n");
             break;
           }
 
-        syslog(LOG_INFO, "SPI NAND /data: /dev/mtdblock0 = userdata "
+        _info("SPI NAND /data: /dev/mtdblock0 = userdata "
                          "(page %ld +%ld of %ld)\n",
                (long)first_page, (long)npages,
                (long)geo.neraseblocks * geo.erasesize / geo.blocksize);
@@ -509,7 +477,7 @@ int hd_rk3506_bringup(void)
             int ota_ret = rk3506_ota_initialize(mtd);
             if (ota_ret < 0)
               {
-                syslog(LOG_ERR, "ERROR: rk3506_ota_initialize failed: "
+                _err("ERROR: rk3506_ota_initialize failed: "
                                 "%d\n", ota_ret);
               }
           }
@@ -521,10 +489,11 @@ int hd_rk3506_bringup(void)
 #endif
 
 #ifdef CONFIG_RK3506_PWM
-  /* M2b.6: /dev/pwm0 on the PWM0 channel-2 block (0xFF932000),
-   * output pin RM_IO10 (GPIO0_B2, RM_IO function 47 = PWM0_CH2).
-   * The SDK iot dts uses this same channel for the LCD backlight,
-   * period 25000 ns (40 kHz) - a good first multimeter target:
+  /* /dev/pwm0 on the PWM0 channel-2 block (0xFF932000).  NOTE: the
+   * NV3007 backlight pad GPIO0_B4/J9-29 (RM_IO12, PWM0_CH2 function 47)
+   * is owned by the panel driver as a plain GPIO, so CONFIG_RK3506_PWM
+   * stays off in the board defconfig; enable it only when no panel is
+   * wired and a scope/multimeter is attached to the header:
    *   pwm -f 40000 -d 50
    */
 
@@ -533,7 +502,7 @@ int hd_rk3506_bringup(void)
       int pwm_ret = rk3506_pwm_initialize();
       if (pwm_ret < 0)
         {
-          syslog(LOG_ERR, "ERROR: rk3506_pwm_initialize failed: %d\n",
+          _err("ERROR: rk3506_pwm_initialize failed: %d\n",
                  pwm_ret);
         }
     }
@@ -551,7 +520,7 @@ int hd_rk3506_bringup(void)
       int adc_ret = rk3506_saradc_initialize();
       if (adc_ret < 0)
         {
-          syslog(LOG_ERR, "ERROR: rk3506_saradc_initialize failed: "
+          _err("ERROR: rk3506_saradc_initialize failed: "
                           "%d\n", adc_ret);
         }
     }
@@ -559,12 +528,12 @@ int hd_rk3506_bringup(void)
 #endif
 
 #ifdef CONFIG_RK3506_CAN
-  /* M2b.8: SocketCAN devices can0/can1 (0xFF320000/0xFF330000).
-   * Default build uses loopback mode (single-node self-test):
+  /* SocketCAN devices can0/can1 (0xFF320000/0xFF330000).  Default build
+   * uses loopback mode (single-node self-test) and never touches the pad
+   * mux (TX/RX pads are 255=unrouted, see rk3506_can.c), so this does
+   * not contend for GPIO0_B3 (gmac0 PHY reset) or GPIO0_B4 (panel BL):
    *   cansend can0 123#DEADBEEF
    *   candump can0 -n 1   (must echo the frame)
-   * Pin routing: CAN0 -> RM_IO11, CAN1 -> RM_IO12 (kept clear of
-   * RM_IO10 = PWM0_CH2).
    */
 
   do
@@ -572,7 +541,7 @@ int hd_rk3506_bringup(void)
       int can_ret = rk3506_can_initialize();
       if (can_ret < 0)
         {
-          syslog(LOG_ERR, "ERROR: rk3506_can_initialize failed: %d\n",
+          _err("ERROR: rk3506_can_initialize failed: %d\n",
                  can_ret);
         }
     }
@@ -591,33 +560,67 @@ int hd_rk3506_bringup(void)
       int wdt_ret = rk3506_wdt_initialize();
       if (wdt_ret < 0)
         {
-          syslog(LOG_ERR, "ERROR: rk3506_wdt_initialize failed: %d\n",
+          _err("ERROR: rk3506_wdt_initialize failed: %d\n",
                  wdt_ret);
         }
     }
   while (0);
 #endif
 
-#ifdef CONFIG_RK3506_RPTUN
-  /* M2b.10: bus-M0 rptun / rpmsg master.  Boots the M0 with the
-   * embedded rpmsg firmware (SIP SMC, u-boot fit_standalone_release
-   * sequence) and brings up the rpmsg virtio master over mailbox0/
-   * mailbox3 and the 2 MiB window at 0x03c00000.  Once the virtio
-   * rpmsg driver probes the device this exposes /dev/rpmsg/mcu;
-   * acceptance: nsh> rpmsgtest  (must print PASS after the MCU
-   * replies "Rockchip rpmsg linux test!").
+#ifdef CONFIG_USERLED_LOWER
+  /* Register the run LED (GPIO1_B3, active low) as /dev/led0 through
+   * the standard NuttX userled lower half.  userled_lower_initialize()
+   * calls board_userled_initialize(), which must return the LED count.
+   */
+
+  ret = userled_lower_initialize("/dev/led0");
+  if (ret < 0)
+    {
+      _err("ERROR: userled_lower_initialize failed: %d\n", ret);
+    }
+#endif
+
+#ifdef CONFIG_HD_RK3506_LED_HEARTBEAT
+  /* Software heartbeat: the run LED is not PWM-wired, so a low-priority
+   * thread reproduces the Linux double-flash trigger.
+   */
+
+  ret = hd_rk3506_led_heartbeat_start();
+  if (ret < 0)
+    {
+      _err("ERROR: heartbeat LED thread failed: %d\n", ret);
+    }
+#endif
+
+#ifdef CONFIG_RK3506_MMC
+  /* TF/SD socket on the DesignWare MSHC (0xFF480000).  Board wiring,
+   * power switch and card detect are handled in hd_rk3506_mmc.c; the
+   * chip driver registers /dev/mmcsd0:
+   *   mount -t vfat /dev/mmcsd0 /mnt/sd
    */
 
   do
     {
-      int rptun_ret = rk3506_rptun_initialize();
-      if (rptun_ret < 0)
+      int mmc_ret = hd_rk3506_mmc_initialize();
+      if (mmc_ret < 0)
         {
-          syslog(LOG_ERR, "ERROR: rk3506_rptun_initialize failed: %d\n",
-                 rptun_ret);
+          _err("ERROR: hd_rk3506_mmc_initialize failed: %d\n",
+                 mmc_ret);
         }
     }
   while (0);
+#endif
+
+#ifdef CONFIG_RK3506_RNG
+  /* Hardware random number generator */
+
+  rk3506_rng_initialize();
+#endif
+
+#ifdef CONFIG_RK3506_TSADC
+  /* CPU temperature sensor */
+
+  rk3506_tsadc_initialize();
 #endif
 
 #ifdef CONFIG_RK3506_GMAC0
@@ -632,11 +635,29 @@ int hd_rk3506_bringup(void)
   int gmac_ret = rk3506_gmac0_initialize();
   if (gmac_ret < 0)
     {
-      syslog(LOG_WARNING, "GMAC0: netdev register failed: %d\n",
+      _warn("GMAC0: netdev register failed: %d\n",
              gmac_ret);
     }
 #endif
 
-  syslog(LOG_INFO, "=== HD-RK3506-EVM bringup done ===\n");
+#ifdef CONFIG_RK3506_RPTUN
+  /* Master side of the bus-M0 rpmsg link: boots the embedded M0
+   * firmware and registers /dev/rpmsg/mcu.  The rptun core autostarts
+   * the link from its own worker thread.
+   */
+
+  do
+    {
+      int rptun_ret = rk3506_rptun_initialize();
+      if (rptun_ret < 0)
+        {
+          _err("ERROR: rk3506_rptun_initialize failed: %d\n",
+                 rptun_ret);
+        }
+    }
+  while (0);
+#endif
+
+  _info("=== HD-RK3506-EVM bringup done ===\n");
   return OK;
 }

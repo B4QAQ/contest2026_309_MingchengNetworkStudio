@@ -30,7 +30,6 @@
 #include <string.h>
 #include <errno.h>
 #include <inttypes.h>
-#include <syslog.h>
 #include <time.h>
 
 #include <nuttx/arch.h>
@@ -38,14 +37,7 @@
 
 #include "hardware/rk3506_memorymap.h"
 #include "rk3506_gmac_hal.h"
-
-#ifndef putreg32
-#  define putreg32(v, a) (*(FAR volatile uint32_t *)(a) = (v))
-#endif
-#ifndef getreg32
-#  define getreg32(a)    (*(FAR volatile uint32_t *)(a))
-#endif
-
+#include "rk3506_register.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -170,8 +162,19 @@
 #define DMA_CHAN_INTR_NORMAL        (DMA_CHAN_INTR_ENA_NIE | \
                                      DMA_CHAN_INTR_ENA_RIE | \
                                      DMA_CHAN_INTR_ENA_TIE)
-#define DMA_CHAN_INTR_ABNORMAL      (DMA_CHAN_INTR_ENA_AIE | \
-                                     DMA_CHAN_INTR_ENA_FBE)
+
+/* AIE only aggregates sources whose OWN enable bit is set, so enable the
+ * RX error sources explicitly.  Without RBUE/RSE/RWE here the ISR's
+ * RBU/RPS/RWT branches are dead code: the AIS summary bit never sets for
+ * them, so a drained RX ring (only ETH_RXBUFNB=4 descriptors) stops the
+ * RX DMA with NO interrupt and the port silently stops receiving.
+ */
+
+#define DMA_CHAN_INTR_ABNORMAL      (DMA_CHAN_INTR_ENA_AIE  | \
+                                     DMA_CHAN_INTR_ENA_FBE  | \
+                                     DMA_CHAN_INTR_ENA_RBUE | \
+                                     DMA_CHAN_INTR_ENA_RSE  | \
+                                     DMA_CHAN_INTR_ENA_RWE)
 #define DMA_CHAN_INTR_DEFAULT_MASK  (DMA_CHAN_INTR_NORMAL | \
                                      DMA_CHAN_INTR_ABNORMAL)
 
@@ -1294,7 +1297,7 @@ int HAL_GMAC_PHYInit(struct GMAC_HANDLE *pGMAC,
                      struct GMAC_PHY_Config *config)
 {
   int32_t i, found = 0, timeout = 500;
-  int status;
+  int status = HAL_OK;
   int32_t reg;
 
   if (!config->features)
@@ -1609,6 +1612,24 @@ enum eGMAC_IRQ_Status HAL_GMAC_IRQHandler(struct GMAC_HANDLE *pGMAC)
 {
   enum eGMAC_IRQ_Status status = DMA_UNKNOWN;
   uint32_t intrStatus;
+  uint32_t mtlInt;
+
+  /* Clear a pending MTL RX-queue overflow FIRST.  GMAC_DMARXOpMode()
+   * enables MTL_RX_OVERFLOW_INT_EN (RXOIE), and the MTL overflow source
+   * shares the same level-triggered sbd_intr line as the DMA channels
+   * (rk3506.dtsi: IRQ_TYPE_LEVEL_HIGH).  RXOVFIS is w1c in
+   * MTL_Q0_INTERRUPT_CTRL_STAT; if it is left set after an RX FIFO
+   * overflow the level line stays asserted and the ISR re-enters forever
+   * (livelock).  Clearing it here lets the DMA status clear below stick.
+   */
+
+  mtlInt = getreg32(pGMAC->base + GMAC_MTL_Q0_INTERRUPT_CTRL_STAT);
+  if (mtlInt & MTL_RX_OVERFLOW_INT)
+    {
+      putreg32(MTL_RX_OVERFLOW_INT,
+               pGMAC->base + GMAC_MTL_Q0_INTERRUPT_CTRL_STAT);
+      pGMAC->extraStatus.rxOverflowIRQ++;
+    }
 
   intrStatus = getreg32(pGMAC->base + GMAC_DMA_CH0_STATUS);
 
@@ -1784,19 +1805,26 @@ int HAL_GMAC_Start(struct GMAC_HANDLE *pGMAC, uint8_t *addr)
   value = getreg32(pGMAC->base + GMAC_DMA_MODE);
   putreg32(value | DMA_MODE_SWR, pGMAC->base + GMAC_DMA_MODE);
 
-  /* Wait for software Reset */
+  /* Wait for software Reset.  Use an explicit done flag: with
+   * while(limit--) the limit hits 0 on the final iteration even when that
+   * poll succeeded, so a bare 'if (limit <= 0)' mis-reports success as a
+   * timeout (off-by-one).
+   */
+
+  bool resetDone = false;
 
   while (limit--)
     {
       if (!(getreg32(pGMAC->base + GMAC_DMA_MODE) & DMA_MODE_SWR))
         {
+          resetDone = true;
           break;
         }
 
       HAL_DelayMs(10);
     }
 
-  if (limit <= 0)
+  if (!resetDone)
     {
       return HAL_TIMEOUT;
     }
@@ -1914,13 +1942,6 @@ int HAL_GMAC_Start(struct GMAC_HANDLE *pGMAC, uint8_t *addr)
   value = getreg32(pGMAC->base + GMAC_DMA_CH0_RX_CONTROL);
   value |= DMA_CH0_RX_CONTROL_SR;
   putreg32(value, pGMAC->base + GMAC_DMA_CH0_RX_CONTROL);
-
-  syslog(LOG_INFO, "GMAC HAL Start: rxctl=0x%08lx txctl=0x%08lx"
-         " (rbsz=%u bytes)\n",
-         (unsigned long)getreg32(pGMAC->base + GMAC_DMA_CH0_RX_CONTROL),
-         (unsigned long)getreg32(pGMAC->base + GMAC_DMA_CH0_TX_CONTROL),
-         ((unsigned)((getreg32(pGMAC->base + GMAC_DMA_CH0_RX_CONTROL) &
-                     0xfffe) >> 1)));
 
   return HAL_OK;
 }
@@ -2073,7 +2094,12 @@ uint32_t HAL_GMAC_GetTXIndex(struct GMAC_HANDLE *pGMAC)
 
 uint32_t HAL_GMAC_GetRXIndex(struct GMAC_HANDLE *pGMAC)
 {
-  return pGMAC->txDescIdx;   /* [sic] verbatim from hal_gmac.c */
+  /* SDK hal_gmac.c returns txDescIdx here ([sic]); that is a genuine bug
+   * -- the RX index must come from the RX descriptor cursor, or any RX
+   * accounting that uses it walks the TX ring.  Fixed to rxDescIdx.
+   */
+
+  return pGMAC->rxDescIdx;
 }
 
 /****************************************************************************

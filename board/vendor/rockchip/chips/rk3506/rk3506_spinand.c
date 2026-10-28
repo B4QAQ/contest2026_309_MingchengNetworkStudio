@@ -35,7 +35,7 @@
 #include <nuttx/mtd/mtd.h>
 #include <nuttx/spi/spi.h>
 
-#include "rk3506_spi.h"
+#include "drv/spi/rk3506_spi.h"
 #include "rk3506_cru.h"
 #include "rk3506_iomux.h"
 

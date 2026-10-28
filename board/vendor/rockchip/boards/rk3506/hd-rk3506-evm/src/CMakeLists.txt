@@ -22,16 +22,51 @@
 
 set(SRCS hd_rk3506_boardinit.c hd_rk3506_appinit.c hd_rk3506_bringup.c)
 
-if(CONFIG_INPUT_GT911)
-  list(APPEND SRCS hd_rk3506_gt911.c)
-endif()
+# Board boot (early GPIO0 clock init) and the userled/heartbeat driver
 
-if(CONFIG_LCD_ST7701S)
-  list(APPEND SRCS hd_rk3506_st7701s.c)
+list(APPEND SRCS hd_rk3506_boot.c)
+list(APPEND SRCS hd_rk3506_leds.c)
+
+if(CONFIG_LCD_NV3007)
+  list(APPEND SRCS hd_rk3506_nv3007.c)
 endif()
 
 if(CONFIG_GRAPHICS_LVGL)
   list(APPEND SRCS hd_rk3506_lv_port_disp.c)
+  if(CONFIG_HD_RK3506_LV_BUTTONS)
+    list(APPEND SRCS hd_rk3506_lv_port_indev.c)
+  endif()
+endif()
+
+# hd_ui: 428x142 home screen (status cards + menu).  Registered as an
+# NSH builtin ("hd_ui") and auto-started from rcS in the background.
+# Same builtin-registration rules as netcfg: application target only,
+# never in the board SRCS list.
+if(CONFIG_HD_RK3506_UI)
+  nuttx_add_application(
+    NAME
+    hd_ui
+    STACKSIZE
+    8192
+    PRIORITY
+    100
+    INCLUDE_DIRECTORIES
+    ${NUTTX_APPS_DIR}/include
+    ${NUTTX_APPS_DIR}/interpreters/quickjs/quickjs
+    ${NUTTX_CHIP_ABS_DIR}
+    SRCS
+    hd_rk3506_ui.c
+    hd_rk3506_qapp.c
+    hd_rk3506_qjs_rt.c
+    hd_rk3506_lv_binding.c)
+endif()
+
+if(CONFIG_RK3506_MMC)
+  list(APPEND SRCS hd_rk3506_mmc.c)
+endif()
+
+if(CONFIG_IOEXPANDER)
+  list(APPEND SRCS hd_rk3506_gpio.c)
 endif()
 
 # netcfg: network configuration daemon.  Parses /etc/net.conf and
@@ -57,23 +92,6 @@ if(CONFIG_HD_RK3506_NETCFG)
     hd_rk3506_netcfg.c)
 endif()
 
-# rpmsgtest: NSH builtin acceptance test for the A7<->M0 rpmsg link
-# (writes to /dev/rpmsg-rpmsg-mcu0-test and checks the M0's canned
-# reply).  Same builtin-registration rules as netcfg above.
-if(CONFIG_HD_RK3506_RPMSGTEST)
-  nuttx_add_application(
-    NAME
-    rpmsgtest
-    STACKSIZE
-    3072
-    PRIORITY
-    100
-    INCLUDE_DIRECTORIES
-    ${NUTTX_APPS_DIR}/include
-    SRCS
-    hd_rk3506_rpmsgtest.c)
-endif()
-
 # ota: NSH builtin for the A/B OTA slot manager (/dev/ota).  Same
 # builtin-registration rules as netcfg above.  The chip driver header
 # (rk3506_ota.h) lives in the chip include dir - add it explicitly since
@@ -91,6 +109,22 @@ if(CONFIG_HD_RK3506_OTACMD)
     ${NUTTX_APPS_DIR}/include
     SRCS
     hd_rk3506_ota.c)
+endif()
+
+# rpmsgtest: NSH builtin exercising the bus-M0 rpmsg link.  Uses only
+# the standard rpmsg char ioctls from nuttx/rpmsg/rpmsg.h.
+if(CONFIG_HD_RK3506_RPMSGTEST)
+  nuttx_add_application(
+    NAME
+    rpmsgtest
+    STACKSIZE
+    3072
+    PRIORITY
+    100
+    INCLUDE_DIRECTORIES
+    ${NUTTX_APPS_DIR}/include
+    SRCS
+    hd_rk3506_rpmsgtest.c)
 endif()
 
 # Both init scripts are shipped as RAW NSH scripts (RCRAWS).  They use
@@ -116,6 +150,9 @@ nuttx_add_romfs(
   # /etc/ssl/curl/ca-certificates.crt).  Shipped as a raw file so it is
   # copied verbatim into the romfs.
   etc/ssl/curl/ca-certificates.crt
+  # Built-in quick-app demo (QuickJS), listed by the LVGL apps page
+  # alongside user apps under /data/apps/.
+  etc/apps/hello.js
   PATH
   ${CMAKE_CURRENT_LIST_DIR}/etc)
 

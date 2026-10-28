@@ -222,6 +222,7 @@
 #define DWC2_HPRT_PPWR                 (1 << 12) /* Port power */
 #define DWC2_HPRT_PSPD_SHIFT           (17)
 #define DWC2_HPRT_PSPD_MASK            (3 << DWC2_HPRT_PSPD_SHIFT)
+#define DWC2_HPRT_PSPD_HS              (0 << DWC2_HPRT_PSPD_SHIFT)
 #define DWC2_HPRT_PSPD_FS              (1 << DWC2_HPRT_PSPD_SHIFT)
 #define DWC2_HPRT_PSPD_LS              (2 << DWC2_HPRT_PSPD_SHIFT)
 

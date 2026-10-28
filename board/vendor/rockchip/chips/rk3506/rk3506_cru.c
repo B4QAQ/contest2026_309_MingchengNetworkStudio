@@ -24,30 +24,23 @@
 
 #include <nuttx/config.h>
 
+#include <sys/types.h>
 #include <stdint.h>
-#include <inttypes.h>
-#include <debug.h>
+#include <errno.h>
 
 #include "hardware/rk3506_memorymap.h"
 #include "rk3506_cru.h"
+#include "rk3506_register.h"
 
 /* CRU register access (fall back to a volatile store if the arch
  * headers do not already provide putreg32).
  */
 
-#ifndef putreg32
-#  define putreg32(v, a) (*(FAR volatile uint32_t *)(a) = (v))
-#endif
-
-#ifndef getreg32
-#  define getreg32(a)    (*(FAR volatile uint32_t *)(a))
-#endif
-
-/* Register bank offsets from the CRU base */
-
-#define CRU_CLKSEL_CON(n)    (RK3506_CRU_ADDR + (n) * 4 + 0x300u)
-#define CRU_CLKGATE_CON(n)   (RK3506_CRU_ADDR + (n) * 4 + 0x800u)
-#define CRU_SOFTRST_CON(n)   (RK3506_CRU_ADDR + (n) * 4 + 0xA00u)
+/* Register bank offsets from the CRU base are defined once, publicly,
+ * in rk3506_cru.h (RK3506_CRU_CLKSEL_CON / RK3506_CRU_CLKGATE_CON /
+ * RK3506_CRU_SOFTRST_CON and the PMU-CRU variants); this file uses
+ * those names directly.
+ */
 
 /* SPI1 gate bits inside CLKGATE_CON(12) (from the Linux clk tables) */
 
@@ -68,9 +61,82 @@
 #define CLKSEL34_SPI1_XIN24M      (0x0u << CLKSEL34_SPI1_MUX_SHIFT)
 #define CLKSEL34_SPI1_DIV1        (0x0u << CLKSEL34_SPI1_DIV_SHIFT)
 
+/* SPI0 shares CLKGATE_CON(12) / CLKSEL_CON(34) with SPI1 (clk-rk3506.c):
+ *   PCLK_SPI0 : GATE      CLKGATE_CON(12), bit 10
+ *   CLK_SPI0  : COMPOSITE gate bit 11; mux bits 8..9 (0 = xin24m_gate),
+ *               divider bits 4..7 (0 = /1)
+ */
+
+#define CLKGATE12_PCLK_SPI0  (1u << 10)
+#define CLKGATE12_CLK_SPI0   (1u << 11)
+
+#define CLKSEL34_SPI0_MUX_SHIFT   8
+#define CLKSEL34_SPI0_DIV_SHIFT   4
+#define CLKSEL34_SPI0_MUX_MASK    (0x3u << CLKSEL34_SPI0_MUX_SHIFT)
+#define CLKSEL34_SPI0_DIV_MASK    (0xfu << CLKSEL34_SPI0_DIV_SHIFT)
+
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
+
+/****************************************************************************
+ * Name: rk3506_cru_gate
+ *
+ * Description:
+ *   Generic main-CRU clock-gate primitive (see rk3506_cru.h).  A
+ *   single HIWORD_UPDATE store touches only the requested gate bits.
+ *
+ ****************************************************************************/
+
+void rk3506_cru_gate(uint8_t con, uint32_t mask, bool enable)
+{
+  /* CLK_GATE_SET_TO_DISABLE: data bit 1 disables, 0 enables.  The
+   * high half-word is the per-bit write-enable mask.
+   */
+
+  uint32_t data = enable ? 0u : mask;
+
+  putreg32((mask << 16) | data, RK3506_CRU_CLKGATE_CON(con));
+}
+
+/****************************************************************************
+ * Name: rk3506_cru_reset
+ *
+ * Description:
+ *   Generic main-CRU soft-reset primitive (see rk3506_cru.h).  Data
+ *   bit 1 asserts the reset, 0 releases it.
+ *
+ ****************************************************************************/
+
+void rk3506_cru_reset(uint8_t con, uint32_t mask, bool assert)
+{
+  uint32_t data = assert ? mask : 0u;
+
+  putreg32((mask << 16) | data, RK3506_CRU_SOFTRST_CON(con));
+}
+
+/****************************************************************************
+ * Name: rk3506_spi0_clock_init
+ *
+ * Description:
+ *   Ungate the SPI0 PCLK and functional clock and force CLK_SPI0 to the
+ *   24 MHz crystal with /1 so the DesignWare SSI at 0xFF120000 has a known
+ *   bit-rate source.  HIWORD_UPDATE writes only touch the SPI0 gate and
+ *   mux/div fields; every other clock in the two registers is untouched.
+ *
+ ****************************************************************************/
+
+void rk3506_spi0_clock_init(void)
+{
+  uint32_t gates = CLKGATE12_PCLK_SPI0 | CLKGATE12_CLK_SPI0;
+
+  /* Parent = xin24m (mux 0), serial divider /1 (div 0). */
+
+  uint32_t sel_hi = (CLKSEL34_SPI0_MUX_MASK | CLKSEL34_SPI0_DIV_MASK) << 16;
+
+  putreg32(sel_hi, RK3506_CRU_CLKSEL_CON(34));
+  putreg32(gates << 16, RK3506_CRU_CLKGATE_CON(12));
+}
 
 /****************************************************************************
  * Name: rk3506_spi1_clock_init
@@ -85,18 +151,79 @@
 void rk3506_spi1_clock_init(void)
 {
   uint32_t gates = CLKGATE12_PCLK_SPI1 | CLKGATE12_CLK_SPI1;
-  uint32_t reg   = CRU_CLKGATE_CON(12);
-
-  _info("SPI1 CRU: ungate CLKGATE_CON12 bits 12,13 at 0x%08" PRIx32 "\n",
-        (uint32_t)reg);
+  uint32_t reg   = RK3506_CRU_CLKGATE_CON(12);
 
   /* HIWORD_UPDATE: high half-word = write-enable mask, low half-word =
    * data (0 = enable for SET_TO_DISABLE gates).
    */
 
   putreg32(gates << 16, reg);
+}
 
-  _info("SPI1 CRU: CLKGATE_CON12 now 0x%08" PRIx32 "\n", getreg32(reg));
+/****************************************************************************
+ * Name: rk3506_i2c_clock_init
+ *
+ * Description:
+ *   Ungate one I2C controller's PCLK (register interface) and CLK_I2Cx
+ *   (functional clock), per the Linux clock tables
+ *   (drivers/clk/rockchip/clk-rk3506.c, all GFLAGS = HIWORD_MASK |
+ *   SET_TO_DISABLE, i.e. write the WE mask with a 0 data bit to open):
+ *
+ *     I2C0 : PCLK_I2C0 CLKGATE_CON(11) bit 14, CLK_I2C0 bit 15
+ *     I2C1 : PCLK_I2C1 CLKGATE_CON(12) bit 0,  CLK_I2C1 bit 1
+ *     I2C2 : PCLK_I2C2 CLKGATE_CON(12) bit 2,  CLK_I2C2 bit 3
+ *
+ *   The CLK_I2Cx mux/divider (CLKSEL_CON(32)/(33)) is left at its reset
+ *   parent (xin24m); the i2c-rk3x driver programs its own SCL divider
+ *   from the resulting input clock, so ungating the two gates is all
+ *   that is needed for register access and transfers.  Previously the
+ *   driver relied on U-Boot having ungated these, which broke when the
+ *   boot chain did not.
+ *
+ * Input Parameters:
+ *   bus - I2C controller number, 0..2
+ *
+ * Returned Value:
+ *   OK (0) on success; -EINVAL for an out-of-range bus.
+ *
+ ****************************************************************************/
+
+#define CLKGATE11_PCLK_I2C0  (1u << 14)
+#define CLKGATE11_CLK_I2C0   (1u << 15)
+#define CLKGATE12_PCLK_I2C1  (1u << 0)
+#define CLKGATE12_CLK_I2C1   (1u << 1)
+#define CLKGATE12_PCLK_I2C2  (1u << 2)
+#define CLKGATE12_CLK_I2C2   (1u << 3)
+
+int rk3506_i2c_clock_init(uint8_t bus)
+{
+  uint32_t gates;
+  uint32_t reg;
+
+  switch (bus)
+    {
+      case 0:
+        gates = CLKGATE11_PCLK_I2C0 | CLKGATE11_CLK_I2C0;
+        reg   = RK3506_CRU_CLKGATE_CON(11);
+        break;
+
+      case 1:
+        gates = CLKGATE12_PCLK_I2C1 | CLKGATE12_CLK_I2C1;
+        reg   = RK3506_CRU_CLKGATE_CON(12);
+        break;
+
+      case 2:
+        gates = CLKGATE12_PCLK_I2C2 | CLKGATE12_CLK_I2C2;
+        reg   = RK3506_CRU_CLKGATE_CON(12);
+        break;
+
+      default:
+        return -EINVAL;
+    }
+
+  putreg32(gates << 16, reg);
+
+  return OK;
 }
 
 /****************************************************************************
@@ -150,16 +277,13 @@ void rk3506_fspi_clock_init(void)
 
   selval = (1u << CLKSEL50_FSPI_MUX_SHIFT) | 24u;
 
-  putreg32((selset << 16) | selval, CRU_CLKSEL_CON(50));
+  putreg32((selset << 16) | selval, RK3506_CRU_CLKSEL_CON(50));
 
   /* Ungate HCLK_FSPI and SCLK_FSPI (gate bit 0 = enable for
    * CLK_GATE_SET_TO_DISABLE gates).
    */
 
-  putreg32(gates << 16, CRU_CLKGATE_CON(17));
-
-  _info("FSPI CRU: CLKSEL50=0x%08" PRIx32 " CLKGATE17=0x%08" PRIx32 "\n",
-        getreg32(CRU_CLKSEL_CON(50)), getreg32(CRU_CLKGATE_CON(17)));
+  putreg32(gates << 16, RK3506_CRU_CLKGATE_CON(17));
 }
 
 /****************************************************************************
@@ -233,7 +357,7 @@ void rk3506_gmac0_clock_init(void)
 
   putreg32(((CLKSEL55_PTP_MUX_MASK | CLKSEL55_PTP_DIV_MASK) << 16) |
            (CLKSEL55_PTP_XIN24M | CLKSEL55_PTP_DIV1),
-           CRU_CLKSEL_CON(55));
+           RK3506_CRU_CLKSEL_CON(55));
 
   /* Set CLK_MAC_ROOT = GPLL / 24 = 50 MHz.  This is the RMII MAC core
    * reference clock (hal_bsp.c clkID50M = CLK_MAC); without it the MAC
@@ -243,7 +367,7 @@ void rk3506_gmac0_clock_init(void)
    */
 
   putreg32((CLKSEL50_MAC_ROOT_DIV_MASK << 16) | CLKSEL50_MAC_ROOT_DIV24,
-           CRU_CLKSEL_CON(50));
+           RK3506_CRU_CLKSEL_CON(50));
 
   gates = CLKGATE19_CLK_MAC_PTP_ROOT | CLKGATE19_CLK_MAC0_PTP |
           CLKGATE18_CLK_MAC0         |
@@ -255,11 +379,11 @@ void rk3506_gmac0_clock_init(void)
           CLKGATE17_ACLK_HSPERI_ROOT;
 
   putreg32(gates << 16,
-           (uint32_t)(RK3506_CRU_ADDR + 17u * 4u + 0x800u));
+            (uint32_t)RK3506_CRU_CLKGATE_CON(17));
   putreg32((CLKGATE18_CLK_MAC0) << 16,
-           (uint32_t)(RK3506_CRU_ADDR + 18u * 4u + 0x800u));
+            (uint32_t)RK3506_CRU_CLKGATE_CON(18));
   putreg32(((CLKGATE19_CLK_MAC_PTP_ROOT | CLKGATE19_CLK_MAC0_PTP) << 16),
-           (uint32_t)(RK3506_CRU_ADDR + 19u * 4u + 0x800u));
+            (uint32_t)RK3506_CRU_CLKGATE_CON(19));
 
   /* Deassert SRST_A_MAC0.  Some Rockchip SOFTRST registers require a
    * pulse (assert then deassert) for the reset to actually release.
@@ -267,8 +391,8 @@ void rk3506_gmac0_clock_init(void)
    */
 
   putreg32(SOFTRST17_SRST_A_MAC0 << 16 | SOFTRST17_SRST_A_MAC0,
-           CRU_SOFTRST_CON(17));
-  putreg32(SOFTRST17_SRST_A_MAC0 << 16, CRU_SOFTRST_CON(17));
+           RK3506_CRU_SOFTRST_CON(17));
+  putreg32(SOFTRST17_SRST_A_MAC0 << 16, RK3506_CRU_SOFTRST_CON(17));
 }
 
 /****************************************************************************
@@ -277,18 +401,17 @@ void rk3506_gmac0_clock_init(void)
  * Description:
  *   Ungate the PWM0 clocks (PMU CRU domain, per clk-rk3506.c):
  *
- *     PCLK_PWM0 : GATE, PMU_CLKGATE_CON(0), bit 15 (bus access)
+ *     PCLK_PWM0 : GATE, RK3506_PMUCRU_CLKGATE_CON(0), bit 15 (bus access)
  *     CLK_PWM0  : COMPOSITE_NOMUX, parent clk_gpll_div_100m (100 MHz),
  *                 div PMU_CLKSEL_CON(0) [9:6] left at /1 (reset 0),
- *                 gate PMU_CLKGATE_CON(1), bit 0
+ *                 gate RK3506_PMUCRU_CLKGATE_CON(1), bit 0
  *
- *   PMU CRU registers are at CRU_PMU (0xFF9B0000) + CLKSEL 0x300 /
- *   CLKGATE 0x800, HIWORD write-enable style.
+ *   PMU CRU registers are at RK3506_PMU_CRU_ADDR (0xFF9B0000) +
+ *   CLKSEL 0x300 / CLKGATE 0x800, HIWORD write-enable style.  The
+ *   layout macros live in rk3506_cru.h (RK3506_PMUCRU_CLKGATE_CON).
  *
  ****************************************************************************/
 
-#define PMU_CRU_ADDR         0xFF9B0000u
-#define PMU_CLKGATE_CON(n)   (PMU_CRU_ADDR + (n) * 4u + 0x800u)
 #define PMU_CLKGATE0_PCLK_PWM0   (1u << 15)
 #define PMU_CLKGATE1_CLK_PWM0    (1u << 0)
 
@@ -299,8 +422,144 @@ void rk3506_pwm_clock_init(void)
    * the PWM counter runs at 100 MHz.
    */
 
-  putreg32(PMU_CLKGATE0_PCLK_PWM0 << 16, PMU_CLKGATE_CON(0));
-  putreg32(PMU_CLKGATE1_CLK_PWM0 << 16, PMU_CLKGATE_CON(1));
+  putreg32(PMU_CLKGATE0_PCLK_PWM0 << 16, RK3506_PMUCRU_CLKGATE_CON(0));
+  putreg32(PMU_CLKGATE1_CLK_PWM0 << 16, RK3506_PMUCRU_CLKGATE_CON(1));
+}
+
+/****************************************************************************
+ * Name: rk3506_gpio0_clock_init
+ *
+ * Description:
+ *   Ungate PCLK_GPIO0 (PMU CRU domain, clk-rk3506.c:
+ *   GATE(PCLK_GPIO0, ..., RK3506_PMUCRU_CLKGATE_CON(0), bit 8)).  GPIO0 is the
+ *   always-on/PMU GPIO bank backing the RM_IO matrix pads; without this
+ *   bus clock writes to its DR/DDR registers are silently ignored (reads
+ *   back 0), so RST/DC GPIOs never drive.  The separate PCLK_GPIO0_IOC
+ *   (bit 7) feeds the IOC mux and is already enabled.
+ *
+ ****************************************************************************/
+
+#define PMU_CLKGATE0_PCLK_GPIO0  (1u << 8)
+#define PMU_CLKGATE0_DBCLK_GPIO0 (1u << 9)
+
+void rk3506_gpio0_clock_init(void)
+{
+  putreg32(PMU_CLKGATE0_PCLK_GPIO0 << 16, RK3506_PMUCRU_CLKGATE_CON(0));
+}
+
+/****************************************************************************
+ * Name: rk3506_gpio_clock_enable
+ *
+ * Description:
+ *   Ungate one GPIO bank's PCLK (register interface) and DBCLK
+ *   (debounce / interrupt sampling clock), per the Linux clock tables
+ *   (drivers/clk/rockchip/clk-rk3506.c, all GFLAGS = HIWORD_MASK |
+ *   SET_TO_DISABLE, i.e. write the WE mask with a 0 data bit to open):
+ *
+ *     bank0 : PCLK_GPIO0  RK3506_PMUCRU_CLKGATE_CON(0) bit 8
+ *             DBCLK_GPIO0 RK3506_PMUCRU_CLKGATE_CON(0) bit 9
+ *     bank1 : PCLK_GPIO1  CLKGATE_CON(3)  bit 8
+ *             DBCLK_GPIO1 CLKGATE_CON(3)  bit 9
+ *     bank2 : PCLK_GPIO2  CLKGATE_CON(12) bit 14
+ *             DBCLK_GPIO2 CLKGATE_CON(12) bit 15
+ *     bank3 : PCLK_GPIO3  CLKGATE_CON(13) bit 0
+ *             DBCLK_GPIO3 CLKGATE_CON(13) bit 1
+ *     bank4 : PCLK_GPIO4  CLKGATE_CON(13) bit 2
+ *             DBCLK_GPIO4 CLKGATE_CON(13) bit 3
+ *
+ *   The IOC-side clocks (PCLK_GPIO0_IOC / PCLK_GPIO1_IOC /
+ *   PCLK_GPIO234_IOC) are all marked CLK_IS_CRITICAL in the kernel and
+ *   are already ungated by BootROM/U-Boot, so they are not touched.
+ *
+ *   The DBCLK muxes (PMU_CLKSEL_CON(0) / CLKSEL_CON(35)) are left at
+ *   their reset parents (xin24m / 32k); only the gates are opened.
+ *
+ * Input Parameters:
+ *   bank - GPIO bank number, 0..4
+ *
+ * Returned Value:
+ *   OK (0) on success; -EINVAL for an out-of-range bank.
+ *
+ ****************************************************************************/
+
+#define CLKGATE3_PCLK_GPIO1    (1u << 8)
+#define CLKGATE3_DBCLK_GPIO1   (1u << 9)
+#define CLKGATE12_PCLK_GPIO2   (1u << 14)
+#define CLKGATE12_DBCLK_GPIO2  (1u << 15)
+#define CLKGATE13_PCLK_GPIO3   (1u << 0)
+#define CLKGATE13_DBCLK_GPIO3  (1u << 1)
+#define CLKGATE13_PCLK_GPIO4   (1u << 2)
+#define CLKGATE13_DBCLK_GPIO4  (1u << 3)
+
+int rk3506_gpio_clock_enable(uint8_t bank)
+{
+  switch (bank)
+    {
+      case 0:
+        putreg32((PMU_CLKGATE0_PCLK_GPIO0 | PMU_CLKGATE0_DBCLK_GPIO0)
+                 << 16, RK3506_PMUCRU_CLKGATE_CON(0));
+        break;
+
+      case 1:
+        putreg32((CLKGATE3_PCLK_GPIO1 | CLKGATE3_DBCLK_GPIO1) << 16,
+                 RK3506_CRU_CLKGATE_CON(3));
+        break;
+
+      case 2:
+        putreg32((CLKGATE12_PCLK_GPIO2 | CLKGATE12_DBCLK_GPIO2) << 16,
+                 RK3506_CRU_CLKGATE_CON(12));
+        break;
+
+      case 3:
+        putreg32((CLKGATE13_PCLK_GPIO3 | CLKGATE13_DBCLK_GPIO3) << 16,
+                 RK3506_CRU_CLKGATE_CON(13));
+        break;
+
+      case 4:
+        putreg32((CLKGATE13_PCLK_GPIO4 | CLKGATE13_DBCLK_GPIO4) << 16,
+                 RK3506_CRU_CLKGATE_CON(13));
+        break;
+
+      default:
+        return -EINVAL;
+    }
+
+  return OK;
+}
+
+/****************************************************************************
+ * Name: rk3506_all_clocks_enable
+ *
+ * Description:
+ *   Debug aid: ungate EVERY clock in both the main CRU (CLKGATE_CON0..22)
+ *   and the PMU CRU (PMU_CLKGATE_CON0..2).  Rockchip gate registers use
+ *   HIWORD write-enable + SET_TO_DISABLE data semantics, so 0xFFFF0000
+ *   means "for every gate: enable (data bit 0)"; reserved bits ignore the
+ *   write.  Counts come from clk-rk3506.c (highest used index = 22 main,
+ *   2 PMU).  Dividers/muxes are left untouched; per-peripheral init still
+ *   programs its own mux/div as needed.
+ *
+ *   DEBUG-ONLY escape hatch for bring-up (e.g. "is this peripheral dead
+ *   because its clock is gated?").  It has no production caller -- each
+ *   peripheral ungates its own clocks through the helpers above -- so it
+ *   is GC'd by LTO in a normal build.  Do NOT call it from production
+ *   paths; doing so masks real clock-ownership bugs.
+ *
+ ****************************************************************************/
+
+void rk3506_all_clocks_enable(void)
+{
+  unsigned int i;
+
+  for (i = 0; i <= 22; i++)
+    {
+      putreg32(0xFFFF0000u, RK3506_CRU_CLKGATE_CON(i));
+    }
+
+  for (i = 0; i <= 2; i++)
+    {
+      putreg32(0xFFFF0000u, RK3506_PMUCRU_CLKGATE_CON(i));
+    }
 }
 
 /****************************************************************************
@@ -338,19 +597,19 @@ void rk3506_saradc_clock_init(void)
   /* Ungate PCLK_SARADC + CLK_SARADC */
 
   putreg32((CRU_CLKGATE19_PCLK_SARADC | CRU_CLKGATE19_CLK_SARADC) << 16,
-           CRU_CLKGATE_CON(19));
+           RK3506_CRU_CLKGATE_CON(19));
 
   /* CLK_SARADC: mux = xin24m (0), div = 15 -> 24 MHz / 16 = 1.5 MHz */
 
-  clksel = getreg32(CRU_CLKSEL_CON(54));
+  clksel = getreg32(RK3506_CRU_CLKSEL_CON(54));
   clksel &= ~(SARADC_CLKSEL54_MUX_MASK | SARADC_CLKSEL54_DIV_MASK);
   clksel |= SARADC_CLKSEL54_DIV_1P5MHZ;
-  putreg32((0x3fu << 16) | clksel, CRU_CLKSEL_CON(54));
+  putreg32((0x3fu << 16) | clksel, RK3506_CRU_CLKSEL_CON(54));
 
   /* Release SRST_P_SARADC + SRST_SARADC */
 
   putreg32((CRU_SOFTRST19_SRST_P_SARADC | CRU_SOFTRST19_SRST_SARADC)
-           << 16, CRU_SOFTRST_CON(19));
+           << 16, RK3506_CRU_SOFTRST_CON(19));
 }
 
 /****************************************************************************
@@ -399,6 +658,7 @@ void rk3506_can_clock_init(unsigned int iface)
   uint32_t muxshift;
   uint32_t divshift;
   uint32_t selcon;
+  uint32_t wemask;
 
   if (iface == 0)
     {
@@ -407,6 +667,16 @@ void rk3506_can_clock_init(unsigned int iface)
       muxshift = CAN_CLKSEL_MUX_SHIFT0;
       divshift = CAN_CLKSEL_DIV_SHIFT0;
       selcon   = 35u;
+
+      /* CAN0 fields occupy CLKSEL_CON35 data bits [13:6]
+       * (mux [13:11], div [10:6]); the HIWORD write-enable mask
+       * must cover exactly those bits (kernel clk-rk3506.c:495-499).
+       * The previous fixed 0x7f mask only enabled the low seven
+       * bits and silently dropped the CAN0 mux/divisor writes.
+       */
+
+      wemask = (0x7u << CAN_CLKSEL_MUX_SHIFT0) |
+               (0x1fu << CAN_CLKSEL_DIV_SHIFT0);   /* 0x3fc0 */
     }
   else
     {
@@ -415,23 +685,30 @@ void rk3506_can_clock_init(unsigned int iface)
       muxshift = CAN_CLKSEL_MUX_SHIFT1;
       divshift = CAN_CLKSEL_DIV_SHIFT1;
       selcon   = 36u;
+
+      /* CAN1 fields occupy CLKSEL_CON36 data bits [7:0]
+       * (mux [7:5], div [4:0]) (kernel clk-rk3506.c:500-502).
+       */
+
+      wemask = (0x7u << CAN_CLKSEL_MUX_SHIFT1) |
+               (0x1fu << CAN_CLKSEL_DIV_SHIFT1);   /* 0x00ff */
     }
 
   /* Ungate HCLK + CLK */
 
-  putreg32(gatebits << 16, CRU_CLKGATE_CON(13));
+  putreg32(gatebits << 16, RK3506_CRU_CLKGATE_CON(13));
 
   /* CLK_CANx: mux = gpll, div = 5 -> 200 MHz */
 
-  clksel = getreg32(CRU_CLKSEL_CON(selcon));
+  clksel = getreg32(RK3506_CRU_CLKSEL_CON(selcon));
   clksel &= ~((0x7u << muxshift) | (0x1fu << divshift));
   clksel |= (CAN_CLKSEL_MUX_GPLL << muxshift) |
             (CAN_CLKSEL_DIV_200MHZ << divshift);
-  putreg32((0x7fu << 16) | clksel, CRU_CLKSEL_CON(selcon));
+  putreg32((wemask << 16) | clksel, RK3506_CRU_CLKSEL_CON(selcon));
 
   /* Release both resets */
 
-  putreg32(rstbits << 16, CRU_SOFTRST_CON(13));
+  putreg32(rstbits << 16, RK3506_CRU_SOFTRST_CON(13));
 }
 
 /****************************************************************************
@@ -463,5 +740,5 @@ void rk3506_wdt_clock_init(unsigned int iface)
     (CRU_CLKGATE6_PCLK_WDT0 | CRU_CLKGATE6_TCLK_WDT0) :
     (CRU_CLKGATE6_PCLK_WDT1 | CRU_CLKGATE6_TCLK_WDT1);
 
-  putreg32(bits << 16, CRU_CLKGATE_CON(6));
+  putreg32(bits << 16, RK3506_CRU_CLKGATE_CON(6));
 }

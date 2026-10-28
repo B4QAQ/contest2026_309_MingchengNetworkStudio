@@ -119,13 +119,13 @@ static int netcfg_parse_conf(FAR struct netcfg_conf_s *conf)
           *key = '\0';
         }
 
-      key = strtok(line, " \t\r\n");
+      key = strtok(line, "= \t\r\n");
       if (key == NULL)
         {
           continue;
         }
 
-      val = strtok(NULL, " \t\r\n");
+      val = strtok(NULL, "= \t\r\n");
 
       if (strcasecmp(key, "mode") == 0 && val != NULL)
         {
@@ -410,7 +410,8 @@ int main(int argc, FAR char *argv[])
 {
   struct netcfg_conf_s conf;
   bool oneshot = (argc > 1 && strcmp(argv[1], "once") == 0);
-  bool was_up;
+  bool link_up;
+  bool watch = false;
   int ret;
 
   ret = netcfg_parse_conf(&conf);
@@ -419,28 +420,47 @@ int main(int argc, FAR char *argv[])
       return EXIT_FAILURE;
     }
 
-  /* Initial configuration: only bring up the interface if it is not
-   * already up (the netinit thread may have done it already).
+#ifdef CONFIG_NETDEV_PHY_IOCTL
+  /* As a persistent auto_dhcp daemon, register for link-change signals
+   * BEFORE ifup().  Registration blocks the signal, so the first
+   * carrier-on transition after ifup() cannot be missed.
    */
 
-  was_up = netcfg_is_link_up();
+  watch = conf.dhcp && !oneshot && conf.auto_dhcp;
+  if (watch)
+    {
+      ret = netcfg_link_notify_register();
+      if (ret != OK)
+        {
+          return EXIT_FAILURE;
+        }
+    }
+#endif
+
+  /* Bring the interface up so PHY carrier detection runs. */
+
+  netlib_ifup(NETCFG_IFNAME);
 
   if (conf.dhcp)
     {
-      if (!was_up)
-        {
-          netlib_ifup(NETCFG_IFNAME);
-        }
+      /* Do not hammer DHCP when no cable is plugged in: run the initial
+       * negotiation only with carrier present; otherwise the link-change
+       * service loop below (auto_dhcp) starts DHCP on plug-in.
+       */
 
-      netcfg_run_dhcp();
+      link_up = netcfg_is_link_up();
+      if (link_up)
+        {
+          netcfg_run_dhcp();
+        }
+      else
+        {
+          printf("netcfg: no carrier on %s, deferring DHCP until link up\n",
+                 NETCFG_IFNAME);
+        }
     }
   else
     {
-      if (!was_up)
-        {
-          netlib_ifup(NETCFG_IFNAME);
-        }
-
       netcfg_apply_static(&conf);
     }
 
@@ -450,10 +470,13 @@ int main(int argc, FAR char *argv[])
     }
 
 #ifdef CONFIG_NETDEV_PHY_IOCTL
-  ret = netcfg_link_notify_register();
-  if (ret != OK)
+  if (!watch)
     {
-      return EXIT_FAILURE;
+      ret = netcfg_link_notify_register();
+      if (ret != OK)
+        {
+          return EXIT_FAILURE;
+        }
     }
 
   /* Link-change service loop: each signal means the link CHANGED.
@@ -475,6 +498,7 @@ int main(int argc, FAR char *argv[])
         }
     }
 #else
+  (void)watch;
   printf("netcfg: NETDEV_PHY_IOCTL disabled, no link watching\n");
 #endif
 

@@ -245,6 +245,72 @@ static uart_dev_t g_uart1port =
 };
 #endif
 
+/* UART2 */
+
+#ifdef CONFIG_RK3506_UART2
+static char g_uart2rxbuffer[CONFIG_UART2_RXBUFSIZE];
+static char g_uart2txbuffer[CONFIG_UART2_TXBUFSIZE];
+
+static struct rk3506_uart_s g_uart2priv =
+{
+  .uartbase  = RK3506_UART2_ADDR,
+  .baud      = CONFIG_UART2_BAUD,
+  .irq       = RK3506_IRQ_UART2,
+  .parity    = CONFIG_UART2_PARITY,
+  .bits      = CONFIG_UART2_BITS,
+  .stopbits2 = CONFIG_UART2_2STOP,
+};
+
+static uart_dev_t g_uart2port =
+{
+  .recv =
+  {
+    .size   = CONFIG_UART2_RXBUFSIZE,
+    .buffer = g_uart2rxbuffer,
+  },
+  .xmit =
+  {
+    .size   = CONFIG_UART2_TXBUFSIZE,
+    .buffer = g_uart2txbuffer,
+  },
+  .ops  = &g_rk3506_uart_ops,
+  .priv = &g_uart2priv,
+};
+#endif
+
+/* UART3 */
+
+#ifdef CONFIG_RK3506_UART3
+static char g_uart3rxbuffer[CONFIG_UART3_RXBUFSIZE];
+static char g_uart3txbuffer[CONFIG_UART3_TXBUFSIZE];
+
+static struct rk3506_uart_s g_uart3priv =
+{
+  .uartbase  = RK3506_UART3_ADDR,
+  .baud      = CONFIG_UART3_BAUD,
+  .irq       = RK3506_IRQ_UART3,
+  .parity    = CONFIG_UART3_PARITY,
+  .bits      = CONFIG_UART3_BITS,
+  .stopbits2 = CONFIG_UART3_2STOP,
+};
+
+static uart_dev_t g_uart3port =
+{
+  .recv =
+  {
+    .size   = CONFIG_UART3_RXBUFSIZE,
+    .buffer = g_uart3rxbuffer,
+  },
+  .xmit =
+  {
+    .size   = CONFIG_UART3_TXBUFSIZE,
+    .buffer = g_uart3txbuffer,
+  },
+  .ops  = &g_rk3506_uart_ops,
+  .priv = &g_uart3priv,
+};
+#endif
+
 /* Console device selection */
 
 #ifdef CONFIG_RK3506_UART0
@@ -670,6 +736,12 @@ void arm_serialinit(void)
 #endif
 #ifdef CONFIG_RK3506_UART1
   uart_register("/dev/ttyS1", &g_uart1port);
+#endif
+#ifdef CONFIG_RK3506_UART2
+  uart_register("/dev/ttyS2", &g_uart2port);
+#endif
+#ifdef CONFIG_RK3506_UART3
+  uart_register("/dev/ttyS3", &g_uart3port);
 #endif
 }
 

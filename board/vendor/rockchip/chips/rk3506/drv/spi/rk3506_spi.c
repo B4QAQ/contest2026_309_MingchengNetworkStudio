@@ -50,19 +50,13 @@
 #include <nuttx/kmalloc.h>
 
 #include "hardware/rk3506_memorymap.h"
-#include "rk3506_spi.h"
+#include "drv/spi/rk3506_spi.h"
+#include "rk3506_cru.h"
+#include "rk3506_register.h"
 
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
-
-#ifndef putreg32
-#  define putreg32(v, x) (*(FAR volatile uint32_t *)(x) = (v))
-#endif
-
-#ifndef getreg32
-#  define getreg32(x) (*(FAR volatile uint32_t *)(x))
-#endif
 
 #define RK3506_SPI_NUM_BUS        2
 
@@ -163,11 +157,10 @@ static const uint32_t g_spi_base[RK3506_SPI_NUM_BUS] =
   RK3506_SPI1_ADDR
 };
 
-static const int g_spi_irq[RK3506_SPI_NUM_BUS] =
-{
-  RK3506_IRQ_SPI0,
-  RK3506_IRQ_SPI1
-};
+/* NOTE: this driver is purely polled (rk3506_spi_poll_transfer), no SPI
+ * IRQ is ever attached, so the former g_spi_irq[] table (RK3506_IRQ_SPI0/1)
+ * had no consumer and was removed (-Wunused-const-variable).
+ */
 
 /****************************************************************************
  * Private Function Prototypes
@@ -633,6 +626,20 @@ FAR struct spi_dev_s *rk3506_spibus_initialize(int bus)
       };
 
       priv->dev.ops = &rk3506_spi_ops;
+    }
+
+  /* Ungate this bus's PCLK + CLK_SPIx before touching its registers
+   * (the driver owns its clocks; it no longer relies on the board or
+   * U-Boot having ungated them).  The clock helpers are idempotent.
+   */
+
+  if (bus == RK3506_SPI0_BUS)
+    {
+      rk3506_spi0_clock_init();
+    }
+  else if (bus == RK3506_SPI1_BUS)
+    {
+      rk3506_spi1_clock_init();
     }
 
   rk3506_spi_hw_init(priv);
