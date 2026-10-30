@@ -1,0 +1,168 @@
+/* SPDX-License-Identifier: BSD-3-Clause */
+/*
+ * Copyright (c) 2023 Rockchip Electronics Co., Ltd.
+ *
+ * Vanxoak HD-RK3506G-EVM AMP M0 DRAM 链接脚本。
+ * 基于官方 gcc_bus_m0.ld 另存，不原地改：
+ *   RAM ORIGIN 0x00000000 -> 0x03a00000（DRAM 加载基址，与 ITS load / DTS
+ *   mcu_reserved 三处一致），LENGTH 0x8000 -> 0x00100000（1MB）。
+ *   LINUX_RPMSG 保持 ORIGIN=0x03c00000（M0 直接以物理地址访问 DRAM 共享区），
+ *   相对偏移 = 0x03c00000 - 0x03a00000 = 0x00200000。
+ */
+
+MEMORY
+{
+    RAM(rxw) : ORIGIN = 0x03a00000, LENGTH = 0x00100000
+    LINUX_RPMSG (rxw) : ORIGIN = 0x03c00000, LENGTH = 0x00200000
+}
+
+ENTRY(Reset_Handler)
+
+__STACK_SIZE = 0x400;
+
+SECTIONS
+{
+    .text :
+    {
+        KEEP(*(.vectors))
+        _stext = .;
+        . = ALIGN(16);
+        KEEP(*(.init))
+        KEEP(*(.fini))
+        *(.text)                        /* remaining code */
+        *(.text.*)                      /* remaining code */
+        *(.rodata)                      /* read-only data (constants) */
+        *(.rodata*)
+        *(.glue_7)
+        *(.glue_7t)
+        *(.gnu.linkonce.t*)
+
+        . = ALIGN(16);
+        _etext = .;
+    } > RAM
+
+    .ARM.extab :
+    {
+        *(.ARM.extab* .gnu.linkonce.armextab.*)
+    } > RAM
+
+    __exidx_start = .;
+    .ARM.exidx :
+    {
+        *(.ARM.exidx* .gnu.linkonce.armexidx.*)
+    } > RAM
+    __exidx_end = .;
+
+    .zero.table :
+    {
+        . = ALIGN(4);
+        __zero_table_start__ = .;
+        LONG (__bss_start__)
+        LONG (__bss_end__ - __bss_start__)
+        __zero_table_end__ = .;
+    } > RAM
+
+    .copy.table :
+    {
+        . = ALIGN(4);
+        __copy_table_start__ = .;
+        __copy_table_end__ = .;
+    } > RAM
+
+    . = ALIGN (4);
+
+    .data :
+    {
+        PROVIDE(__data_start__ = .);
+        *(vtable)
+        *(.data)
+        *(.data.*)
+
+        . = ALIGN(4);
+        /* preinit data */
+        PROVIDE_HIDDEN (__preinit_array_start = .);
+        KEEP(*(.preinit_array))
+        PROVIDE_HIDDEN (__preinit_array_end = .);
+
+        . = ALIGN(4);
+        /* init data */
+        PROVIDE_HIDDEN (__init_array_start = .);
+        KEEP(*(SORT(.init_array.*)))
+        KEEP(*(.init_array))
+        PROVIDE_HIDDEN (__init_array_end = .);
+
+        . = ALIGN(4);
+        /* finit data */
+        PROVIDE_HIDDEN (__fini_array_start = .);
+        KEEP(*(SORT(.fini_array.*)))
+        KEEP(*(.fini_array))
+        PROVIDE_HIDDEN (__fini_array_end = .);
+
+        KEEP(*(.jcr*))
+
+        . = ALIGN(16);
+        *(.sdata)
+        *(.sdata.*)
+        PROVIDE(__data_end__ = .);
+    } > RAM
+
+    . = ALIGN(16);
+
+    .ctors :
+    {
+        PROVIDE(__ctors_start__ = .);
+        KEEP(*(SORT(.ctors.*)))
+        KEEP(*(.ctors))
+        PROVIDE(__ctors_end__ = .);
+    } > RAM
+
+    .dtors :
+    {
+        PROVIDE(__dtors_start__ = .);
+        KEEP(*(SORT(.dtors.*)))
+        KEEP(*(.dtors))
+        PROVIDE(__dtors_end__ = .);
+    } > RAM
+
+    .linux_share_rpmsg (NOLOAD):
+    {
+        PROVIDE(__linux_share_rpmsg_start__ = .);
+        . += LENGTH(LINUX_RPMSG);
+        PROVIDE(__linux_share_rpmsg_end__ = .);
+    } > LINUX_RPMSG
+
+    . = ALIGN(16);
+
+    .bss :
+    {
+        PROVIDE(__bss_start__ = .);
+        *(.bss)
+        *(.bss.*)
+        *(.dynbss)
+        *(COMMON)
+        . = ALIGN(16);
+        PROVIDE(__bss_end__ = .);
+    } > RAM
+    _end = .;
+   PROVIDE(end = .);
+
+    . = ALIGN(16);
+    __STACK_START = ORIGIN(RAM) + LENGTH(RAM) - __STACK_SIZE;
+    __HEAP_SIZE = (__STACK_START - .);
+
+    .heap :
+    {
+        PROVIDE(__heap_start = .);
+        . += __HEAP_SIZE;
+        PROVIDE(__heap_end = .);
+        __HeapLimit = .;
+    } > RAM
+
+    .stack __STACK_START :
+    {
+        __StackLimit = .;
+        PROVIDE(__StackTop = .);
+        . += __STACK_SIZE;
+        __stack = .;
+    } > RAM
+}

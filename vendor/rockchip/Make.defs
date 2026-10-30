@@ -1,0 +1,26 @@
+############################################################################
+# vendor/rockchip/Make.defs
+#
+# Top-level Make.defs for Rockchip vendor.
+# This file is included by the NuttX apps build system to register
+# Rockchip applications.
+############################################################################
+
+# Derive current folder name to check if we are for the correct board
+
+CUR_FOLDER := $(notdir $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST)))))
+
+# Base paths
+
+RK_VENDOR_DIR := $(APPDIR)/vendor/rockchip
+RK_CHIP_DIR   := $(RK_VENDOR_DIR)/chips/rk3506
+
+# Only include if this vendor matches the board config
+
+ifeq ($(findstring $(CUR_FOLDER),$(CONFIG_ARCH_BOARD_CUSTOM_DIR)), $(CUR_FOLDER))
+
+# Vendor applications
+
+include $(wildcard $(RK_VENDOR_DIR)/apps/Make.defs)
+
+endif # CUR_FOLDER check

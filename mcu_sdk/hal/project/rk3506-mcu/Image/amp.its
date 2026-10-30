@@ -1,0 +1,54 @@
+/*
+ * Copyright (C) 2024 Rockchip Electronics Co., Ltd.
+ *
+ * SPDX-License-Identifier: GPL-2.0
+ *
+ * HD-RK3506-EVM AMP M0 FIT (DRAM scheme).
+ *
+ * Derived from the SDK's hal/project/rk3506-mcu/Image/amp.its with two
+ * changes:
+ *   1. load 0xfff84000 (M0 SRAM, 32 KiB) -> 0x03a00000 (DRAM, 1 MiB).
+ *      The SRAM window is too small for anything beyond the bare rpmsg
+ *      demo, so the firmware lives in DRAM exactly like the validated
+ *      Linux-SDK AMP flow.  The address must match gcc_bus_m0_ddr.ld
+ *      ORIGIN and the Linux reserved-memory node mcu@3a00000 - all
+ *      three are 0x03a00000.
+ *   2. The RSA signature block is dropped: our U-Boot carries no FIT
+ *      signing key and the image is flashed through upgrade_tool, not
+ *      signature-verified by the bootloader.
+ *
+ * U-Boot (CONFIG_AMP + CONFIG_ROCKCHIP_AMP) finds this FIT in the "amp"
+ * GPT partition during board_late_init() -> amp_cpus_on(), copies the
+ * standalone image to `load` while the M0 is held in reset, then calls
+ * fit_standalone_release().
+ */
+
+/dts-v1/;
+/ {
+	description = "Rockchip AMP FIT Image";
+	#address-cells = <1>;
+
+	images {
+		mcu {
+			description  = "mcu";
+			data         = /incbin/("../GCC/TestDemo.bin");
+			type         = "standalone";	/* must be "standalone" */
+			compression  = "none";
+			arch         = "arm";		/* same as U-Boot state     */
+			load         = <0x03a00000>;	/* DRAM, 1 MiB reserved     */
+			udelay       = <1000000>;
+			hash {
+				algo = "sha256";
+			};
+		};
+	};
+
+	configurations {
+		default = "conf";
+		conf {
+			description = "Rockchip AMP images";
+			rollback-index = <0x0>;
+			loadables = "mcu";
+		};
+	};
+};

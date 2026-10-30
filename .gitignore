@@ -9,6 +9,32 @@ HD-RK3506-EVM/
 OpenVelaDocs/
 RK3506G2/
 lfs/
+uboot_build/
+openvela/nand_firmware/v4_backup_update.img
 nanopi_m4_rk3399/
 openvela/.repo/
 openvela/cmake_out/
+openvela/nand_firmware/.mcu_build/
+# NOTE: openvela/ is no longer ignored wholesale (we track
+# openvela/nand_firmware/*), but the .repo-managed sub-trees below are
+# independent git repos (vendor/rockchip, nuttx, apps, ...) and must NOT be
+# committed into this contest repo, so they stay ignored:
+openvela/apps/
+openvela/audio/
+openvela/build/
+openvela/docs/
+openvela/external/
+openvela/frameworks/
+openvela/nuttx/
+openvela/nuttx-apps/
+openvela/packages/
+openvela/prebuilts/
+openvela/tests/
+openvela/tools/
+openvela/vendor/
+.dsh/
+JsFeatureDocs/
+VelaDocs/
+Vela_Application_Documentation-main/
+luoxe_docs/
+veladocsOffial/

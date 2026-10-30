@@ -1,0 +1,9 @@
+############################################################################
+# vendor/rockchip/chips/rk3506/drv/gpio/Make.defs
+#
+# GPIO driver for Rockchip RK3506
+############################################################################
+
+ifeq ($(CONFIG_RK3506_GPIO),y)
+CHIP_CSRCS += drv/gpio/rk3506_gpio.c
+endif

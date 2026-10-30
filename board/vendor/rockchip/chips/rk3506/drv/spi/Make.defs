@@ -1,0 +1,9 @@
+############################################################################
+# vendor/rockchip/chips/rk3506/drv/spi/Make.defs
+#
+# SPI driver for Rockchip RK3506
+############################################################################
+
+ifeq ($(CONFIG_RK3506_SPI),y)
+CHIP_CSRCS += drv/spi/rk3506_spi.c
+endif

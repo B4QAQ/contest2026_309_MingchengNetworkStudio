@@ -1,0 +1,9 @@
+############################################################################
+# vendor/rockchip/chips/rk3506/drv/pwm/Make.defs
+#
+# PWM driver for Rockchip RK3506
+############################################################################
+
+ifeq ($(CONFIG_RK3506_PWM),y)
+CHIP_CSRCS += drv/pwm/rk3506_pwm.c
+endif

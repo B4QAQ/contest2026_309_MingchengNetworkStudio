@@ -1,0 +1,137 @@
+/****************************************************************************
+ * vendor/rockchip/boards/rk3506/hd-rk3506-evm/scripts/ld.script
+ *
+ * Linker script for HD-RK3506-EVM board.
+ *
+ * Memory layout:
+ *   ORIGIN = 0x02080000 (U-Boot kernel_addr_r)
+ *   END    = 0x03a00000 -> LENGTH 0x01980000 (25.5 MiB)
+ *
+ * Physical DRAM is 128MiB spanning 0x00000000-0x08000000.  NuttX runs
+ * from 0x02080000 and must STOP at 0x03a00000: the four 1 MiB AMP
+ * windows live above it (Linux SDK rk3506-amp-mcu-only.dtsi):
+ *
+ *   0x03a00000  M0 firmware load window (amp.its load / gcc_bus_m0_ddr.ld
+ *               ORIGIN) - the running M0 image itself
+ *   0x03b00000  amp-shmem (reserved; currently unused by both sides)
+ *   0x03c00000  A7<->M0 rpmsg vrings + M0 buffer pool
+ *   0x03d00000  A7 master carveout heap
+ *
+ * The mm heap is carved out of this region, so letting it run to
+ * 0x03c00000 (the old layout) would hand the allocator the M0's code and
+ * the shared vrings - corrupting the peer.  The L1 page table sits at
+ * ORIGIN+LENGTH-0x4000 (chip.h), i.e. 0x039fc000, still below the M0.
+ *
+ * Reference: vendor_allwinnertech/boards/r528/r528s3-gemini-s1/scripts/sdram.ld.S
+ ****************************************************************************/
+
+MEMORY
+{
+    sdram (W!RX) : ORIGIN = 0x02080000, LENGTH = 0x1980000
+}
+
+OUTPUT_FORMAT("elf32-littlearm", "elf32-littlearm", "elf32-littlearm")
+OUTPUT_ARCH(arm)
+ENTRY(_stext)
+SECTIONS
+{
+    .text :
+    {
+        _stext = ABSOLUTE(.);
+        __text_start = .;
+        _head_start = ABSOLUTE(.);
+        KEEP(*(.head))
+        _head_end = ABSOLUTE(.);
+        *(.vectors)
+        *(.text .text.*)
+        *(.fixup)
+        *(.gnu.warning)
+        *(.rodata .rodata.*)
+        *(.gnu.linkonce.t.*)
+        *(.glue_7)
+        *(.glue_7t)
+        *(.got)
+        *(.gcc_except_table)
+        *(.gnu.linkonce.r.*)
+        *(.gnu.linkonce.armextab.*)
+        *(.ARM.extab*)
+        _etext = ABSOLUTE(.);
+    } > sdram
+
+    .ARM.exidx : ALIGN(4)
+    {
+        PROVIDE_HIDDEN (__exidx_start = .);
+        *(.ARM.exidx* .gnu.linkonce.armexidx.*)
+        PROVIDE_HIDDEN (__exidx_end = .);
+    } > sdram
+
+    .init_section :
+    {
+        _sinit = ABSOLUTE(.);
+        KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*)))
+        KEEP(*(.init_array EXCLUDE_FILE(*crtbegin.o *crtbegin?.o *crtend.o *crtend?.o) .ctors))
+        . = ALIGN(0x1000);
+        _einit = ABSOLUTE(.);
+    } > sdram
+
+    _eronly = .;
+
+    .data :
+    {
+        _sdata = ABSOLUTE(.);
+        *(.data .data.*)
+        *(.gnu.linkonce.d.*)
+        CONSTRUCTORS
+        . = ALIGN(4);
+        _edata = ABSOLUTE(.);
+    } > sdram
+
+    /* Uninitialized data */
+
+    .noinit :
+    {
+        _snoinit = ABSOLUTE(.);
+        *(.noinit*)
+        _enoinit = ABSOLUTE(.);
+    } > sdram
+
+    .bss :
+    {
+        _sbss = ABSOLUTE(.);
+        *(.bss .bss.*)
+        *(.gnu.linkonce.b.*)
+        *(COMMON)
+        . = ALIGN(16);
+        _ebss = ABSOLUTE(.);
+    } > sdram
+
+    /* g_idle_topstack is NOT defined here. arm_head.S defines it as a data
+     * word holding IDLE_STACK_TOP = _ebss + CONFIG_IDLETHREAD_STACKSIZE.
+     * The boot/idle stack occupies [_ebss, g_idle_topstack) and the heap
+     * starts at g_idle_topstack, so they never overlap. Defining a linker
+     * symbol with the same name collides with the head.S object and makes
+     * the C code read a garbage heap base (it dereferences the variable).
+     */
+
+    /* Stabs debugging sections. */
+
+    .stab 0 : { *(.stab) }
+    .stabstr 0 : { *(.stabstr) }
+    .stab.excl 0 : { *(.stab.excl) }
+    .stab.exclstr 0 : { *(.stab.exclstr) }
+    .stab.index 0 : { *(.stab.index) }
+    .stab.indexstr 0 : { *(.stab.indexstr) }
+    .comment 0 : { *(.comment) }
+    .debug_abbrev 0 : { *(.debug_abbrev) }
+    .debug_info 0 : { *(.debug_info) }
+    .debug_line 0 : { *(.debug_line) }
+    .debug_pubnames 0 : { *(.debug_pubnames) }
+    .debug_aranges 0 : { *(.debug_aranges) }
+
+    /* A linker build-id note would be orphan-placed at VMA 0 and marked
+     * SHF_ALLOC, making objcopy -O binary pad the image from address 0
+     * (observed: 37 MB nuttx.bin instead of 2.9 MB).  Discard it.
+     */
+
+    /DISCARD/ : { *(.note.gnu.build-id) }
+}

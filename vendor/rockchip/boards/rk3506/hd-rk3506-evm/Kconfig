@@ -1,0 +1,141 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+if ARCH_BOARD_CUSTOM
+
+config ARCH_BOARD
+	default "hd-rk3506-evm" if ARCH_BOARD_CUSTOM_NAME="hd-rk3506-evm"
+
+endif # ARCH_BOARD_CUSTOM
+
+config LCD_NV3007
+	bool "NV3007 SPI TFT panel (2.79in T279VJ-C10)"
+	default n
+	depends on LCD
+	select SPI
+	---help---
+		Enable the NV3007 2.79in SPI TFT panel.  The panel is driven by
+		the DesignWare SPI0 controller (SCK/MOSI on the RM_IO matrix,
+		CS/DC/RST and the backlight BL on plain GPIO outputs) and
+		exposed as /dev/fb0 through the NuttX lcd_framebuffer bridge.
+		Visible window 142x428 RGB565 with a 12-column GRAM x-offset
+		(per the vendor demo).
+
+config HD_RK3506_LED_HEARTBEAT
+	bool "Linux-style heartbeat on the green run LED (GPIO1_B3)"
+	default y
+	depends on USERLED
+	---help---
+		Start a low-priority kernel thread at boot that blinks the
+		green run LED with the Linux heartbeat pattern (two short
+		flashes per second).  The run LED is active low and is NOT
+		routed to a PWM channel, so this replaces Linux's
+		default-trigger="heartbeat" in software.  The LED is still
+		reachable as /dev/led0 through the userled lower half.
+
+config HD_RK3506_LV_BUTTONS
+	bool "Two J9 push buttons as the LVGL keypad input (next/ok)"
+	default y
+	depends on GRAPHICS_LVGL
+	---help---
+		Two active-low external push buttons on J9, read in the LVGL
+		timer task with 20 ms software debounce and exposed to LVGL
+		as a keypad on the default group:
+		  "next" GPIO0_C2 (J9-18, CAN1_RX position) -> LV_KEY_NEXT
+		  "ok"   GPIO0_C4 (J9-20, CAN0_RX position) -> LV_KEY_ENTER
+		Both pads use the SoC internal pull-up, so the buttons just
+		short the pad to GND.  The CAN controllers are unused on
+		this board.
+
+config HD_RK3506_BTN_UP_PIN
+	int "Global GPIO number of the UP button (J9-33 = GPIO1_D1 = 57)"
+	default 57
+	depends on HD_RK3506_LV_BUTTONS
+	---help---
+		Global GPIO number, bank*32 + linear pin (A=0..7, B=8..15,
+		C=16..23, D=24..31) - the same formula the HD board doc
+		uses.  UP on J9-33 is GPIO1_D1 (VO_LCDC_D2 position; the
+		RGB LCD is unused), i.e. 1*32 + 25 = 57.  Emits LV_KEY_LEFT
+		(encoder step left: focus prev in navigate mode, cursor
+		left in edit mode).  Plain non-RM_IO pad: the RM_IO pads
+		on J9 read back stuck regardless of the pad level, so all
+		buttons live on plain GPIO pins.
+
+config HD_RK3506_BTN_DOWN_PIN
+	int "Global GPIO number of the DOWN button (J9-32 = GPIO1_D2 = 58)"
+	default 58
+	depends on HD_RK3506_LV_BUTTONS
+	---help---
+		DOWN on J9-32 is GPIO1_D2 (VO_LCDC_D1 position), i.e.
+		1*32 + 26 = 58.  Emits LV_KEY_RIGHT (encoder step right).
+
+config HD_RK3506_BTN_OK_PIN
+	int "Global GPIO number of the OK button (J9-34 = GPIO1_D0 = 56)"
+	default 56
+	depends on HD_RK3506_LV_BUTTONS
+	---help---
+		OK on J9-34 is GPIO1_D0 (VO_LCDC_D3 position), i.e.
+		1*32 + 24 = 56.  Emits LV_KEY_ENTER (click / edit mode
+		toggle on long press).
+
+config HD_RK3506_BTN_BACK_PIN
+	int "Global GPIO number of the BACK button (J9-35 = GPIO1_C7 = 55)"
+	default 55
+	depends on HD_RK3506_LV_BUTTONS
+	---help---
+		BACK on J9-35 is GPIO1_C7 (VO_LCDC_D4 position), i.e.
+		1*32 + 23 = 55.  Emits LV_KEY_ESC (cancel / back).
+
+config HD_RK3506_UI
+	bool "hd_ui home screen (428x142 cards + menu UI)"
+	default n
+	depends on GRAPHICS_LVGL && HD_RK3506_LV_BUTTONS && INTERPRETERS_QUICKJS
+	---help---
+		The board home screen for the 428x142 landscape panel: four
+		live status cards (CPU uptime / heap MEM / eth0 IP / USB
+		disk) on the left, a focusable menu on the right switching
+		to a command page (on-screen keyboard + system()), a
+		hardware smoke-test page (SD/USB/net/M0 PASS-FAIL) and a
+		system info page.  Navigated with the two J9 buttons
+		(NEXT moves focus, ENTER activates).  rcS starts it in the
+		background at boot.
+
+config HD_RK3506_NETCFG
+	bool "netcfg network configuration daemon"
+	default n
+	depends on NET && FS_ROMFS
+	select NETDEV_IOCTL if NETDEV_PHY_IOCTL
+	---help---
+		Enable the netcfg NSH builtin.  It reads /etc/net.conf
+		(mode=dhcp|static, ip/netmask/gateway/dns, auto_dhcp) at
+		startup, applies the configuration and, with auto_dhcp=1,
+		re-runs DHCP whenever the GMAC0 link transitions to up
+		(via the driver's SIOCMIINOTIFY link-change signal).
+
+config HD_RK3506_OTACMD
+	bool "ota NSH command (A/B slot update / activate / confirm)"
+	default n
+	depends on RK3506_OTA
+	---help---
+		Enable the ota NSH builtin.  It talks to /dev/ota and implements
+		the whole A/B update flow: `ota status` inspects the AvbABData
+		slot metadata, `ota update <file>` erases the inactive slot,
+		streams a boot.fit image into it, readback-verifies it and
+		activates it, `ota confirm` makes the running slot permanent
+		after a health check, `ota bootcheck` (called from rcS) burns
+		one boot try and rolls back when the tries are exhausted, and
+		`ota boot-a` / `ota boot-b` switch slots manually.
+
+config HD_RK3506_RPMSGTEST
+	bool "rpmsgtest NSH command (bus-M0 rpmsg link test)"
+	default n
+	depends on RK3506_RPTUN && RPMSG_CHAR
+	---help---
+		Enable the rpmsgtest NSH builtin.  It creates endpoint
+		0x30 -> 0x4003 ("rpmsg-mcu0-test") on /dev/rpmsg/mcu and
+		waits for the M0 rpmsg-lite test firmware's unsolicited
+		"Rockchip rpmsg linux test!" message (5 s timeout).
+
+

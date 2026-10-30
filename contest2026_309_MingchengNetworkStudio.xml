@@ -9,8 +9,7 @@
   <include name="openvela.xml"/>
 
   <project path="contest2026_309_MingchengNetworkStudio" name="contest2026_309_MingchengNetworkStudio">
-    <linkfile src="app/hello_app" dest="packages/demos/contest2026_309_hello_app"/>
-    <linkfile src="quickapp/hello_quickapp" dest="packages/apps/contest2026_309_hello_quickapp"/>
-    <linkfile src="board/contest_board" dest="vendor/openvela/boards/contest2026_309_board"/>
+    <!-- RK3506G2 chip + board BSP, maps board/vendor/rockchip -> vendor/rockchip -->
+    <linkfile src="board/vendor/rockchip" dest="vendor/rockchip"/>
   </project>
 </manifest>
