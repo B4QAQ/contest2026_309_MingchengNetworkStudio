@@ -123,7 +123,7 @@ nsh> rpmsgtest                                  # A7→M0 rpmsg，期望 PASS
 nsh> ota status                                 # A/B 槽位状态
 ```
 
-板载 4 键（J9）：UP/DOWN 移动焦点，OK 确认，ESC 为返回键（菜单页回主页，快应用内退出应用）。
+板载 4 键（J9，排针物理顺序 ESC→OK→DOWN→UP）：UP/DOWN 移动焦点，OK 确认，ESC 为返回键（菜单页回主页，快应用内退出应用）。
 
 ---
 

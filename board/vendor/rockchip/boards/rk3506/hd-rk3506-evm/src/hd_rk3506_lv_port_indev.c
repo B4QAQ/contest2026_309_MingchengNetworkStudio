@@ -3,12 +3,14 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Four external push buttons on J9:
+ * Four external push buttons on J9.  Physical order on the header is
+ * ESC / OK / DOWN / UP (left to right), i.e. reversed from the earlier
+ * UP / DOWN / OK / ESC layout:
  *
- *   UP     J9-33 = GPIO1_D1 (VO_LCDC_D2 position)  -> LV_KEY_PREV (focus prev)
- *   DOWN   J9-32 = GPIO1_D2 (VO_LCDC_D1 position)  -> LV_KEY_NEXT (focus next)
- *   OK     J9-34 = GPIO1_D0 (VO_LCDC_D3 position)  -> LV_KEY_ENTER (click)
  *   ESC    J9-35 = GPIO1_C7 (VO_LCDC_D4 position)  -> back, see below
+ *   OK     J9-34 = GPIO1_D0 (VO_LCDC_D3 position)  -> LV_KEY_ENTER (click)
+ *   DOWN   J9-32 = GPIO1_D2 (VO_LCDC_D1 position)  -> LV_KEY_NEXT (focus next)
+ *   UP     J9-33 = GPIO1_D1 (VO_LCDC_D2 position)  -> LV_KEY_PREV (focus prev)
  *
  * UP/DOWN/OK go through the LVGL keypad driver: it moves focus on
  * NEXT/PREV and sends ENTER to the focused object (PRESSED/CLICKED).
@@ -65,19 +67,24 @@
  */
 
 #ifndef CONFIG_HD_RK3506_BTN_UP_PIN
-#  define CONFIG_HD_RK3506_BTN_UP_PIN    57   /* GPIO1_D1 -> J9-33 */
+#  define CONFIG_HD_RK3506_BTN_UP_PIN    55   /* GPIO1_C7 -> J9-35 */
 #endif
 
 #ifndef CONFIG_HD_RK3506_BTN_DOWN_PIN
-#  define CONFIG_HD_RK3506_BTN_DOWN_PIN  58   /* GPIO1_D2 -> J9-32 */
+#  define CONFIG_HD_RK3506_BTN_DOWN_PIN  56   /* GPIO1_D0 -> J9-34 */
 #endif
 
 #ifndef CONFIG_HD_RK3506_BTN_OK_PIN
-#  define CONFIG_HD_RK3506_BTN_OK_PIN    56   /* GPIO1_D0 -> J9-34 */
+#  define CONFIG_HD_RK3506_BTN_OK_PIN    58   /* GPIO1_D2 -> J9-32 */
 #endif
 
-#ifndef CONFIG_HD_RK3506_BTN_ESC_PIN
-#  define CONFIG_HD_RK3506_BTN_ESC_PIN   55   /* GPIO1_C7 -> J9-35 */
+/* NOTE: the Kconfig symbol is HD_RK3506_BTN_BACK_PIN (this file used to
+ * read a never-defined CONFIG_HD_RK3506_BTN_ESC_PIN, so the fallback
+ * below always won and the menuconfig option had no effect).
+ */
+
+#ifndef CONFIG_HD_RK3506_BTN_BACK_PIN
+#  define CONFIG_HD_RK3506_BTN_BACK_PIN  57   /* GPIO1_D1 -> J9-33 */
 #endif
 
 /* Active low: the pressed level on the pad is 0. */
@@ -123,7 +130,7 @@ static struct rk3506_btn_s g_btn[] =
   { CONFIG_HD_RK3506_BTN_UP_PIN,   LV_KEY_PREV,  S_IDLE, false, false, 0 },
   { CONFIG_HD_RK3506_BTN_DOWN_PIN, LV_KEY_NEXT,  S_IDLE, false, false, 0 },
   { CONFIG_HD_RK3506_BTN_OK_PIN,   LV_KEY_ENTER, S_IDLE, false, false, 0 },
-  { CONFIG_HD_RK3506_BTN_ESC_PIN,  0,            S_IDLE, false, false, 0 },
+  { CONFIG_HD_RK3506_BTN_BACK_PIN, 0,            S_IDLE, false, false, 0 },
 };
 
 /* Back-key handler stack.  The last registration wins, so a running

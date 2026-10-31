@@ -8,7 +8,7 @@
 ## 1. 项目背景
 
 - **目标平台**：Rockchip RK3506G2 (3×Cortex-A7 + 1×Cortex-M0, 128MB DDR3)
-- **开发板**：HD-RK3506-EVM。**当前产品形态**：NV3007 SPI 小屏（物理 142×428，LVGL 逻辑横屏 428×142，PARTIAL 渲染）+ J9 四键（UP/DOWN/OK/ESC，GPIO1_D1/D2/D0 + GPIO1_C7）。板厂原屏 480×854 ST7701S RGB + GT911 触摸方案已弃用，其驱动（`hd_rk3506_st7701s.c`/`hd_rk3506_gt911.c`）在 NV3007 转型时从源码删除（vendor 子仓提交 285e5a6，历史可查）。
+- **开发板**：HD-RK3506-EVM。**当前产品形态**：NV3007 SPI 小屏（物理 142×428，LVGL 逻辑横屏 428×142，PARTIAL 渲染）+ J9 四键（**排针物理顺序 ESC/OK/DOWN/UP** = GPIO1_C7 / GPIO1_D0 / GPIO1_D2 / GPIO1_D1 = 55/56/58/57；比早期 UP/DOWN/OK/ESC 布局整体反转）。板厂原屏 480×854 ST7701S RGB + GT911 触摸方案已弃用，其驱动（`hd_rk3506_st7701s.c`/`hd_rk3506_gt911.c`）在 NV3007 转型时从源码删除（vendor 子仓提交 285e5a6，历史可查）。
 - **仓库结构**：本仓库（`/home/b4qaq/project/`）就是比赛提交仓（remote = GitHub 比赛仓，分支 `dev-ai-contest-2026`）。代码分布：
   - `openvela/` — openvela 主代码（.repo 多仓：vendor/rockchip、nuttx、apps 等是独立子仓），**驱动真源在这里改**。
   - `mcu_sdk/` — vendored 的 M0 固件 SDK 环境（见第 2 节）。
