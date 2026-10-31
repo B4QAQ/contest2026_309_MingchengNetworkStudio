@@ -64,7 +64,6 @@
 #  define CONFIG_HD_RK3506_SELFTEST_NET_PORT 443
 #endif
 
-#define ST_CPU_WINDOW_MS     500
 #define ST_RESOLVE_TIMEOUT   5
 #define ST_CONNECT_TIMEOUT   5000
 
@@ -150,46 +149,45 @@ static int st_mem(void)
 static int st_cpu(void)
 {
 #ifndef CONFIG_SCHED_CPULOAD_NONE
-  struct cpuload_s first;
-  struct cpuload_s last;
+  struct cpuload_s load;
   uint64_t total;
   uint64_t idle;
   uint64_t busy;
   unsigned int busy_pm;
   clock_t uptime;
 
-  if (clock_cpuload(0, &first) < 0)
+  /* Read the counters ONCE.  Do not difference two samples: the kernel
+   * decays them (sched_cpuload.c) - every time g_cpuload_total crosses
+   * CPULOAD_TIMECONSTANT every thread's tick count is halved - so the
+   * "total" is NOT monotonic and (last - first) can even go negative.
+   * A single absolute sample is exactly what ps reports.
+   */
+
+  if (clock_cpuload(0, &load) < 0)
     {
       printf("[cpu] clock_cpuload(0) failed: %d\n", errno);
       return ST_FAIL;
     }
 
-  printf("[cpu] sampling the IDLE thread for %d ms ...\n", ST_CPU_WINDOW_MS);
-  usleep(ST_CPU_WINDOW_MS * 1000);
+  total = (uint64_t)load.total;
+  idle  = (uint64_t)load.active;
 
-  if (clock_cpuload(0, &last) < 0)
+  if (total == 0 || idle > total)
     {
-      printf("[cpu] clock_cpuload(0) failed: %d\n", errno);
+      printf("[cpu] inconsistent counters: total=%lu active=%lu\n",
+             (unsigned long)total, (unsigned long)idle);
       return ST_FAIL;
     }
 
-  total = (uint64_t)(last.total - first.total);
-  idle  = (uint64_t)(last.active - first.active);
-
-  if (total == 0)
-    {
-      printf("[cpu] no scheduler ticks were accounted in the window\n");
-      return ST_FAIL;
-    }
-
-  busy    = total > idle ? total - idle : 0;
+  busy    = total - idle;
   busy_pm = (unsigned int)((busy * 1000) / total);
 
   printf("[cpu] busy    : %u.%u%%\n",
          busy_pm / 10, busy_pm % 10);
   printf("[cpu] idle    : %u.%u%%\n",
          (1000 - busy_pm) / 10, (1000 - busy_pm) % 10);
-  printf("[cpu] ticks   : %lu of %lu were idle in the window\n",
+  printf("[cpu] ticks   : %lu idle of %lu total "
+         "(decayed average, same basis as ps)\n",
          (unsigned long)idle, (unsigned long)total);
 
   uptime = clock_systime_ticks() / CLOCKS_PER_SEC;
@@ -233,14 +231,37 @@ static int st_fs(void)
 
       any = true;
 
-      if (buf.f_blocks == 0 || buf.f_bsize == 0)
-        {
-          /* Read-only pseudo filesystems (romfs) legitimately report no
-           * capacity; print the type and move on.
-           */
+      /* f_bfree does NOT mean "free space" on every filesystem type.
+       * romfs hardcodes it to 0 (fs_romfs.c) because the image is
+       * read-only, and tmpfs reports the unused slack inside blocks it
+       * already allocated (fs_tmpfs.c), not the free heap.  Only a
+       * block allocator like littlefs reports real capacity, so only
+       * that case may be judged "full".
+       */
 
-          printf("[fs ] %-6s: block size %lu, no capacity accounting\n",
-                 mountpoints[i], (unsigned long)buf.f_bsize);
+      if (buf.f_bsize == 0)
+        {
+          printf("[fs ] %-6s: pseudo root, no capacity accounting\n",
+                 mountpoints[i]);
+          continue;
+        }
+
+      if (buf.f_type == ROMFS_MAGIC)
+        {
+          printf("[fs ] %-6s: romfs read-only image, %lu blocks of %lu B "
+                 "(%lu KiB), no free-block accounting\n",
+                 mountpoints[i], (unsigned long)buf.f_blocks,
+                 (unsigned long)buf.f_bsize,
+                 (unsigned long)((uint64_t)buf.f_blocks * buf.f_bsize / 1024));
+          continue;
+        }
+
+      if (buf.f_type == TMPFS_MAGIC)
+        {
+          printf("[fs ] %-6s: tmpfs RAM filesystem, %lu blocks of %lu B, "
+                 "%lu blocks of slack (capacity bounded by free heap)\n",
+                 mountpoints[i], (unsigned long)buf.f_blocks,
+                 (unsigned long)buf.f_bsize, (unsigned long)buf.f_bfree);
           continue;
         }
 
@@ -249,9 +270,9 @@ static int st_fs(void)
              (unsigned long)buf.f_bfree, (unsigned long)buf.f_blocks,
              (unsigned long)((uint64_t)buf.f_bfree * buf.f_bsize / 1024));
 
-      if (buf.f_bfree == 0)
+      if (buf.f_blocks > 0 && buf.f_bfree == 0)
         {
-          printf("[fs ] %-6s: no free blocks - filesystem is full\n",
+          printf("[fs ] %-6s: no free blocks - writable filesystem is full\n",
                  mountpoints[i]);
           fail = true;
         }
@@ -496,7 +517,7 @@ static int st_rpmsg(void)
   ctrlfd = open(ST_RPMSG_CTRL_DEV, O_RDWR);
   if (ctrlfd < 0)
     {
-      printf("[rpm] open %s failed: %d (is the rptun link up?)\n",
+      printf("[rpmsg] open %s failed: %d (is the rptun link up?)\n",
              ST_RPMSG_CTRL_DEV, errno);
       return ST_FAIL;
     }
@@ -509,7 +530,7 @@ static int st_rpmsg(void)
   ret = ioctl(ctrlfd, RPMSG_CREATE_EPT_IOCTL, (unsigned long)&eptinfo);
   if (ret < 0)
     {
-      printf("[rpm] create endpoint %s failed: %d\n", ST_RPMSG_EPT_NAME, errno);
+      printf("[rpmsg] create endpoint %s failed: %d\n", ST_RPMSG_EPT_NAME, errno);
       close(ctrlfd);
       return ST_FAIL;
     }
@@ -519,17 +540,17 @@ static int st_rpmsg(void)
   eptfd = open(eptdev, O_RDWR);
   if (eptfd < 0)
     {
-      printf("[rpm] open %s failed: %d\n", eptdev, errno);
+      printf("[rpmsg] open %s failed: %d\n", eptdev, errno);
       goto out_destroy;
     }
 
-  printf("[rpm] endpoint up: src 0x%02x -> dst 0x%04x\n",
+  printf("[rpmsg] endpoint up: src 0x%02x -> dst 0x%04x\n",
          ST_RPMSG_EPT_SRC, ST_RPMSG_EPT_DST);
 
   n = write(eptfd, ST_RPMSG_PING, strlen(ST_RPMSG_PING));
   if (n != (ssize_t)strlen(ST_RPMSG_PING))
     {
-      printf("[rpm] write failed: %d\n", errno);
+      printf("[rpmsg] write failed: %d\n", errno);
       goto out_close;
     }
 
@@ -539,7 +560,7 @@ static int st_rpmsg(void)
   ret = poll(&pfd, 1, ST_RPMSG_TIMEOUT_MS);
   if (ret <= 0)
     {
-      printf("[rpm] %s\n",
+      printf("[rpmsg] %s\n",
              ret == 0 ? "timeout waiting for the M0 reply" : "poll failed");
       goto out_close;
     }
@@ -547,16 +568,16 @@ static int st_rpmsg(void)
   n = read(eptfd, buf, sizeof(buf) - 1);
   if (n <= 0)
     {
-      printf("[rpm] read failed: %d\n", errno);
+      printf("[rpmsg] read failed: %d\n", errno);
       goto out_close;
     }
 
   buf[n] = '\0';
-  printf("[rpm] reply: %zd bytes \"%s\"\n", n, buf);
+  printf("[rpmsg] reply: %zd bytes \"%s\"\n", n, buf);
 
   if (strncmp(buf, ST_RPMSG_EXPECTED, ST_RPMSG_EXPECTED_LEN) != 0)
     {
-      printf("[rpm] reply does not match \"%s\"\n", ST_RPMSG_EXPECTED);
+      printf("[rpmsg] reply does not match \"%s\"\n", ST_RPMSG_EXPECTED);
       goto out_close;
     }
 
@@ -569,7 +590,7 @@ out_destroy:
   close(ctrlfd);
   return rc;
 #else
-  printf("[rpm] CONFIG_RK3506_RPTUN / CONFIG_RPMSG_CHAR disabled\n");
+  printf("[rpmsg] CONFIG_RK3506_RPTUN / CONFIG_RPMSG_CHAR disabled\n");
   return ST_SKIP;
 #endif
 }
@@ -593,12 +614,13 @@ int main(int argc, FAR char *argv[])
     {
       printf("usage: selftest [all|mem|cpu|fs|net|rpmsg]\n"
              "  mem    heap usage across all regions (mallinfo)\n"
-             "  cpu    CPU busy/idle over a %d ms window (clock_cpuload)\n"
+             "  cpu    CPU busy/idle from the IDLE thread counters "
+             "(clock_cpuload)\n"
              "  fs     capacity of / /data /etc /tmp (statfs)\n"
              "  net    interface, DNS and TCP connect to %s:%d\n"
              "  rpmsg  bus-M0 rpmsg round trip\n"
              "  all    every section above (default)\n",
-             ST_CPU_WINDOW_MS, CONFIG_HD_RK3506_SELFTEST_NET_HOST,
+             CONFIG_HD_RK3506_SELFTEST_NET_HOST,
              CONFIG_HD_RK3506_SELFTEST_NET_PORT);
       return 0;
     }

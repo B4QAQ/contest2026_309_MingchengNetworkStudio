@@ -203,7 +203,7 @@
 | M0 固件基线       | `bash nand_firmware/build_mcu_fw.sh` | entry 0x03a00141、向量 `00fcaf034101a003`、mcu.bin 27504B、amp.img 32256B |
 | 打包              | 见 3.5                        | `update.img` 生成                                                         |
 | 启动 NSH          | 烧录后重启                    | `nsh>` 提示符                                                            |
-| 内存检测          | `nsh> free`                   | 两块堆区：主区 0x02080000–0x03a00000（25.5 MiB）+ 高区 0x03e00000–0x07c00000（62 MiB），合计纳管 ~87.5 MiB（镜像占用后 free 实测总量待板上确认）；中间 4 个 1 MiB AMP 窗口不入堆 |
+| 内存检测          | `nsh> free`                   | 两块堆区：主区 0x02080000–0x03a00000（25.5 MiB）+ 高区 0x03e00000–0x07c00000（62 MiB），合计纳管 ~87.5 MiB。**板上实测**（`selftest mem`）：arena 86475 KiB = 84.4 MiB、最大空闲块 63487 KiB（62 MiB 高区）、已用 463 KiB；中间 4 个 1 MiB AMP 窗口不入堆 |
 | 文件系统          | `nsh> mount`                  | `/etc`（romfs）、`/data`（littlefs，首启 autoformat）均挂载               |
 | 进程列表          | `nsh> ps`                     | NSH + `hd_ui` 等进程                                                      |
 | 小屏 UI / 四键    | 开机自启 `hd_ui`              | NV3007 显示 428×142 横屏 UI；UP/DOWN/OK 可操作；ESC 在子页回 HOME、快应用内退出 |
