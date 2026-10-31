@@ -146,4 +146,54 @@ config HD_RK3506_RPMSGTEST
 		waits for the M0 rpmsg-lite test firmware's unsolicited
 		"Rockchip rpmsg linux test!" message (5 s timeout).
 
+config HD_RK3506_SELFTEST
+	bool "selftest NSH command (one-shot board health check)"
+	default y
+	depends on NSH_LIBRARY
+	---help---
+		Enable the `selftest` NSH builtin: a single command that
+		exercises the subsystems worth eyeballing on every new
+		firmware drop and prints a PASS/FAIL/SKIP summary.
+
+		  selftest [all|mem|cpu|fs|net|rpmsg]
+
+		mem   heap usage across every heap region (mallinfo): arena,
+		      bytes in use, free, largest free chunk and chunk count.
+		cpu   CPU busy/idle percentage measured over a short window
+		      by sampling the IDLE thread with clock_cpuload(), plus
+		      uptime.  Requires CONFIG_SCHED_CPULOAD_*.
+		fs    statfs() capacity of / /data /etc /tmp.
+		net   interface address, DNS resolution timing and a
+		      non-blocking TCP connect to the configured host.
+		rpmsg bus-M0 rpmsg round trip (source address 0x31, so it
+		      does not collide with rpmsgtest's 0x30).
+
+		A section that cannot run because the underlying config is
+		off reports SKIP rather than FAIL.
+
+config HD_RK3506_SELFTEST_NET_IFACE
+	string "Network interface probed by selftest"
+	default "eth0"
+	depends on HD_RK3506_SELFTEST
+	---help---
+		Interface name used by the `selftest net` section.
+
+config HD_RK3506_SELFTEST_NET_HOST
+	string "Host name used by the selftest network check"
+	default "www.baidu.com"
+	depends on HD_RK3506_SELFTEST
+	---help---
+		Host resolved (DNS) and connected to (TCP) by the
+		`selftest net` section.  Choose a name that resolves through
+		the DNS server handed out by your DHCP server.
+
+config HD_RK3506_SELFTEST_NET_PORT
+	int "TCP port used by the selftest network check"
+	default 443
+	depends on HD_RK3506_SELFTEST
+	---help---
+		Port the `selftest net` section connects to after resolving
+		the host above.  443 exercises the same path curl uses for
+		HTTPS without needing the TLS handshake or a synced clock.
+
 

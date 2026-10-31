@@ -115,6 +115,7 @@ nsh> ota confirm
 ### 4.5 功能验证
 
 ```bash
+nsh> selftest                                    # 一键自检：mem/cpu/fs/net/rpmsg，输出 PASS/FAIL/SKIP 汇总
 nsh> free                                       # 两块堆区：主区 25.5 MiB + 高区 62 MiB，合计纳管 ~87.5 MiB
 nsh> ping 192.168.10.1
 nsh> curl https://stdl.b4qaq.cn/fwtb/info.json # HTTPS
@@ -122,6 +123,8 @@ nsh> mount -t vfat /dev/sda /mnt/usb            # U 盘
 nsh> rpmsgtest                                  # A7→M0 rpmsg，期望 PASS
 nsh> ota status                                 # A/B 槽位状态
 ```
+
+`selftest` 也支持单项：`selftest mem` / `cpu` / `fs` / `net` / `rpmsg`，`selftest help` 看说明。网络检查的接口与目标主机可用 Kconfig（`HD_RK3506_SELFTEST_NET_IFACE` / `_HOST` / `_PORT`）改，默认 `eth0` + `www.baidu.com:443`。
 
 板载 4 键（J9，排针物理顺序 ESC→OK→DOWN→UP）：UP/DOWN 移动焦点，OK 确认，ESC 为返回键（菜单页回主页，快应用内退出应用）。
 

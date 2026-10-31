@@ -127,6 +127,22 @@ if(CONFIG_HD_RK3506_RPMSGTEST)
     hd_rk3506_rpmsgtest.c)
 endif()
 
+# selftest: one-shot board health check behind a single NSH command
+# (heap / CPU load / filesystem capacity / network / bus-M0 rpmsg).
+if(CONFIG_HD_RK3506_SELFTEST)
+  nuttx_add_application(
+    NAME
+    selftest
+    STACKSIZE
+    4096
+    PRIORITY
+    100
+    INCLUDE_DIRECTORIES
+    ${NUTTX_APPS_DIR}/include
+    SRCS
+    hd_rk3506_selftest.c)
+endif()
+
 # Both init scripts are shipped as RAW NSH scripts (RCRAWS).  They use
 # only '#' comment lines and plain NSH commands - no C preprocessor
 # directives (#include/#ifdef) and no C-style '/* ... */' comments.  They

@@ -211,6 +211,7 @@
 | rpmsg 异构通信    | `nsh> rpmsgtest`              | 收到 `reply: "Rockchip rpmsg linux test!"` → PASS（**v10 板上已验收**）     |
 | USB Host + vfat   | 插 U 盘后 `mount -t vfat /dev/sda /mnt/usb` | `/dev/sda` 出现、挂载成功、`ls` 正常                          |
 | 有线网络 / HTTPS  | `ifconfig eth0 dhcp` → `curl https://...` | DHCP 成功、TLS 验证通过（时间已 NTP 同步）                       |
+| 一键自检          | `nsh> selftest`（或 `selftest mem/cpu/fs/net/rpmsg`） | 逐项输出 PASS/FAIL/SKIP，末行 `=== N passed, M failed, K skipped ===`；`fail==0` 时退出码 0 |
 
 ---
 
