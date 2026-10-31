@@ -14,7 +14,12 @@
   - `mcu_sdk/` — vendored 的 M0 固件 SDK 环境（见第 2 节）。
   - `vendor/` — `openvela/vendor/rockchip` 的源码副本快照（供审阅，真源在 openvela 那边改）。
   - `.gitignore` 已不再整行忽略 `openvela/`（但仍忽略各 .repo 子仓，它们不入比赛仓）。
-- **网络**：本机直连 github.com:22/443 被拦；push 用备用端点 `ssh://git@ssh.github.com:443/...`（已验证可用）。
+- **网络**：本机直连 github.com:22/443 被拦；push/ls-remote 一律用备用端点 `ssh://git@ssh.github.com:443/<owner>/<repo>.git`（已验证可用）。
+- **两个远端**（别搞混）：
+  - `origin` = 自己的 fork `B4QAQ/contest2026_309_MingchengNetworkStudio`（推这里）
+  - `upstream` = 官方仓 `open-vela/contest2026_309_MingchengNetworkStudio`（PR 目标；查 base SHA 与 `refs/pull/N/*` 只查它）
+  - 两者的 URL 都需换成 443 端点：`ssh://git@ssh.github.com:443/open-vela/contest2026_309_MingchengNetworkStudio.git`
+  - **maintainer 用 squash 方式合并 PR** ⇒ 每次合并后必须重新对齐 base，见 7.1
 
 ---
 
@@ -229,6 +234,55 @@
    ```
 3. **scope** 用 `chip`/`board`/`build`/`pack`/`doc`/`fix`/`test` 等。
 4. **避免大改**：每次 commit 只做一件事。重构和功能分开。
+5. **禁止提交个人材料**：答辩 PPT 大纲、演讲稿、个人笔记等属参赛者私有，不入比赛仓。`.gitignore` 已加 `答辩*.md` / `答辩*.pptx` / `*.bak`。历史里误入过的答辩大纲已用 `filter-branch` 从 `73360ff` 之后全部抹除（对应提交已被 `--prune-empty` 删除）。
+
+### 7.1 上游 squash 合并后必须重新对齐 base（**踩过两次的坑**）
+
+**现象**：新开 PR，GitHub 报 `This branch has conflicts that must be resolved`，冲突清单恰好等于"我们改过的所有文件"，但内容其实和上游一模一样。
+
+**根因**：maintainer 用 **squash** 方式合并我们的 PR → base 上产生一个**新 SHA**的提交（如 `5c84202`），其**树与我们的 `73360ff` 逐字节相同**。于是两侧祖先链变成：
+
+```
+我们:   6ad7eeb → 73360ff → 新提交...
+上游:   6ad7eeb → 5c84202          ← 内容同 73360ff，但 SHA 不同
+```
+
+GitHub 只能把共同祖先追到 `6ad7eeb`，两侧各自都"重写"了同一批文件 → 全文件判冲突。**内容一致不代表祖先一致，squash 合并必然导致祖先链断裂。**
+
+**每次拿到上游 squash 合并结果后，必须立刻执行：**
+
+```bash
+# 1) 查上游 base 真实 SHA（github.com:22/443 被封，必须走 443 端点）
+git ls-remote ssh://git@ssh.github.com:443/open-vela/contest2026_309_MingchengNetworkStudio.git refs/heads/dev-ai-contest-2026
+
+# 2) 取回该提交
+git fetch ssh://git@ssh.github.com:443/open-vela/contest2026_309_MingchengNetworkStudio.git dev-ai-contest-2026
+
+# 3) 确认它与我们上次被合并的提交树相同（应当没有任何输出）
+git diff --stat FETCH_HEAD <上次被合并的提交>
+
+# 4) 把"上次被合并提交之后"的提交整体搬到新 base 上
+git tag backup/pre-rebase-$(date +%Y%m%d-%H%M)      # 先备份
+git rebase --onto FETCH_HEAD <上次被合并的提交>
+
+# 5) 【强制校验】内容必须零改动 —— 以下必须为空
+git diff --stat <变基前的旧 HEAD> HEAD
+git merge-base --is-ancestor FETCH_HEAD HEAD && echo OK
+
+# 6) 带租约强推（绝不用裸 --force）
+git push --force-with-lease=dev-ai-contest-2026:<远程旧SHA> \
+    ssh://git@ssh.github.com:443/B4QAQ/contest2026_309_MingchengNetworkStudio.git \
+    dev-ai-contest-2026:dev-ai-contest-2026
+
+# 7) 【验收】确认 GitHub 成功算出合并结果（有冲突时该 ref 不会生成）
+git ls-remote ssh://git@ssh.github.com:443/open-vela/contest2026_309_MingchengNetworkStudio.git refs/pull/<N>/merge
+```
+
+**要点**：
+- `--onto <新base> <旧被合并提交>` 之所以干净，是因为两侧树相同，补丁按原样应用，**不改任何文件内容**——第 5 步的空 diff 就是铁证。
+- 必须 `--force-with-lease` 并写明远程旧 SHA，防止覆盖别人的提交。
+- `refs/pull/N/merge` 存在 = GitHub 已算出合并结果 = 无冲突；这是**唯一可信的验收信号**，不要只看网页文案。
+- `refs/pull/*` 要查**上游 open-vela 仓**；查自己 fork 只会看到 fork 内部的 PR 编号，别搞混。
 
 ---
 
