@@ -188,6 +188,7 @@ nsh> ota status                                 # A/B 槽位状态
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
 | AMP 端到端 | ✅ 板上验收通过 | M0 固件与 SDK 产物逐字节一致、U-Boot `Handle standalone: 'mcu' at 0x03a00000 OK`；板上 `rpmsgtest` 收到 `Rockchip rpmsg linux test!`（未另接第二串口看 M0 UART1 banner；rpmsg 双向收发成功本身即证明 M0 完整执行了 HAL/INTMUX/rpmsg 初始化） |
+| `selftest` 一键自检 | ✅ 板上验收通过（5 passed / 0 failed / 0 skipped） | 实测：arena 86475 KiB（84.4 MiB）、空闲态已用 462 KiB、最大空闲块 63487 KiB；CPU busy 6.5%（1000 Hz 时基）；`/data` 1772/1776 块空闲；DNS 13 ms、TCP :443 40 ms；`rpmsg` 26 字节回包。首版两个判定 bug（CPU 差值跨衰减点变负、romfs/tmpfs 的 `f_bfree` 语义误判）已修复后复测通过 |
 | GT911 触摸 / ST7701S RGB 屏 | ❌ 方案已弃用 | 旧板厂屏驱动在 NV3007 转型时整体删除（vendor 子仓 285e5a6）；当前产品显示是 NV3007 SPI 小屏 + 4 键 |
 | USB Hub | ⚠️ 待测 | asynch 传输框架已实现，hub 枚举未在板上验证 |
 | OTA 端到端 | ⚠️ 部分验证 | bootcheck/try/confirm 已验，`ota update` 整链路待测 |

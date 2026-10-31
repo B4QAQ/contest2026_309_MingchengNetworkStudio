@@ -211,7 +211,7 @@
 | rpmsg 异构通信    | `nsh> rpmsgtest`              | 收到 `reply: "Rockchip rpmsg linux test!"` → PASS（**v10 板上已验收**）     |
 | USB Host + vfat   | 插 U 盘后 `mount -t vfat /dev/sda /mnt/usb` | `/dev/sda` 出现、挂载成功、`ls` 正常                          |
 | 有线网络 / HTTPS  | `ifconfig eth0 dhcp` → `curl https://...` | DHCP 成功、TLS 验证通过（时间已 NTP 同步）                       |
-| 一键自检          | `nsh> selftest`（或 `selftest mem/cpu/fs/net/rpmsg`） | 逐项输出 PASS/FAIL/SKIP，末行 `=== N passed, M failed, K skipped ===`；`fail==0` 时退出码 0 |
+| 一键自检          | `nsh> selftest`（或 `selftest mem/cpu/fs/net/rpmsg`） | 逐项输出 PASS/FAIL/SKIP，末行 `=== N passed, M failed, K skipped ===`；`fail==0` 时退出码 0。**板上验收通过（5 passed / 0 failed / 0 skipped）**，实测：arena 84.4 MiB、空闲态已用 462 KiB、最大空闲块 63487 KiB、CPU busy 6.5%、`/data` 1772/1776 块空闲、DNS 13 ms、TCP :443 40 ms、rpmsg 26 B 回包。两处判定 bug 已修复：①CPU 不能对 `clock_cpuload` 两次采样求差（`sched_cpuload.c` 超过 `CPULOAD_TIMECONSTANT`=3×2×1000 会把所有 ticks `>>=1`，total 非单调），须单次绝对采样；②`f_bfree` 语义随 fs 而异——romfs 硬编码 0（`fs_romfs.c:1330`）、tmpfs 是块内 slack（`fs_tmpfs.c:2445`），只有块分配器型可写 fs 才能判 full |
 
 ---
 
